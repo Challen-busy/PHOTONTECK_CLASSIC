@@ -1,0 +1,82 @@
+<div style="font-family:-apple-system,'PingFang SC',sans-serif;max-width:700px;padding:20px">
+  <div style="text-align:center;margin-bottom:20px">
+    <h2 style="margin:0;color:#1a1a2e">PHOTONTECK (HK) Limited</h2>
+    <h3 style="margin:4px 0 0;color:#666;font-weight:400">送货单 / Delivery Note</h3>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;padding:16px;border:1px solid #ddd;border-radius:8px">
+    <div>
+      <div style="font-size:12px;color:#888">客户 / Customer</div>
+      <div style="font-size:16px;font-weight:600" id="customer_name">Intel Corporation</div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:#888">订单号 / Order No.</div>
+      <div style="font-size:16px;font-weight:600" id="order_number">SO-2025-0001</div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:#888">发货日期 / Date</div>
+      <div id="ship_date">2026-04-12</div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:#888">发货方式 / Shipping</div>
+      <div id="shipping_method">FOB Hong Kong</div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:#888">物流单号 / Tracking</div>
+      <div id="tracking_number">-</div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:#888">发货单号 / Shipment No.</div>
+      <div id="shipment_number">SH-2025-0001</div>
+    </div>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+    <thead>
+      <tr style="background:#1a1a2e;color:#fff">
+        <th style="padding:8px;text-align:left">No.</th>
+        <th style="padding:8px;text-align:left">料号 Part No.</th>
+        <th style="padding:8px;text-align:left">品名 Description</th>
+        <th style="padding:8px;text-align:right">数量 Qty</th>
+        <th style="padding:8px;text-align:left">单位 Unit</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom:1px solid #eee">
+        <td style="padding:8px">1</td>
+        <td style="padding:8px">TOP-DLC-PRO</td>
+        <td style="padding:8px">TOPTICA DL pro 可调谐二极管激光器</td>
+        <td style="padding:8px;text-align:right">5</td>
+        <td style="padding:8px">pcs</td>
+      </tr>
+      <tr style="border-bottom:1px solid #eee">
+        <td style="padding:8px">2</td>
+        <td style="padding:8px">TL-PM100D</td>
+        <td style="padding:8px">Thorlabs PM100D 光功率计</td>
+        <td style="padding:8px;text-align:right">20</td>
+        <td style="padding:8px">pcs</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:40px">
+    <div>
+      <div style="border-top:1px solid #333;padding-top:8px;text-align:center">
+        <div style="font-size:12px;color:#888">发货人签字 / Shipped by</div>
+      </div>
+    </div>
+    <div>
+      <div style="border-top:1px solid #333;padding-top:8px;text-align:center">
+        <div style="font-size:12px;color:#888">收货人签字 / Received by</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:20px;text-align:center">
+    <button onclick="window.print()" style="padding:10px 40px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">
+      打印
+    </button>
+  </div>
+
+  <style>@media print { button { display:none !important; } }</style>
+</div>

@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# 环境 & 秘密
+.env
+.env.*
+*.key
+*.pem
+secrets.json
+credentials*.json
+
+# 本地文档（不上传）
+doc（不要上传GIthub）/
+doc/
+
+# 临时 & 运行时
+/tmp/
+*.tmp
+*.bak
+*.sqlite
+*.db
+
+# Alembic 本地版本文件（如需可放开）
+# alembic/versions/*.py

@@ -1,0 +1,95 @@
+<div style="font-family:-apple-system,'PingFang SC',sans-serif;max-width:800px">
+  <h3 style="margin:0 0 16px;color:#1a1a2e">记账凭证录入</h3>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:16px;padding:12px;background:#fafafa;border-radius:8px">
+    <div>
+      <label style="font-size:12px;color:#888">凭证日期</label>
+      <input name="voucher_date" type="date" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px"/>
+    </div>
+    <div>
+      <label style="font-size:12px;color:#888">凭证类型</label>
+      <select name="voucher_type" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px">
+        <option value="GENERAL">记账凭证</option>
+        <option value="CASH">收款凭证</option>
+        <option value="PAYMENT">付款凭证</option>
+        <option value="TRANSFER">转账凭证</option>
+      </select>
+    </div>
+    <div>
+      <label style="font-size:12px;color:#888">附件数</label>
+      <input name="attachment_count" type="number" value="0" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px"/>
+    </div>
+    <div>
+      <label style="font-size:12px;color:#888">摘要</label>
+      <input name="description" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px"/>
+    </div>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;margin-bottom:8px">
+    <thead>
+      <tr style="background:#f0f0f0">
+        <th style="padding:8px;text-align:left;font-size:12px;color:#888;width:200px">科目</th>
+        <th style="padding:8px;text-align:left;font-size:12px;color:#888">摘要</th>
+        <th style="padding:8px;text-align:right;font-size:12px;color:#888;width:150px">借方</th>
+        <th style="padding:8px;text-align:right;font-size:12px;color:#888;width:150px">贷方</th>
+      </tr>
+    </thead>
+    <tbody id="entry-rows">
+      <tr>
+        <td style="padding:3px"><input name="entry_1_account" placeholder="科目编码" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px"/></td>
+        <td style="padding:3px"><input name="entry_1_desc" placeholder="摘要" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px"/></td>
+        <td style="padding:3px"><input name="entry_1_debit" type="number" step="0.01" placeholder="0.00" onchange="calcBalance()" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px;text-align:right"/></td>
+        <td style="padding:3px"><input name="entry_1_credit" type="number" step="0.01" placeholder="0.00" onchange="calcBalance()" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px;text-align:right"/></td>
+      </tr>
+      <tr>
+        <td style="padding:3px"><input name="entry_2_account" placeholder="科目编码" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px"/></td>
+        <td style="padding:3px"><input name="entry_2_desc" placeholder="摘要" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px"/></td>
+        <td style="padding:3px"><input name="entry_2_debit" type="number" step="0.01" placeholder="0.00" onchange="calcBalance()" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px;text-align:right"/></td>
+        <td style="padding:3px"><input name="entry_2_credit" type="number" step="0.01" placeholder="0.00" onchange="calcBalance()" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px;text-align:right"/></td>
+      </tr>
+      <tr>
+        <td style="padding:3px"><input name="entry_3_account" placeholder="科目编码" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px"/></td>
+        <td style="padding:3px"><input name="entry_3_desc" placeholder="摘要" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px"/></td>
+        <td style="padding:3px"><input name="entry_3_debit" type="number" step="0.01" placeholder="0.00" onchange="calcBalance()" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px;text-align:right"/></td>
+        <td style="padding:3px"><input name="entry_3_credit" type="number" step="0.01" placeholder="0.00" onchange="calcBalance()" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px;text-align:right"/></td>
+      </tr>
+      <tr>
+        <td style="padding:3px"><input name="entry_4_account" placeholder="科目编码" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px"/></td>
+        <td style="padding:3px"><input name="entry_4_desc" placeholder="摘要" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px"/></td>
+        <td style="padding:3px"><input name="entry_4_debit" type="number" step="0.01" placeholder="0.00" onchange="calcBalance()" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px;text-align:right"/></td>
+        <td style="padding:3px"><input name="entry_4_credit" type="number" step="0.01" placeholder="0.00" onchange="calcBalance()" style="width:100%;padding:6px;border:1px solid #d9d9d9;border-radius:4px;text-align:right"/></td>
+      </tr>
+    </tbody>
+    <tfoot>
+      <tr style="border-top:2px solid #333">
+        <td colspan="2" style="padding:8px;font-weight:600">合计</td>
+        <td style="padding:8px;text-align:right;font-weight:700;font-size:16px" id="total_debit">0.00</td>
+        <td style="padding:8px;text-align:right;font-weight:700;font-size:16px" id="total_credit">0.00</td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div id="balance_status" style="text-align:center;padding:8px;border-radius:6px;margin-bottom:16px;background:#f6ffed;color:#389e0d;font-weight:500">
+    借贷平衡
+  </div>
+
+  <button data-action="submit" style="width:100%;padding:10px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;font-size:15px;cursor:pointer">
+    保存凭证
+  </button>
+
+  <script>
+    function calcBalance() {
+      let d = 0, c = 0;
+      for (let i = 1; i <= 4; i++) {
+        d += parseFloat(document.querySelector('[name=entry_'+i+'_debit]')?.value || 0);
+        c += parseFloat(document.querySelector('[name=entry_'+i+'_credit]')?.value || 0);
+      }
+      document.getElementById('total_debit').textContent = d.toFixed(2);
+      document.getElementById('total_credit').textContent = c.toFixed(2);
+      const el = document.getElementById('balance_status');
+      if (d === c && d > 0) { el.style.background = '#f6ffed'; el.style.color = '#389e0d'; el.textContent = '借贷平衡'; }
+      else if (d === 0 && c === 0) { el.style.background = '#f5f5f5'; el.style.color = '#999'; el.textContent = '请输入金额'; }
+      else { el.style.background = '#fff2f0'; el.style.color = '#cf1322'; el.textContent = '借贷不平衡! 差额: ' + Math.abs(d-c).toFixed(2); }
+    }
+  </script>
+</div>

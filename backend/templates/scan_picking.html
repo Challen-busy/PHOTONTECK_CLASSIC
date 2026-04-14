@@ -1,0 +1,86 @@
+<div style="font-family:-apple-system,'PingFang SC',sans-serif;max-width:600px">
+  <h3 style="margin:0 0 16px;color:#1a1a2e">仓库扫码拣货</h3>
+
+  <div style="padding:16px;background:#f0f5ff;border-radius:8px;margin-bottom:16px;text-align:center">
+    <div style="font-size:13px;color:#888;margin-bottom:8px">发货单号</div>
+    <div style="font-size:24px;font-weight:700;color:#1a1a2e" id="shipment_number">-</div>
+  </div>
+
+  <!-- 扫码输入 -->
+  <div style="margin-bottom:16px">
+    <div style="display:flex;gap:8px">
+      <input id="scan_input" name="barcode" placeholder="扫码或输入料号..." autofocus
+        style="flex:1;padding:12px;border:2px solid #1a1a2e;border-radius:8px;font-size:18px;text-align:center"/>
+      <button onclick="handleScan()" style="padding:12px 24px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer">
+        确认
+      </button>
+    </div>
+  </div>
+
+  <!-- 已扫列表 -->
+  <div style="margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:2px solid #333">
+      <span style="font-weight:600;width:40%">物料</span>
+      <span style="font-weight:600;width:20%;text-align:center">应拣</span>
+      <span style="font-weight:600;width:20%;text-align:center">已扫</span>
+      <span style="font-weight:600;width:20%;text-align:center">状态</span>
+    </div>
+
+    <div class="pick-line" style="display:flex;padding:10px 0;border-bottom:1px solid #f0f0f0;align-items:center">
+      <span style="width:40%">
+        <div style="font-weight:500">TOP-DLC-PRO</div>
+        <div style="font-size:12px;color:#888">TOPTICA DL pro 激光器</div>
+      </span>
+      <span style="width:20%;text-align:center;font-size:18px">5</span>
+      <span style="width:20%;text-align:center;font-size:18px;color:#1a1a2e;font-weight:700" id="scanned_1">0</span>
+      <span style="width:20%;text-align:center" id="status_1">
+        <span style="background:#fff3e0;color:#e65100;padding:2px 8px;border-radius:10px;font-size:12px">待拣</span>
+      </span>
+    </div>
+
+    <div class="pick-line" style="display:flex;padding:10px 0;border-bottom:1px solid #f0f0f0;align-items:center">
+      <span style="width:40%">
+        <div style="font-weight:500">TL-PM100D</div>
+        <div style="font-size:12px;color:#888">Thorlabs PM100D 光功率计</div>
+      </span>
+      <span style="width:20%;text-align:center;font-size:18px">20</span>
+      <span style="width:20%;text-align:center;font-size:18px;color:#1a1a2e;font-weight:700" id="scanned_2">0</span>
+      <span style="width:20%;text-align:center" id="status_2">
+        <span style="background:#fff3e0;color:#e65100;padding:2px 8px;border-radius:10px;font-size:12px">待拣</span>
+      </span>
+    </div>
+  </div>
+
+  <!-- 进度条 -->
+  <div style="margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;font-size:13px;color:#888;margin-bottom:4px">
+      <span>拣货进度</span>
+      <span id="progress_text">0 / 25</span>
+    </div>
+    <div style="height:8px;background:#f0f0f0;border-radius:4px;overflow:hidden">
+      <div id="progress_bar" style="height:100%;background:#52c41a;width:0%;transition:width 0.3s;border-radius:4px"></div>
+    </div>
+  </div>
+
+  <button data-action="submit" style="width:100%;padding:12px;background:#52c41a;color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer;opacity:0.5" disabled id="complete_btn">
+    全部拣完，确认完成
+  </button>
+
+  <script>
+    let total = 25, scanned = 0;
+    function handleScan() {
+      const input = document.getElementById('scan_input');
+      if (input.value.trim()) {
+        scanned = Math.min(scanned + 1, total);
+        document.getElementById('progress_text').textContent = scanned + ' / ' + total;
+        document.getElementById('progress_bar').style.width = (scanned/total*100) + '%';
+        input.value = '';
+        input.focus();
+        if (scanned >= total) {
+          document.getElementById('complete_btn').disabled = false;
+          document.getElementById('complete_btn').style.opacity = '1';
+        }
+      }
+    }
+  </script>
+</div>
