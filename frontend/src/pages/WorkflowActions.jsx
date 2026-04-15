@@ -195,7 +195,7 @@ export default function WorkflowActions() {
             { value: 'overview', label: '总览', icon: <UnorderedListOutlined /> },
           ]} />
         <Button type="primary" icon={<RocketOutlined />} loading={creating} onClick={createDoc}>
-          开始新{selectedWf.name}
+          发起新{selectedWf.name}
         </Button>
       </div>
 

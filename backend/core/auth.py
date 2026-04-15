@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import models as m
-from database import get_db
+from core.database import get_db
 
 
 def hash_password(password: str) -> str:

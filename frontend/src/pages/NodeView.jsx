@@ -139,7 +139,7 @@ export default function NodeView() {
 
       {docs.length === 0 ? (
         <Card style={{ borderRadius: 12 }}>
-          <Empty description={isInitial ? "当前无单据 — 请在流程页点击【发起新流程】" : "当前无单据在此节点"} />
+          <Empty description={isInitial ? `当前无单据 — 请在流程页点击【发起新${workflow?.name || '流程'}】` : "当前无单据在此节点"} />
         </Card>
       ) : (
         <div style={{ display: 'flex', gap: 12 }}>

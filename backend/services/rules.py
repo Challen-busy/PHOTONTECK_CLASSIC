@@ -85,7 +85,7 @@ def _get_sync_engine():
 
 def _make_helpers():
     """跨表查询助手"""
-    from tools import TABLE_MAP
+    from services.tools import TABLE_MAP
 
     def _query_internal(table_name, **filters):
         m = TABLE_MAP.get(table_name)
@@ -126,7 +126,7 @@ def _make_helpers():
 
 async def _build_subtables_context(db, doc) -> dict:
     """加载 doc 的子表（_line / _entry）"""
-    from tools import TABLE_MAP
+    from services.tools import TABLE_MAP
     parent_table = doc.__table__.name
     ctx = {}
     for sub_name, sub_model in TABLE_MAP.items():

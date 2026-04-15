@@ -18,7 +18,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import api from '../api';
-import { query, agentCheck, agentExecute, getHistory } from '../api';
+import { query, previewTransition, commitTransition, getHistory } from '../api';
 import { useAuth } from '../auth';
 import ChangeCard from './ChangeCard';
 
@@ -356,7 +356,7 @@ export default function DocEditor({ docType, docId, currentState, actions = [], 
     Object.entries(editingFields).forEach(([k, v]) => { if (allowed.has(k)) filtered[k] = v; });
     setBusy(true);
     try {
-      const { data: card } = await agentCheck({
+      const { data: card } = await previewTransition({
         doc_type: docType, doc_id: docId,
         to_state: action.to_state, action_label: action.action_label,
         field_updates: filtered,
@@ -369,7 +369,7 @@ export default function DocEditor({ docType, docId, currentState, actions = [], 
   const approveCard = async (card) => {
     setBusy(true);
     try {
-      const { data } = await agentExecute(card, comment);
+      const { data } = await commitTransition(card, comment);
       if (data.success) {
         message.success(`${card.action_label || card.transition_name}: ${data.from_state || ''} → ${data.to_state}`);
         setPendingCard(null); setEditingFields({}); setComment('');

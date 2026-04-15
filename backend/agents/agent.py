@@ -1,51 +1,21 @@
 """
-第五层：双层Agent引擎（极简版，跟新流程模型对齐）
+LLM Agent 层：用户自然语言对话 → 调工具查数据 / 提交操作申请
 
-用户Agent: 理解意图 → 读数据 → 返回修改卡片（不执行）
-节点Agent: 检查条件 → 返回修改卡片（不执行）
-执行: 用户批复卡片后才调 execute_transition
-
-节点描述直接来自 WorkflowDefinition.states[i].description，不再走 KnowledgeEntry NODE
+注意：卡片协议（preview / commit / list_user_actions）不在这里 —— 那部分是确定性代码，
+已搬到 services/workflow.py。本文件只关心真·LLM 调度。
 """
 
 import json
 import time
-import uuid
 from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import llm
+from agents import llm
+from services import workflow
+from services.tools import TOOLS
 import models as m
-import workflow
-from tools import TOOLS
-
-
-# ============================================================
-# 卡片
-# ============================================================
-
-def make_card(
-    doc_type: str, doc_id: int | None,
-    from_state: str, to_state: str, action_label: str,
-    changes: list, checks: list,
-    recommendation: str = "proceed", reason: str = "",
-) -> dict:
-    return {
-        "card_id": str(uuid.uuid4())[:8],
-        "doc_type": doc_type,
-        "doc_id": doc_id,
-        "from_state": from_state,
-        "to_state": to_state,
-        "action_label": action_label,
-        # 兼容字段（前端 ChangeCard 已用过 transition_name）
-        "transition_name": action_label,
-        "changes": changes,
-        "checks": checks,
-        "recommendation": recommendation,
-        "reason": reason,
-    }
 
 
 # ============================================================
@@ -145,7 +115,7 @@ async def chat(db: AsyncSession, user_query: str, user: m.UserAccount) -> dict:
 
     tool_schemas = [TOOLS[t]["schema"] for t in ["query_data", "calculate", "compare", "aggregate"]]
 
-    available_actions = await _get_user_actions(db, user)
+    available_actions = await workflow.list_user_actions(db, user)
     action_desc = "\n".join(
         f"- {a['action_label']} ({a['doc_type']}: {a['from_state']}→{a['to_state']})" for a in available_actions[:50]
     )
@@ -182,7 +152,16 @@ async def chat(db: AsyncSession, user_query: str, user: m.UserAccount) -> dict:
         tool_results = []
         for tc in llm_result["tool_calls"]:
             if tc["name"] == "request_action":
-                card = await _build_card_from_request(db, tc["input"], user)
+                inp = tc["input"]
+                card = await workflow.preview_transition(
+                    db,
+                    doc_type=inp.get("doc_type", ""),
+                    doc_id=inp.get("doc_id"),
+                    to_state=inp.get("to_state") or "",
+                    action_label=inp.get("action_label") or "",
+                    user=user,
+                    field_updates=inp.get("field_updates") or {},
+                )
                 cards.append(card)
                 tools_called.append({"tool": "request_action", "params": tc["input"]})
                 tool_results.append(f"[Tool Result]: 已生成修改申请: {card['action_label']} on {card['doc_type']}#{card['doc_id']}，等待用户确认。")
@@ -218,138 +197,6 @@ async def chat(db: AsyncSession, user_query: str, user: m.UserAccount) -> dict:
         "tokens_used": total_tokens,
         "duration_ms": duration_ms,
     }
-
-
-# ============================================================
-# Tier 2: 节点Agent（检查，不执行）
-# ============================================================
-
-async def check_node(
-    db: AsyncSession,
-    doc_type: str,
-    doc_id: int,
-    to_state: str,
-    action_label: str,
-    user: m.UserAccount,
-    field_updates: dict | None = None,
-) -> dict:
-    return await _build_card_from_request(db, {
-        "doc_type": doc_type,
-        "doc_id": doc_id,
-        "to_state": to_state,
-        "action_label": action_label,
-        "field_updates": field_updates or {},
-    }, user)
-
-
-async def _build_card_from_request(db: AsyncSession, request: dict, user: m.UserAccount) -> dict:
-    """根据操作请求，调节点Agent检查，返回卡片"""
-    doc_type = request.get("doc_type", "")
-    doc_id = request.get("doc_id")
-    to_state = request.get("to_state") or ""
-    action_label = request.get("action_label") or ""
-    field_updates = request.get("field_updates", {})
-
-    wf = await workflow.get_active_workflow(db, doc_type)
-    if not wf:
-        return make_card(doc_type, doc_id, "", to_state, action_label or "未知", [], ["流程不存在"], "reject", "流程不存在")
-
-    # 创建模式（doc_id=None）
-    if not doc_id:
-        initials = workflow._initial_states(wf)
-        target = next((s for s in initials if not to_state or s["code"] == to_state), None)
-        if not target:
-            return make_card(doc_type, None, "", to_state, action_label or "创建", [],
-                             ["找不到合适的初始节点"], "reject", "无法创建")
-        checks = [f"创建模式：进入 '{target.get('name', target['code'])}'"]
-        if user.role not in ("ADMIN", "BOSS") and target.get("allowed_roles") and user.role not in target["allowed_roles"]:
-            return make_card(doc_type, None, "", target["code"], action_label or "创建",
-                             [], [f"角色 {user.role} 无权创建"], "reject", "角色无权")
-        changes = [{"field": "status", "from": "", "to": target["code"]}]
-        for field, val in field_updates.items():
-            changes.append({"field": field, "from": "", "to": str(val)})
-        return make_card(doc_type, None, "", target["code"], action_label or "创建", changes, checks)
-
-    # 加载单据
-    model = workflow.DOC_MODEL_MAP.get(doc_type)
-    doc = None
-    if model:
-        r = await db.execute(select(model).where(model.id == doc_id))
-        doc = r.scalar_one_or_none()
-    if not doc:
-        return make_card(doc_type, doc_id, "", to_state, action_label or "未知", [],
-                         [f"{doc_type}#{doc_id}不存在"], "reject", "单据不存在")
-
-    current_code = doc.status
-    current_state = workflow._find_state(wf, current_code)
-    if not current_state:
-        return make_card(doc_type, doc_id, current_code, to_state, action_label or "未知", [],
-                         [f"流程未定义状态 '{current_code}'"], "reject", "状态定义缺失")
-
-    checks = [f"当前状态: {current_state.get('name', current_code)} ✓"]
-    recommendation = "proceed"
-    reason = ""
-
-    # 角色校验
-    state_roles = current_state.get("allowed_roles") or []
-    if user.role not in ("ADMIN", "BOSS") and state_roles and user.role not in state_roles:
-        return make_card(doc_type, doc_id, current_code, to_state, action_label or "操作", [],
-                         [f"角色校验: {user.role} 不在 {state_roles}"], "reject", "角色无权")
-    checks.append(f"角色: {user.role} ✓")
-
-    # 决定目标状态 + 定位出边（editable 挂在出边上）
-    next_entry = None
-    if not to_state or to_state == current_code:
-        new_status = current_code
-        action_label = action_label or "编辑"
-        editable: set[str] = set()
-    else:
-        next_entry = next(
-            (n for n in (current_state.get("next") or []) if n.get("to") == to_state and (not action_label or n.get("label") == action_label)),
-            None,
-        ) or next(
-            (n for n in (current_state.get("next") or []) if n.get("to") == to_state),
-            None,
-        )
-        if not next_entry:
-            return make_card(doc_type, doc_id, current_code, to_state, action_label or "推进", [],
-                             [f"非法跳转 {current_code}→{to_state}"], "reject", "不允许此跳转")
-        # next 项可能有自己的角色限制
-        n_roles = next_entry.get("roles")
-        if n_roles and user.role not in ("ADMIN", "BOSS") and user.role not in n_roles:
-            return make_card(doc_type, doc_id, current_code, to_state, action_label or next_entry.get("label", to_state), [],
-                             [f"动作角色限制：需 {n_roles}"], "reject", "动作角色无权")
-        new_status = to_state
-        action_label = action_label or next_entry.get("label", to_state)
-        editable = set(next_entry.get("editable_fields") or [])
-
-    # 字段校验
-    if field_updates and not editable:
-        return make_card(doc_type, doc_id, current_code, to_state, action_label or "操作", [],
-                         ["当前动作不允许录入字段"], "reject", "无可编辑字段")
-    for field in field_updates:
-        if field not in editable:
-            return make_card(doc_type, doc_id, current_code, to_state, action_label or "操作", [],
-                             [f"字段 {field} 在此动作不可编辑"], "reject", f"字段 {field} 不可编辑")
-
-    # 变更列表
-    changes = []
-    if new_status != current_code:
-        changes.append({"field": "status", "from": current_code, "to": new_status})
-    for field, new_val in field_updates.items():
-        old_val = getattr(doc, field, None)
-        changes.append({"field": field, "from": str(old_val), "to": str(new_val)})
-
-    # 调 LLM 用 state.description 做智能检查
-    node_desc = current_state.get("description", "")
-    if node_desc:
-        llm_check = await _run_node_agent_check(db, wf, current_state, doc_type, doc_id, user, node_desc, action_label, new_status)
-        checks.extend(llm_check.get("steps", []))
-        if not llm_check.get("proceed", True):
-            recommendation = "reject"
-            reason = llm_check.get("reason", "节点Agent判断不通过")
-
-    return make_card(doc_type, doc_id, current_code, new_status, action_label, changes, checks, recommendation, reason)
 
 
 async def _run_node_agent_check(db, wf, state, doc_type, doc_id, user, node_desc, action_label, new_status) -> dict:
@@ -440,60 +287,6 @@ async def _run_node_agent_check(db, wf, state, doc_type, doc_id, user, node_desc
     return {"proceed": True, "steps": ["4轮未完成，默认通过"]}
 
 
-# ============================================================
-# 执行已批准的卡片
-# ============================================================
-
-async def execute_card(
-    db: AsyncSession,
-    card: dict,
-    user: m.UserAccount,
-    comment: str = "",
-    ip_address: str | None = None,
-) -> dict:
-    """执行用户已批准的卡片 — 调 execute_transition"""
-    field_updates = {}
-    for change in card.get("changes", []):
-        if change["field"] != "status":
-            field_updates[change["field"]] = change["to"]
-
-    return await workflow.execute_transition(
-        db=db,
-        doc_type=card["doc_type"],
-        doc_id=card.get("doc_id"),
-        to_state=card.get("to_state"),
-        action_label=card.get("action_label", ""),
-        user=user,
-        field_updates=field_updates,
-        comment=comment,
-        ip_address=ip_address,
-    )
 
 
-# ============================================================
-# 辅助
-# ============================================================
 
-async def _get_user_actions(db: AsyncSession, user: m.UserAccount) -> list[dict]:
-    """返回所有 (doc_type, current_state, next_action) 组合，用户能用的"""
-    actions = []
-    for doc_type in workflow.DOC_MODEL_MAP:
-        wf = await workflow.get_active_workflow(db, doc_type)
-        if not wf:
-            continue
-        for s in (wf.states or []):
-            roles = s.get("allowed_roles") or []
-            if user.role not in ("ADMIN", "BOSS") and roles and user.role not in roles:
-                continue
-            for n in (s.get("next") or []):
-                n_roles = n.get("roles") or roles
-                if user.role not in ("ADMIN", "BOSS") and n_roles and user.role not in n_roles:
-                    continue
-                actions.append({
-                    "doc_type": doc_type,
-                    "from_state": s["code"],
-                    "to_state": n["to"],
-                    "action_label": n.get("label", n["to"]),
-                    "editable_fields": n.get("editable_fields", []),
-                })
-    return actions

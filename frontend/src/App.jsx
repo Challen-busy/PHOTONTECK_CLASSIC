@@ -11,6 +11,7 @@ import DocHistory from './pages/DocHistory';
 import Admin from './pages/Admin';
 import FlowEditor from './pages/FlowEditor';
 import NodeView from './pages/NodeView';
+import MyTodos from './pages/MyTodos';
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -25,6 +26,7 @@ function AppRoutes() {
       <Route path="/login" element={<Login />} />
       <Route path="/" element={<Protected><Layout /></Protected>}>
         <Route index element={<Dashboard />} />
+        <Route path="todos" element={<MyTodos />} />
         <Route path="data" element={<DataExplorer />} />
         <Route path="data/:table" element={<DataExplorer />} />
         <Route path="actions" element={<WorkflowActions />} />

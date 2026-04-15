@@ -27,7 +27,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
-from database import Base
+from core.database import Base
 
 
 # ============================================================
@@ -95,9 +95,9 @@ class UserCompanyAccess(Base):
 class Customer(AuditMixin, Base):
     __tablename__ = "customer"
     id = Column(Integer, primary_key=True)
-    code = Column(String(30), nullable=False, index=True)
+    code = Column(String(30), index=True)
     code_type = Column(String(15), default="LONG_TERM")
-    name = Column(String(200), nullable=False)
+    name = Column(String(200))
     short_name = Column(String(50), default="")
     country = Column(String(50), default="")
     city = Column(String(50), default="")
@@ -116,8 +116,8 @@ class Customer(AuditMixin, Base):
 class Supplier(AuditMixin, Base):
     __tablename__ = "supplier"
     id = Column(Integer, primary_key=True)
-    code = Column(String(30), nullable=False, index=True)
-    name = Column(String(200), nullable=False)
+    code = Column(String(30), index=True)
+    name = Column(String(200))
     short_name = Column(String(50), default="")
     country = Column(String(50), default="")
     contact_person = Column(String(50), default="")
@@ -165,7 +165,7 @@ class FrameworkContract(AuditMixin, Base):
     __tablename__ = "framework_contract"
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey("customer.id"))
-    contract_number = Column(String(50), index=True)
+    contract_number = Column(String(50), index=True, nullable=False)
     start_date = Column(Date)
     end_date = Column(Date)
     total_amount = Column(Numeric(16, 2), default=0)
@@ -181,7 +181,7 @@ class FrameworkContract(AuditMixin, Base):
 class SalesOrder(AuditMixin, Base):
     __tablename__ = "sales_order"
     id = Column(Integer, primary_key=True)
-    order_number = Column(String(30), unique=True, index=True)
+    order_number = Column(String(30), unique=True, index=True, nullable=False)
     customer_id = Column(Integer, ForeignKey("customer.id"))
     framework_contract_id = Column(Integer, ForeignKey("framework_contract.id"), nullable=True)
     sales_engineer_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
@@ -222,7 +222,7 @@ class SalesOrderLine(Base):
 class PurchaseOrder(AuditMixin, Base):
     __tablename__ = "purchase_order"
     id = Column(Integer, primary_key=True)
-    order_number = Column(String(30), unique=True, index=True)
+    order_number = Column(String(30), unique=True, index=True, nullable=False)
     supplier_id = Column(Integer, ForeignKey("supplier.id"))
     purchase_assistant_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
     related_sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=True)
@@ -288,8 +288,8 @@ class Inventory(AuditMixin, Base):
     material_id = Column(Integer, ForeignKey("material.id"))
     warehouse_id = Column(Integer, ForeignKey("warehouse.id"))
     location_id = Column(Integer, ForeignKey("warehouse_location.id"), nullable=True)
-    batch_number = Column(String(50), index=True)
-    quantity = Column(Numeric(12, 2))
+    batch_number = Column(String(50), index=True, nullable=False)
+    quantity = Column(Numeric(12, 2), nullable=False)
     reserved_quantity = Column(Numeric(12, 2), default=0)
     received_date = Column(Date, index=True)
     purchase_order_line_id = Column(Integer, ForeignKey("purchase_order_line.id"), nullable=True)
@@ -304,7 +304,7 @@ class Inventory(AuditMixin, Base):
 class GoodsReceipt(AuditMixin, Base):
     __tablename__ = "goods_receipt"
     id = Column(Integer, primary_key=True)
-    receipt_number = Column(String(30), unique=True)
+    receipt_number = Column(String(30), unique=True, nullable=False)
     purchase_order_id = Column(Integer, ForeignKey("purchase_order.id"))
     warehouse_id = Column(Integer, ForeignKey("warehouse.id"))
     received_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
@@ -329,7 +329,7 @@ class GoodsReceiptLine(Base):
 class ShipmentRequest(AuditMixin, Base):
     __tablename__ = "shipment_request"
     id = Column(Integer, primary_key=True)
-    shipment_number = Column(String(30), unique=True)
+    shipment_number = Column(String(30), unique=True, nullable=False)
     sales_order_id = Column(Integer, ForeignKey("sales_order.id"))
     requested_by_id = Column(Integer, ForeignKey("user_account.id"))
     approved_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
@@ -430,9 +430,9 @@ class Account(Base):
 class Voucher(AuditMixin, Base):
     __tablename__ = "voucher"
     id = Column(Integer, primary_key=True)
-    voucher_number = Column(String(30), index=True)
-    voucher_date = Column(Date)
-    period_id = Column(Integer, ForeignKey("accounting_period.id"))
+    voucher_number = Column(String(30), index=True, nullable=False)
+    voucher_date = Column(Date, nullable=False)
+    period_id = Column(Integer, ForeignKey("accounting_period.id"), nullable=False)
     voucher_type = Column(String(10), default="GENERAL")
     description = Column(String(200), default="")
     total_debit = Column(Numeric(16, 2), default=0)
@@ -565,7 +565,8 @@ class InventoryTransaction(Base):
     reference_type = Column(String(30), default="")
     reference_id = Column(BigInteger, nullable=True)
     voucher_id = Column(Integer, ForeignKey("voucher.id"), nullable=True)
-    period_id = Column(Integer, ForeignKey("accounting_period.id"))
+    period_id = Column(Integer, ForeignKey("accounting_period.id"), nullable=False)
+    status = Column(String(15), default="START", index=True)
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (Index("ix_inv_txn_material_date", "company_id", "material_id", "transaction_date"),)

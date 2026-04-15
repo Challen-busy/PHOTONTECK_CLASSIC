@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import models as m
-from database import get_session_factory
+from core.database import get_session_factory
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ from alembic import context
 # 把backend目录加入path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from database import Base, get_sync_engine
+from core.database import Base, get_sync_engine
 import models  # 确保所有模型被导入
 
 config = context.config

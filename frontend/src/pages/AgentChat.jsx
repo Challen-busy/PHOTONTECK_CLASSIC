@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Card, Input, Button, Tag, Spin, Space, message } from 'antd';
 import { SendOutlined, RobotOutlined, CheckCircleOutlined } from '@ant-design/icons';
-import { agentChat, agentExecute } from '../api';
+import { agentChat, commitTransition } from '../api';
 import ChangeCard from '../components/ChangeCard';
 
 export default function AgentChat() {
@@ -44,7 +44,7 @@ export default function AgentChat() {
   const approveCard = async (card) => {
     setLoading(true);
     try {
-      const { data } = await agentExecute(card);
+      const { data } = await commitTransition(card);
       const msg = data.success
         ? `✅ ${card.transition_name}: ${data.from_state} → ${data.to_state}`
         : `❌ ${card.transition_name}: ${data.error}`;

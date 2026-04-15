@@ -12,9 +12,9 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import llm
+from agents import llm
+from core.database import Base
 import models as m
-from database import Base
 
 
 # ============================================================

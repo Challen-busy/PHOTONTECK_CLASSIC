@@ -1,18 +1,22 @@
 """
 种子数据 — 一次性灌入演示数据
 
-python seed.py
+在 backend/ 下执行: python -m scripts.seed
 """
 
 import asyncio
 import calendar
+import sys
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 from sqlalchemy import select
 
-from auth import hash_password
-from database import Base, get_async_engine, get_session_factory
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from core.auth import hash_password
+from core.database import Base, get_async_engine, get_session_factory
 import models as m
 
 

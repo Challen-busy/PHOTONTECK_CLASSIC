@@ -45,6 +45,8 @@ doc/
 *.bak
 *.sqlite
 *.db
+.run/
+backend/.run/
 
 # Alembic 本地版本文件（如需可放开）
 # alembic/versions/*.py

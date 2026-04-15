@@ -86,7 +86,7 @@ def validate_hook(script: str) -> tuple[bool, str]:
 
 def _build_subtables_sync(sync_session, doc) -> dict:
     """从 sync session 加载子表（_line / _entry）"""
-    from tools import TABLE_MAP
+    from services.tools import TABLE_MAP
     parent_table = doc.__table__.name
     ctx = {}
     for sub_name, sub_model in TABLE_MAP.items():
@@ -113,7 +113,7 @@ def _build_subtables_sync(sync_session, doc) -> dict:
 
 def _build_context(sync_session, doc):
     """构建钩子可见的函数/变量，并返回操作日志 list"""
-    from tools import TABLE_MAP
+    from services.tools import TABLE_MAP
 
     op_log: list[str] = []
 
