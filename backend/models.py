@@ -437,7 +437,7 @@ class Voucher(AuditMixin, Base):
     description = Column(String(200), default="")
     total_debit = Column(Numeric(16, 2), default=0)
     total_credit = Column(Numeric(16, 2), default=0)
-    status = Column(String(10), default="DRAFT")
+    status = Column(String(30), default="DRAFT")
     is_auto_generated = Column(Boolean, default=False)
     source_doc_type = Column(String(30), default="")
     source_doc_id = Column(BigInteger, nullable=True)
@@ -492,6 +492,9 @@ class AccountsReceivable(AuditMixin, Base):
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey("customer.id"))
     sales_order_id = Column(Integer, ForeignKey("sales_order.id"))
+    contract_id = Column(Integer, ForeignKey("framework_contract.id"), nullable=True)
+    voucher_id = Column(Integer, ForeignKey("voucher.id"), nullable=True)
+    settlement_batch_no = Column(String(50), default="", index=True)
     invoice_number = Column(String(50), default="", index=True)
     amount = Column(Numeric(16, 2))
     currency = Column(String(3))
@@ -499,7 +502,7 @@ class AccountsReceivable(AuditMixin, Base):
     due_date = Column(Date)
     paid_amount = Column(Numeric(16, 2), default=0)
     paid_date = Column(Date, nullable=True)
-    status = Column(String(10), default="PENDING")
+    status = Column(String(30), default="PENDING")
 
 
 class AccountsPayable(AuditMixin, Base):
@@ -514,7 +517,7 @@ class AccountsPayable(AuditMixin, Base):
     due_date = Column(Date)
     paid_amount = Column(Numeric(16, 2), default=0)
     paid_date = Column(Date, nullable=True)
-    status = Column(String(10), default="PENDING")
+    status = Column(String(30), default="PENDING")
 
 
 class SupplierCredit(AuditMixin, Base):
@@ -536,7 +539,53 @@ class CustomerCredit(AuditMixin, Base):
     currency = Column(String(3), default="USD")
     used_amount = Column(Numeric(16, 2), default=0)
     warning_threshold_pct = Column(Integer, default=80)
+    credit_period_days = Column(Integer, default=30)
+    credit_rating = Column(String(10), default="")
     __table_args__ = (UniqueConstraint("company_id", "customer_id"),)
+
+
+class NotesReceivable(AuditMixin, Base):
+    """应收票据：商业汇票/银行承兑等"""
+    __tablename__ = "notes_receivable"
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customer.id"))
+    note_number = Column(String(50), default="", index=True)
+    note_type = Column(String(20), default="COMMERCIAL")
+    amount = Column(Numeric(16, 2), nullable=False)
+    currency = Column(String(3), default="CNY")
+    issue_date = Column(Date)
+    maturity_date = Column(Date)
+    drawer = Column(String(100), default="")
+    acceptor = Column(String(100), default="")
+    status = Column(String(20), default="HELD")
+
+
+class BankReceipt(AuditMixin, Base):
+    """银行收款流水：现金管理模块联动"""
+    __tablename__ = "bank_receipt"
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)
+    receipt_number = Column(String(50), default="", index=True)
+    bank_account = Column(String(50), default="")
+    amount = Column(Numeric(16, 2), nullable=False)
+    currency = Column(String(3), default="CNY")
+    receipt_date = Column(Date, index=True)
+    payer_name = Column(String(100), default="")
+    remark = Column(Text, default="")
+    status = Column(String(20), default="UNALLOCATED")
+
+
+class ARSettlement(AuditMixin, Base):
+    """应收款核销明细：一笔款核销多张发票"""
+    __tablename__ = "ar_settlement"
+    id = Column(Integer, primary_key=True)
+    batch_no = Column(String(50), default="", index=True)
+    ar_id = Column(Integer, ForeignKey("accounts_receivable.id"), nullable=False)
+    bank_receipt_id = Column(Integer, ForeignKey("bank_receipt.id"), nullable=True)
+    note_id = Column(Integer, ForeignKey("notes_receivable.id"), nullable=True)
+    settle_amount = Column(Numeric(16, 2), nullable=False)
+    settle_date = Column(Date)
+    remark = Column(Text, default="")
 
 
 class InventoryValuation(AuditMixin, Base):

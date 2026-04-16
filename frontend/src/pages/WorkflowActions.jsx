@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { ReactFlow, Background, Controls, MiniMap, useNodesState, useEdgesState, MarkerType } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Card, Tag, Button, Spin, Badge, Segmented, Empty, Timeline, message } from 'antd';
@@ -7,6 +7,28 @@ import { ArrowLeftOutlined, ApartmentOutlined, UnorderedListOutlined, ClockCircl
 import { layoutGraph } from '../utils/layout';
 import { query } from '../api';
 import api from '../api';
+import ReportDrawer from '../components/ReportDrawer';
+
+// 报表节点 code → ReportDrawer key 映射
+const REPORT_NODE_MAP = {
+  RPT_GENERAL_LEDGER: { key: 'general_ledger', name: '总分类账' },
+  RPT_DETAIL_LEDGER: { key: 'detail_ledger', name: '明细分类账' },
+  RPT_MULTI_COL: { key: 'multi_column_ledger', name: '多栏账' },
+  RPT_PROJECT_DETAIL: { key: 'project_ledger', name: '核算项目明细账' },
+  RPT_PROJECT_BALANCE: { key: 'project_balance', name: '核算项目余额表' },
+  RPT_TRIAL_BALANCE: { key: 'trial_balance', name: '试算平衡表' },
+  RPT_ACCOUNT_BALANCE: { key: 'account_balance', name: '科目余额表' },
+  RPT_AR_DETAIL: { key: 'ar_detail', name: '应收款明细表' },
+  RPT_AR_SUMMARY: { key: 'ar_summary', name: '应收款汇总表' },
+  RPT_RECONCILIATION: { key: 'reconciliation', name: '往来对账单' },
+  RPT_AGING: { key: 'aging_analysis', name: '账龄分析' },
+  RPT_DUE_LIST: { key: 'due_list', name: '到期债权列表' },
+  RPT_SALES_ANALYSIS: { key: 'sales_analysis', name: '销售分析' },
+  RPT_COLLECTION: { key: 'collection_analysis', name: '回款分析' },
+  RPT_CONTRACT_EXEC: { key: 'contract_exec', name: '合同金额执行汇总表' },
+  RPT_CONTRACT_DUE: { key: 'contract_due_list', name: '合同到期款项列表' },
+  RPT_CREDIT_LIMIT: { key: 'credit_limit', name: '信用额度分析' },
+};
 
 const stateColors = {
   DRAFT: '#d9d9d9', QUOTED: '#b37feb', PENDING_APPROVAL: '#faad14', APPROVED: '#52c41a',
@@ -33,8 +55,35 @@ const tableMap = {
   ACCOUNTING_PERIOD: 'accounting_period',
 };
 
+// 根据 node_type 返回不同的节点样式
+function getNodeStyle(s) {
+  const t = s.node_type;
+  if (t === 'policy') return {
+    background: '#fffbe6', color: '#8c6d1f',
+    border: '1.5px solid #ffe58f', borderLeft: '4px solid #faad14',
+    borderRadius: 4, padding: '6px 14px', minWidth: 110, fontSize: 12,
+  };
+  if (t === 'cross_module') return {
+    background: '#52c41a', color: '#fff',
+    border: '2px solid #389e0d', borderRadius: 20,
+    padding: '6px 14px', minWidth: 110, fontSize: 12,
+  };
+  if (t === 'report') return {
+    background: '#e6f7ff', color: '#0050b3',
+    border: '1.5px dashed #91d5ff', borderRadius: 4,
+    padding: '6px 14px', minWidth: 110, fontSize: 12,
+  };
+  return {
+    background: stateColors[s.code] || '#d9d9d9',
+    color: ['DRAFT', 'COMPLETED', 'CLOSED', 'EXPIRED', 'PROSPECTING', 'OPEN'].includes(s.code) ? '#333' : '#fff',
+    border: s.is_initial ? '3px solid #1a1a2e' : s.is_terminal ? '2px dashed #999' : '1px solid #ddd',
+    borderRadius: 8, padding: '6px 14px', minWidth: 110, fontSize: 12,
+  };
+}
+
 export default function WorkflowActions() {
   const navigate = useNavigate();
+  const { workflowId } = useParams();
   const [workflows, setWorkflows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedWf, setSelectedWf] = useState(null);
@@ -44,10 +93,19 @@ export default function WorkflowActions() {
   const [viewMode, setViewMode] = useState('flow');  // 'flow' | 'overview'
   const [recentLogs, setRecentLogs] = useState([]);
   const [creating, setCreating] = useState(false);
+  const [reportDrawer, setReportDrawer] = useState({ open: false, key: '', name: '' });
 
   useEffect(() => {
     api.get('/workflows').then(r => { setWorkflows(r.data || []); setLoading(false); }).catch(() => setLoading(false));
   }, []);
+
+  // URL带workflowId时自动进入该流程图
+  useEffect(() => {
+    if (workflowId && workflows.length > 0 && !selectedWf) {
+      const wf = workflows.find(w => w.id === Number(workflowId));
+      if (wf) enterWorkflow(wf);
+    }
+  }, [workflowId, workflows]);
 
   const enterWorkflow = async (wf) => {
     setNodes([]);
@@ -67,6 +125,7 @@ export default function WorkflowActions() {
     const counts = {};
     if (table) {
       for (const s of states) {
+        if (s.node_type && s.node_type !== 'state') continue;
         try {
           const { data } = await query(table, { filters: { status: s.code }, limit: 1 });
           counts[s.code] = data.total || 0;
@@ -83,36 +142,45 @@ export default function WorkflowActions() {
       setRecentLogs(logData.data || []);
     } catch { setRecentLogs([]); }
 
-    let newNodes = states.map(s => ({
-      id: s.code,
-      position: hasSaved && savedPositions[s.code] ? savedPositions[s.code] : { x: 0, y: 0 },
-      draggable: false,
-      data: {
-        label: (
-          <div style={{ textAlign: 'center', cursor: 'pointer' }}>
-            <div style={{ fontWeight: 600, fontSize: 12 }}>{s.name}</div>
-            {counts[s.code] > 0 && <Badge count={counts[s.code]} size="small" style={{ backgroundColor: '#1a1a2e' }} />}
-          </div>
-        ),
-      },
-      style: {
-        background: stateColors[s.code] || '#d9d9d9',
-        color: ['DRAFT', 'COMPLETED', 'CLOSED', 'EXPIRED', 'PROSPECTING', 'OPEN'].includes(s.code) ? '#333' : '#fff',
-        border: s.is_initial ? '3px solid #1a1a2e' : s.is_terminal ? '2px dashed #999' : '1px solid #ddd',
-        borderRadius: 8, padding: '6px 14px', minWidth: 110, fontSize: 12,
-      },
-    }));
+    const nodeTypeMap = {};
+    states.forEach(s => { nodeTypeMap[s.code] = s.node_type || 'state'; });
+
+    let newNodes = states.map(s => {
+      const isDisplayOnly = s.node_type === 'policy';
+      return {
+        id: s.code,
+        position: hasSaved && savedPositions[s.code] ? savedPositions[s.code] : { x: 0, y: 0 },
+        draggable: false,
+        data: {
+          label: (
+            <div style={{ textAlign: 'center', cursor: isDisplayOnly ? 'default' : 'pointer' }}>
+              <div style={{ fontWeight: 600, fontSize: 12 }}>{s.name}</div>
+              {!isDisplayOnly && counts[s.code] > 0 && <Badge count={counts[s.code]} size="small" style={{ backgroundColor: '#1a1a2e' }} />}
+            </div>
+          ),
+        },
+        style: getNodeStyle(s),
+      };
+    });
 
     // 流程图只画业务状态推进 — 过滤掉"创建"(from="")和"编辑"(自循环)元转换
     const stateCodeSet = new Set(states.map(s => s.code));
     const newEdges = transitions
       .filter(t => t.from_state && t.from_state !== t.to_state && stateCodeSet.has(t.from_state) && stateCodeSet.has(t.to_state))
-      .map((t, i) => ({
-        id: `e-${i}`, source: t.from_state, target: t.to_state, label: t.name,
-        labelStyle: { fontSize: 10, fill: '#555' }, labelBgStyle: { fill: '#fff', fillOpacity: 0.9 },
-        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
-        style: { strokeWidth: 1.5, stroke: '#999' }, type: 'smoothstep',
-      }));
+      .map((t, i) => {
+        const isPolicy = nodeTypeMap[t.from_state] === 'policy';
+        return {
+          id: `e-${i}`, source: t.from_state, target: t.to_state,
+          label: isPolicy ? '' : t.name,
+          labelStyle: { fontSize: 10, fill: '#555' },
+          labelBgStyle: { fill: '#fff', fillOpacity: 0.9 },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+          style: isPolicy
+            ? { strokeWidth: 1.5, stroke: '#faad14', strokeDasharray: '6 3' }
+            : { strokeWidth: 1.5, stroke: '#999' },
+          type: 'smoothstep',
+        };
+      });
 
     if (!hasSaved) newNodes = layoutGraph(newNodes, newEdges, 'TB');
     setNodes(newNodes);
@@ -121,6 +189,13 @@ export default function WorkflowActions() {
 
   const onNodeClick = useCallback((_, node) => {
     if (!selectedWf) return;
+    const st = (selectedWf.states || []).find(s => s.code === node.id);
+    if (st?.node_type === 'policy') return;
+    if (st?.node_type === 'report') {
+      const rpt = REPORT_NODE_MAP[node.id];
+      if (rpt) setReportDrawer({ open: true, key: rpt.key, name: rpt.name });
+      return;
+    }
     navigate(`/node/${selectedWf.id}/${node.id}`);
   }, [selectedWf, navigate]);
 
@@ -147,6 +222,8 @@ export default function WorkflowActions() {
 
   // === 第一层：按分组的流程卡片 ===
   if (!selectedWf) {
+    // URL带workflowId但还没进入流程，等enterWorkflow执行，不闪列表
+    if (workflowId) return <Spin size="large" style={{ display: 'block', margin: '80px auto' }} />;
     const grouped = workflows.reduce((acc, wf) => {
       const g = wf.group_name || '其他';
       (acc[g] = acc[g] || []).push(wf);
@@ -184,7 +261,7 @@ export default function WorkflowActions() {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => setSelectedWf(null)}>返回</Button>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => { setSelectedWf(null); navigate('/actions', { replace: true }); }}>返回</Button>
         <h2 style={{ fontSize: 18, fontWeight: 600, color: '#1a1a2e', margin: 0 }}>{selectedWf.name}</h2>
         <Tag>{selectedWf.doc_type}</Tag>
         <Tag color="blue">进行中 {totalActive}</Tag>
@@ -261,6 +338,13 @@ export default function WorkflowActions() {
           </Card>
         </div>
       )}
+
+      <ReportDrawer
+        open={reportDrawer.open}
+        onClose={() => setReportDrawer({ open: false, key: '', name: '' })}
+        reportKey={reportDrawer.key}
+        reportName={reportDrawer.name}
+      />
     </div>
   );
 }

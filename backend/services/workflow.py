@@ -30,11 +30,15 @@ def _coerce_value(col, value):
         return value
     t = col.type
     if isinstance(t, DateTime) and isinstance(value, str):
+        if not value.strip():
+            return None
         try:
             return datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return value
     if isinstance(t, Date) and isinstance(value, str):
+        if not value.strip():
+            return None
         try:
             return date.fromisoformat(value[:10])
         except ValueError:
@@ -269,8 +273,10 @@ async def execute_transition(
     if not to_state or to_state == current_state_code:
         new_status = current_state_code
         action_label = action_label or "编辑"
-        # 无出边 = 没有可编辑字段（需要推进才能改）
+        # 编辑模式：允许所有出边可编辑字段的并集
         editable: set[str] = set()
+        for n in (current_state.get("next") or []):
+            editable.update(n.get("editable_fields") or [])
     else:
         next_entry = next(
             (n for n in (current_state.get("next") or []) if n.get("to") == to_state and (not action_label or n.get("label") == action_label)),

@@ -5,11 +5,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Tag, Button, Space, Empty, Spin, Input, message } from 'antd';
-import { ArrowLeftOutlined, SendOutlined, RobotOutlined } from '@ant-design/icons';
-import { query, getTransitions, agentChat } from '../api';
+import { Card, Tag, Button, Space, Empty, Spin } from 'antd';
+import { ArrowLeftOutlined, FileSearchOutlined } from '@ant-design/icons';
+import { query, getTransitions } from '../api';
 import api from '../api';
 import DocEditor from '../components/DocEditor';
+import ReportDrawer from '../components/ReportDrawer';
 
 const tableMap = {
   SALES_ORDER: 'sales_order', PURCHASE_ORDER: 'purchase_order',
@@ -34,14 +35,37 @@ export default function NodeView() {
   const [customHtml, setCustomHtml] = useState('');
   const [nodePrompt, setNodePrompt] = useState('');
 
-  // Agent对话
-  const [chatMessages, setChatMessages] = useState([]);
-  const [chatInput, setChatInput] = useState('');
-  const [chatLoading, setChatLoading] = useState(false);
-  const chatRef = useRef(null);
   const htmlRef = useRef(null);
 
   const isInitial = stateInfo?.is_initial;
+
+  // 报表云朵配置（按 doc_type）
+  // VOUCHER 报表已搬到流程图节点（WorkflowActions），此处只保留 AR
+  const REPORT_CONFIG = {
+    ACCOUNTS_RECEIVABLE: {
+      states: new Set(['COLLECTING', 'VOUCHER_PROCESSED', 'CLOSED']),
+      reports: [
+        { key: 'ar_detail', name: '应收款明细表' },
+        { key: 'ar_summary', name: '应收款汇总表' },
+        { key: 'reconciliation', name: '往来对账单' },
+        { key: 'aging_analysis', name: '账龄分析' },
+        { key: 'due_list', name: '到期债权列表' },
+        { key: 'contract_due_list', name: '合同到期款项列表' },
+        { key: 'credit_limit', name: '信用额度分析' },
+        { key: 'sales_analysis', name: '销售分析' },
+        { key: 'collection_analysis', name: '回款分析' },
+        { key: 'contract_exec', name: '合同金额执行汇总表' },
+      ],
+    },
+  };
+  const [reportDrawer, setReportDrawer] = useState({ open: false, key: '', name: '' });
+
+  const reportCfg = REPORT_CONFIG[workflow?.doc_type];
+  const showReports = reportCfg && reportCfg.states.has(stateCode);
+  const reports = reportCfg?.reports || [];
+  const openReport = (key, name) => {
+    setReportDrawer({ open: true, key, name });
+  };
 
   const loadData = async () => {
     // 加载流程定义
@@ -88,23 +112,6 @@ export default function NodeView() {
     }
   }, [customHtml]);
 
-  // Agent对话
-  const sendChat = async () => {
-    if (!chatInput.trim()) return;
-    const q = chatInput.trim();
-    setChatInput('');
-    setChatMessages(prev => [...prev, { role: 'user', content: q }]);
-    setChatLoading(true);
-    try {
-      const { data } = await agentChat(q);
-      setChatMessages(prev => [...prev, { role: 'agent', content: data.response }]);
-    } catch (e) {
-      setChatMessages(prev => [...prev, { role: 'agent', content: '错误: ' + e.message }]);
-    }
-    setChatLoading(false);
-    setTimeout(() => chatRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
-  };
-
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '80px auto' }} />;
 
   // === 自定义HTML ===
@@ -112,7 +119,7 @@ export default function NodeView() {
     return (
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/actions/${workflowId}`)}>返回</Button>
           <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
             {stateInfo?.name} — {workflow?.name}
           </h2>
@@ -128,7 +135,7 @@ export default function NodeView() {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/actions/${workflowId}`)}>返回</Button>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: '#1a1a2e' }}>
           {stateInfo?.name}
         </h2>
@@ -136,6 +143,18 @@ export default function NodeView() {
         <Tag>{docs.length} 条</Tag>
         {isInitial && <Tag color="gold">起始</Tag>}
       </div>
+
+      {showReports && (
+        <Card size="small" style={{ borderRadius: 12, marginBottom: 12 }}
+          title={<span><FileSearchOutlined /> 相关报表</span>}>
+          <Space wrap size={[8, 8]}>
+            {reports.map(r => (
+              <Button key={r.key} size="small" style={{ borderRadius: 14 }}
+                onClick={() => openReport(r.key, r.name)}>{r.name}</Button>
+            ))}
+          </Space>
+        </Card>
+      )}
 
       {docs.length === 0 ? (
         <Card style={{ borderRadius: 12 }}>
@@ -184,37 +203,15 @@ export default function NodeView() {
               />
             ) : <Empty description="请选择单据" />}
           </div>
-
-          {/* 右侧：Agent */}
-          <Card size="small" style={{ width: 320, flexShrink: 0, borderRadius: 12, height: 'fit-content' }}
-            title={<span><RobotOutlined /> 节点助手</span>}>
-            <div style={{ height: 400, overflow: 'auto', marginBottom: 8 }}>
-              {chatMessages.length === 0 && (
-                <div style={{ textAlign: 'center', padding: 30, color: '#999', fontSize: 12 }}>
-                  问我关于这个节点的问题
-                </div>
-              )}
-              {chatMessages.map((m, i) => (
-                <div key={i} style={{
-                  padding: '6px 10px', margin: '4px 0', borderRadius: 8, fontSize: 13,
-                  background: m.role === 'user' ? '#1a1a2e' : '#f5f5f5',
-                  color: m.role === 'user' ? '#fff' : '#333',
-                  maxWidth: '90%', marginLeft: m.role === 'user' ? 'auto' : 0,
-                  whiteSpace: 'pre-wrap',
-                }}>{m.content}</div>
-              ))}
-              {chatLoading && <Spin size="small" style={{ display: 'block', margin: '8px auto' }} />}
-              <div ref={chatRef} />
-            </div>
-            <div style={{ display: 'flex', gap: 4 }}>
-              <Input size="small" value={chatInput} onChange={e => setChatInput(e.target.value)}
-                onPressEnter={sendChat} placeholder="输入问题..." />
-              <Button size="small" type="primary" icon={<SendOutlined />}
-                onClick={sendChat} loading={chatLoading} />
-            </div>
-          </Card>
         </div>
       )}
+
+      <ReportDrawer
+        open={reportDrawer.open}
+        onClose={() => setReportDrawer({ open: false, key: '', name: '' })}
+        reportKey={reportDrawer.key}
+        reportName={reportDrawer.name}
+      />
     </div>
   );
 }

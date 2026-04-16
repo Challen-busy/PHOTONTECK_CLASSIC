@@ -9,7 +9,11 @@ import models as m
 from core.auth import get_current_user
 from core.database import Base, get_db
 from services.labels import get_label, get_table_label
-from services.tools import TABLE_MAP, TOOLS, _company_filter, _serialize_row
+from services.tools import (
+    TABLE_MAP, TOOLS, _company_filter, _serialize_row,
+    BUY_TABLES, SELL_TABLES, BUY_PRICE_FIELDS, SELL_PRICE_FIELDS,
+    _can_view_buy_price, _can_view_sell_price,
+)
 
 router = APIRouter()
 
@@ -48,6 +52,11 @@ async def get_schema(table_name: str, user: m.UserAccount = Depends(get_current_
 
     fields = []
     for col in model.__table__.columns:
+        # 价格防火墙：与 _serialize_row 保持一致
+        if table_name in BUY_TABLES and col.name in BUY_PRICE_FIELDS and not _can_view_buy_price(user):
+            continue
+        if table_name in SELL_TABLES and col.name in SELL_PRICE_FIELDS and not _can_view_sell_price(user):
+            continue
         field_type = str(col.type)
         if "INT" in field_type.upper(): type_name = "integer"
         elif "NUMERIC" in field_type.upper() or "FLOAT" in field_type.upper() or "DECIMAL" in field_type.upper():

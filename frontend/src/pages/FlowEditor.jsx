@@ -32,6 +32,31 @@ const stateColors = {
 
 const ROLE_OPTIONS = ['BOSS','OPERATIONS','FINANCE','SALES_ENGINEER','SALES_ASSISTANT','PRODUCT_MANAGER','PRODUCT_ASSISTANT','LOGISTICS','ADMIN'];
 
+function getNodeStyle(s) {
+  const t = s.node_type;
+  if (t === 'policy') return {
+    background: '#fffbe6', color: '#8c6d1f',
+    border: '1.5px solid #ffe58f', borderLeft: '4px solid #faad14',
+    borderRadius: 4, padding: '6px 14px', minWidth: 120,
+  };
+  if (t === 'cross_module') return {
+    background: '#52c41a', color: '#fff',
+    border: '2px solid #389e0d', borderRadius: 20,
+    padding: '6px 14px', minWidth: 120,
+  };
+  if (t === 'report') return {
+    background: '#e6f7ff', color: '#0050b3',
+    border: '1.5px dashed #91d5ff', borderRadius: 4,
+    padding: '6px 14px', minWidth: 120,
+  };
+  return {
+    background: stateColors[s.code] || '#d9d9d9',
+    color: ['DRAFT', 'COMPLETED', 'CLOSED', 'EXPIRED', 'PROSPECTING'].includes(s.code) ? '#333' : '#fff',
+    border: s.is_initial ? '3px solid #1a1a2e' : s.is_terminal ? '2px dashed #999' : '1px solid #ddd',
+    borderRadius: 8, padding: '6px 14px', minWidth: 120,
+  };
+}
+
 // 流程状态 helpers
 function getStatusBadge(wf) {
   if (!wf.is_published) return <Tag color="orange">草稿</Tag>;
@@ -89,6 +114,9 @@ export default function FlowEditor() {
     const savedPos = selected.node_positions || {};
     const hasSaved = Object.keys(savedPos).length > 0;
 
+    const nodeTypeMap = {};
+    states.forEach(s => { nodeTypeMap[s.code] = s.node_type || 'state'; });
+
     let newNodes = states.map(s => ({
       id: s.code,
       position: hasSaved && savedPos[s.code] ? savedPos[s.code] : { x: 0, y: 0 },
@@ -100,27 +128,28 @@ export default function FlowEditor() {
           </div>
         ),
       },
-      style: {
-        background: stateColors[s.code] || '#d9d9d9',
-        color: ['DRAFT', 'COMPLETED', 'CLOSED', 'EXPIRED', 'PROSPECTING'].includes(s.code) ? '#333' : '#fff',
-        border: s.is_initial ? '3px solid #1a1a2e' : s.is_terminal ? '2px dashed #999' : '1px solid #ddd',
-        borderRadius: 8, padding: '6px 14px', minWidth: 120,
-      },
+      style: getNodeStyle(s),
     }));
 
     const codeSet = new Set(states.map(s => s.code));
     const newEdges = states.flatMap(s =>
       (s.next || [])
         .filter(n => codeSet.has(n.to))
-        .map((n, i) => ({
-          id: `e-${s.code}-${n.to}-${i}`,
-          source: s.code, target: n.to, label: n.label,
-          labelStyle: { fontSize: 10, fill: '#555' },
-          labelBgStyle: { fill: '#fff', fillOpacity: 0.9 },
-          markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
-          style: { strokeWidth: 1.5, stroke: '#999' },
-          type: 'smoothstep',
-        }))
+        .map((n, i) => {
+          const isPolicy = nodeTypeMap[s.code] === 'policy';
+          return {
+            id: `e-${s.code}-${n.to}-${i}`,
+            source: s.code, target: n.to,
+            label: isPolicy ? '' : n.label,
+            labelStyle: { fontSize: 10, fill: '#555' },
+            labelBgStyle: { fill: '#fff', fillOpacity: 0.9 },
+            markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+            style: isPolicy
+              ? { strokeWidth: 1.5, stroke: '#faad14', strokeDasharray: '6 3' }
+              : { strokeWidth: 1.5, stroke: '#999' },
+            type: 'smoothstep',
+          };
+        })
     );
 
     if (!hasSaved && newNodes.length > 0) {

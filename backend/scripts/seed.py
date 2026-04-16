@@ -307,21 +307,37 @@ async def seed():
         workflows = [
             # ====== 总账流程-主流程（严格按K3总账流程图）======
             # K3: 科目→凭证录入→凭证审核→凭证过账→期末调汇→结转损益→期末结账
-            # 分支: 凭证过账→往来管理→期末调汇; 凭证过账→账簿查询/财务报表查询; 凭证→冲销
+            # 分支: 凭证过账→往来管理→期末调汇; 凭证过账→账簿查询/财务报表查询(终态)
+            # 右侧报表节点: 总分类账/明细分类账/多栏账/核算项目明细账/核算项目余额表/试算平衡表/科目余额表
             ("VOUCHER", "总账流程-主流程",
              "严格按K3总账流程图主流程：科目→凭证录入→凭证审核→凭证过账→期末调汇→结转损益→期末结账。"
-             "分支：过账后可做往来管理；过账后可查询账簿和财务报表；过账凭证可冲销。"
+             "分支：过账后可做往来管理；过账后可查询账簿和财务报表。"
              "支持手工录入和业务自动生成。",
              [
-                {"code": "DRAFT", "name": "凭证录入", "is_initial": True},
+                # 核心流程节点（state）
+                {"code": "ACCOUNT_READY", "name": "科目", "is_initial": True},
+                {"code": "DRAFT", "name": "凭证录入"},
                 {"code": "AUDITED", "name": "凭证审核"},
                 {"code": "POSTED", "name": "凭证过账"},
                 {"code": "RECONCILED", "name": "往来管理"},
                 {"code": "FX_ADJUSTED", "name": "期末调汇"},
                 {"code": "PL_TRANSFERRED", "name": "结转损益"},
                 {"code": "CLOSED", "name": "期末结账", "is_terminal": True},
-                {"code": "REVERSED", "name": "冲销", "is_terminal": True},
+                # 查询分支（cross_module，终态）
+                {"code": "LEDGER_QUERIED", "name": "账簿查询", "is_terminal": True, "node_type": "cross_module"},
+                {"code": "REPORT_QUERIED", "name": "财务报表查询", "is_terminal": True, "node_type": "cross_module"},
+                # 报表节点（report）
+                {"code": "RPT_GENERAL_LEDGER", "name": "总分类账", "node_type": "report"},
+                {"code": "RPT_DETAIL_LEDGER", "name": "明细分类账", "node_type": "report"},
+                {"code": "RPT_MULTI_COL", "name": "多栏账", "node_type": "report"},
+                {"code": "RPT_PROJECT_DETAIL", "name": "核算项目明细账", "node_type": "report"},
+                {"code": "RPT_PROJECT_BALANCE", "name": "核算项目余额表", "node_type": "report"},
+                {"code": "RPT_TRIAL_BALANCE", "name": "试算平衡表", "node_type": "report"},
+                {"code": "RPT_ACCOUNT_BALANCE", "name": "科目余额表", "node_type": "report"},
              ], [
+                # 前置：科目启用
+                ("启用科目", "ACCOUNT_READY", "DRAFT", ["FINANCE"],
+                 [], "会计科目已设置完成，可以开始录入凭证。", []),
                 # 凭证生命周期
                 ("提交审核", "DRAFT", "AUDITED", ["FINANCE"],
                  [], "检查借贷是否平衡、金额>0、科目是否为明细科目。", T),
@@ -329,13 +345,16 @@ async def seed():
                  [], "退回修改。说明退回原因。", []),
                 ("审核过账", "AUDITED", "POSTED", ["FINANCE", "BOSS"],
                  [], "过账更新科目余额。过账后凭证不可修改。", T),
-                ("冲销", "POSTED", "REVERSED", ["FINANCE", "BOSS"],
-                 [], "生成反向凭证冲销原凭证。", T),
                 # 往来管理分支
                 ("往来核对", "POSTED", "RECONCILED", ["FINANCE"],
                  [], "往来管理：与客户/供应商对账，核对应收应付余额。", T),
                 ("往来转调汇", "RECONCILED", "FX_ADJUSTED", ["FINANCE"],
                  [], "往来核对完成进入期末调汇。", T),
+                # 查询分支（单向终态）
+                ("查询账簿", "POSTED", "LEDGER_QUERIED", ["FINANCE", "BOSS"],
+                 [], "查询总分类账/明细分类账/多栏账/核算项目账等账簿视图。", T),
+                ("查询财报", "POSTED", "REPORT_QUERIED", ["FINANCE", "BOSS"],
+                 [], "查询试算平衡表/科目余额表等财务报表。", T),
                 # 期末主流程
                 ("过账直接调汇", "POSTED", "FX_ADJUSTED", ["FINANCE"],
                  [], "凭证过账完成后进入期末调汇（多币种汇率调整，生成调汇差额凭证）。", T),
@@ -343,80 +362,100 @@ async def seed():
                  [], "收入类和费用类科目余额结转到本年利润。收入费用科目清零。", T),
                 ("期末结账", "PL_TRANSFERRED", "CLOSED", ["FINANCE", "BOSS"],
                  [], "关闭本会计期间。本期期末余额成为下期期初。结账后不可录入凭证。", T),
-                ("反结账", "CLOSED", "PL_TRANSFERRED", ["BOSS"],
-                 [], "特殊情况反结账。仅老板可操作。", []),
              ]),
 
             # ====== 总账流程-调整期间业务处理（K3左下角独立模块）======
+            # 拓扑：调整期间业务处理 (中枢) ─┬→ 调整期间管理
+            #                              ├→ 调整期间凭证录入
+            #                              ├→ 调整期间凭证过账
+            #                              └→ 调整期间凭证查询
             ("VOUCHER_ADJUSTMENT", "总账流程-调整期间业务处理",
-             "参考K3总账流程图左下角调整期间模块：调整期间管理→调整期间凭证录入→调整期间凭证过账→调整期间凭证查询。"
-             "用于年末审计调整。在正常12个会计期间之外的第13期操作。主流程结账后仍可操作调整期间。",
+             "参考K3总账流程图左下角调整期间模块。调整期间业务处理作为统一入口，"
+             "分发到四个操作：调整期间管理、调整期间凭证录入、调整期间凭证过账、调整期间凭证查询。"
+             "用于年末审计调整，在正常12个会计期间之外的第13期操作。",
              [
-                {"code": "PERIOD_MANAGED", "name": "调整期间管理", "is_initial": True},
-                {"code": "ENTRY", "name": "调整期间凭证录入"},
-                {"code": "POSTED", "name": "调整期间凭证过账"},
+                {"code": "PROCESSING", "name": "调整期间业务处理", "is_initial": True},
+                {"code": "PERIOD_MANAGED", "name": "调整期间管理", "is_terminal": True},
+                {"code": "ENTRY", "name": "调整期间凭证录入", "is_terminal": True},
+                {"code": "POSTED", "name": "调整期间凭证过账", "is_terminal": True},
                 {"code": "QUERIED", "name": "调整期间凭证查询", "is_terminal": True},
              ], [
-                ("开启调整期间", "PERIOD_MANAGED", "ENTRY", ["FINANCE"],
-                 [], "开启调整期间，可以录入调整凭证。", []),
-                ("调整凭证过账", "ENTRY", "POSTED", ["FINANCE", "BOSS"],
-                 [], "调整期间凭证审核过账。", T),
-                ("查询调整凭证", "POSTED", "QUERIED", ["FINANCE"],
-                 [], "查询调整期间凭证及影响。", []),
+                ("调整期间管理", "PROCESSING", "PERIOD_MANAGED", ["FINANCE", "BOSS"],
+                 [], "管理调整期间：开启/关闭第13期。", []),
+                ("调整期间凭证录入", "PROCESSING", "ENTRY", ["FINANCE"],
+                 [], "在调整期间内录入审计调整凭证。", T),
+                ("调整期间凭证过账", "PROCESSING", "POSTED", ["FINANCE", "BOSS"],
+                 [], "对已录入的调整凭证审核过账。", T),
+                ("调整期间凭证查询", "PROCESSING", "QUERIED", ["FINANCE", "BOSS"],
+                 [], "查询调整期间凭证及对科目余额的影响。", []),
              ]),
 
-            # ====== 应收款管理流程（参考K3应收管理流程图）======
-            # 主流程: 合同→发票→收款→凭证处理→期末处理
-            # 分支: 发票→坏账管理; 收款→到款结算
-            # 外部模块: 信用管理→合同; 销售管理→发票; 现金管理→收款; 应收票据→收款
+            # ====== 应收款管理流程（参考K3应收管理流程图，12节点）======
+            # 矩形业务节点(8)：信用管理、合同、发票、坏账管理、收款、到款结算、凭证处理、期末处理
+            # 云朵外部模块(4)：销售管理→发票、现金管理→收款、应收票据→收款、凭证处理→总账
             ("ACCOUNTS_RECEIVABLE", "应收款管理流程",
-             "参考K3应收管理流程图。主流程：合同→发票→收款→凭证处理→期末处理。"
-             "外部输入：信用管理（审核客户信用）、销售管理（销售订单触发开票）、现金管理、应收票据。"
-             "分支：发票→坏账管理（无法收回）; 收款→到款结算（明细核销）。"
-             "报表：应收款明细表/汇总表、往来对账单、账龄分析、到期债权列表、信用额度分析、销售分析、回款分析。",
+             "参考K3应收管理流程图。主路径：信用管理→合同→发票→收款→凭证处理→期末处理。"
+             "外部联动：销售管理触发开票；现金管理/应收票据触发收款；凭证处理输出至总账。"
+             "旁支：发票/收款 → 坏账管理；收款 → 到款结算（明细核销）。"
+             "报表：应收款明细表/汇总表、账龄分析、往来对账单、到期债权列表、到期债权分析、回款分析、合同金额执行汇总表、合同到期欠款明细表、信用额度分析。",
              [
+                # 核心流程节点（state）
+                {"code": "CREDIT_MANAGED", "name": "信用管理", "is_initial": True},
                 {"code": "CONTRACT_REGISTERED", "name": "合同", "is_initial": True},
-                {"code": "INVOICED", "name": "发票开具"},
-                {"code": "PENDING", "name": "收款"},
-                {"code": "SETTLED", "name": "到款结算"},
-                {"code": "VOUCHER_PROCESSED", "name": "凭证处理"},
-                {"code": "PARTIAL", "name": "部分收款"},
-                {"code": "PAID", "name": "全额收款"},
-                {"code": "OVERDUE", "name": "逾期催收"},
+                {"code": "INVOICED", "name": "发票"},
+                {"code": "COLLECTING", "name": "收款"},
                 {"code": "BAD_DEBT", "name": "坏账管理", "is_terminal": True},
+                {"code": "NOTES_RECV", "name": "应收票据"},
+                {"code": "SETTLED", "name": "到款结算", "is_terminal": True},
+                {"code": "VOUCHER_PROCESSED", "name": "凭证处理"},
                 {"code": "CLOSED", "name": "期末处理", "is_terminal": True},
+                # 外部模块节点（cross_module）
+                {"code": "SALES_MGMT", "name": "销售管理", "node_type": "cross_module"},
+                {"code": "CASH_MGMT", "name": "现金管理", "node_type": "cross_module"},
+                {"code": "GL_LINK", "name": "总账", "is_terminal": True, "node_type": "cross_module"},
+                # 报表节点（report）
+                {"code": "RPT_AR_DETAIL", "name": "应收款明细表", "node_type": "report"},
+                {"code": "RPT_AR_SUMMARY", "name": "应收款汇总表", "node_type": "report"},
+                {"code": "RPT_RECONCILIATION", "name": "往来对账单", "node_type": "report"},
+                {"code": "RPT_AGING", "name": "账龄分析", "node_type": "report"},
+                {"code": "RPT_DUE_LIST", "name": "到期债权列表", "node_type": "report"},
+                {"code": "RPT_SALES_ANALYSIS", "name": "销售分析", "node_type": "report"},
+                {"code": "RPT_COLLECTION", "name": "回款分析", "node_type": "report"},
+                {"code": "RPT_CONTRACT_EXEC", "name": "合同金额执行汇总表", "node_type": "report"},
+                {"code": "RPT_CONTRACT_DUE", "name": "合同到期款项列表", "node_type": "report"},
+                {"code": "RPT_CREDIT_LIMIT", "name": "信用额度分析", "node_type": "report"},
              ], [
-                # 合同→发票
+                # 信用管理 → 合同
+                ("信用审核通过", "CREDIT_MANAGED", "CONTRACT_REGISTERED", ["FINANCE"],
+                 ["customer_id"], "维护客户信用额度/账期/评级（在customer_credit表）。审核通过后允许签订合同。", T),
+                # 合同 → 发票
                 ("基于合同开票", "CONTRACT_REGISTERED", "INVOICED", ["FINANCE"],
-                 ["invoice_number", "amount", "due_date"],
-                 "根据销售合同开具发票。填发票号、金额、到期日。需要先完成客户信用审核。", T),
-                ("销售订单触发开票", "CONTRACT_REGISTERED", "INVOICED", ["FINANCE"],
-                 ["invoice_number", "amount", "due_date"],
-                 "销售管理模块触发：销售出库后生成发票。填发票号、金额、到期日。", T),
-                # 发票→收款 / 坏账
-                ("登记收款", "INVOICED", "PENDING", ["FINANCE"],
+                 ["contract_id", "invoice_number", "amount", "due_date"],
+                 "根据销售合同开具发票。选合同、填发票号、金额、到期日。", T),
+                # 销售管理 → 发票（外部触发）
+                ("销售订单触发开票", "SALES_MGMT", "INVOICED", ["FINANCE", "SALES_ASSISTANT"],
+                 ["sales_order_id", "invoice_number", "amount", "due_date"],
+                 "销售管理模块联动：销售出库后生成发票。关联销售订单。", T),
+                # 发票 → 收款 / 坏账
+                ("登记收款", "INVOICED", "COLLECTING", ["FINANCE"],
                  [], "发票开具后进入收款流程。", []),
-                ("标记逾期", "PENDING", "OVERDUE", ["FINANCE", "OPERATIONS"],
-                 [], "超过账期未收款。通知SA催款。", []),
-                ("确认坏账", "OVERDUE", "BAD_DEBT", ["FINANCE", "BOSS"],
-                 [], "长期无法收回的应收款转入坏账处理。需老板审批。", []),
-                # 收款路径
-                ("部分收款", "PENDING", "PARTIAL", ["FINANCE"],
-                 ["paid_amount", "paid_date"], "客户部分付款。现金管理/应收票据到账触发。填实际收到的金额和日期。", T),
-                ("全额收款", "PENDING", "PAID", ["FINANCE"],
-                 ["paid_amount", "paid_date"], "客户全额付款。paid_amount 应填 amount 相同金额。", T),
-                ("尾款收齐", "PARTIAL", "PAID", ["FINANCE"],
-                 ["paid_amount", "paid_date"], "剩余款项收齐。paid_amount = amount。", T),
-                ("逾期后收款", "OVERDUE", "PAID", ["FINANCE"],
-                 ["paid_amount", "paid_date"], "逾期后收回款项。", T),
-                # 收款→到款结算 + 凭证处理
-                ("到款结算", "PAID", "SETTLED", ["FINANCE"],
-                 [], "针对收到的款项进行明细核销和结算处理。", T),
-                ("生成凭证", "SETTLED", "VOUCHER_PROCESSED", ["FINANCE"],
-                 [], "生成收款记账凭证（借银行存款，贷应收账款）。", T),
-                # 凭证处理→总账+期末
+                ("发票转坏账", "INVOICED", "BAD_DEBT", ["FINANCE", "BOSS"],
+                 [], "客户违约或破产，发票直接确认坏账。需老板审批。", []),
+                # 现金管理 / 应收票据 → 收款（外部触发）
+                ("现金到账", "CASH_MGMT", "COLLECTING", ["FINANCE"],
+                 ["paid_amount", "paid_date"], "现金管理模块联动：银行/现金收到客户款项（bank_receipt表登记流水）。", T),
+                ("票据到账", "NOTES_RECV", "COLLECTING", ["FINANCE"],
+                 ["paid_amount", "paid_date"], "应收票据模块联动：商业汇票/银行承兑到期收款（notes_receivable表登记票据）。", T),
+                # 收款 → 到款结算 / 凭证处理 / 坏账
+                ("到款结算", "COLLECTING", "SETTLED", ["FINANCE"],
+                 ["settlement_batch_no"], "针对收到的款项进行明细核销和结算处理（ar_settlement表生成核销明细）。填核销批号。", T),
+                ("生成凭证", "COLLECTING", "VOUCHER_PROCESSED", ["FINANCE"],
+                 [], "生成收款记账凭证（借银行存款，贷应收账款）。hook自动创建voucher+分录并关联。", T),
+                # 凭证处理 → 总账 / 期末
+                ("传入总账", "VOUCHER_PROCESSED", "GL_LINK", ["FINANCE"],
+                 [], "凭证传入总账模块，更新应收科目余额（通过voucher.status=POSTED体现）。", T),
                 ("期末处理", "VOUCHER_PROCESSED", "CLOSED", ["FINANCE", "BOSS"],
-                 [], "月末/年末结账。凭证过账到总账，应收科目余额结转。", T),
+                 [], "月末/年末结账。应收科目余额结转下期。", T),
              ]),
 
             # ====== 应付款管理流程（参考K3应付管理流程图）======
@@ -545,14 +584,26 @@ async def seed():
                 {"code": "QUOTATION", "name": "报价单"},
                 {"code": "CONTRACT", "name": "销售合同", "is_initial": True},
                 {"code": "DRAFT", "name": "销售订单"},
-                {"code": "PRODUCTION_PLAN", "name": "主生产计划"},
+                {"code": "PRODUCTION_PLAN", "name": "主生产计划", "node_type": "cross_module"},
                 {"code": "SHIPPING_NOTICE", "name": "发货通知单"},
                 {"code": "RETURN_NOTICE", "name": "退货通知单"},
                 {"code": "SALES_OUTBOUND", "name": "销售出库单"},
                 {"code": "INVOICE", "name": "销售发票"},
-                {"code": "AR_MANAGED", "name": "应收款管理", "is_terminal": True},
-                {"code": "INV_ACCOUNTED", "name": "存货核算管理", "is_terminal": True},
+                {"code": "AR_MANAGED", "name": "应收款管理", "is_terminal": True, "node_type": "cross_module"},
+                {"code": "INV_ACCOUNTED", "name": "存货核算管理", "is_terminal": True, "node_type": "cross_module"},
                 {"code": "CANCELLED", "name": "已取消", "is_terminal": True},
+                # 政策维护节点（辅助，不参与状态转换）
+                {"code": "PRICE_POLICY", "name": "价格政策维护", "node_type": "policy"},
+                {"code": "DISCOUNT_POLICY", "name": "折扣政策维护", "node_type": "policy"},
+                {"code": "CREDIT_MGMT", "name": "信用管理维护", "node_type": "policy"},
+                # 报表节点（展示用，不参与状态转换）
+                {"code": "RPT_ORDER_TRACK", "name": "销售订单全程跟踪", "node_type": "report"},
+                {"code": "RPT_ORDER_SUMMARY", "name": "销售订单执行汇总表", "node_type": "report"},
+                {"code": "RPT_ORDER_DETAIL", "name": "销售订单执行明细表", "node_type": "report"},
+                {"code": "RPT_OUTBOUND_SUMMARY", "name": "销售出库汇总表", "node_type": "report"},
+                {"code": "RPT_OUTBOUND_DETAIL", "name": "销售出库明细表", "node_type": "report"},
+                {"code": "RPT_REVENUE", "name": "销售收入统计表", "node_type": "report"},
+                {"code": "RPT_GROSS_PROFIT", "name": "销售毛利润表", "node_type": "report"},
              ], [
                 # 前序
                 ("转正式报价", "SIMULATED_QUOTE", "QUOTATION", ["SALES_ASSISTANT", "OPERATIONS"],
@@ -581,6 +632,11 @@ async def seed():
                  [], "销售发票转入应收款管理模块。", T),
                 ("转存货核算", "INVOICE", "INV_ACCOUNTED", ["FINANCE"],
                  [], "销售出库数据同步到存货核算模块（结转主营业务成本）。", T),
+                # 辅助连线（政策→流程，视觉参考）
+                ("价格政策控制", "PRICE_POLICY", "DRAFT", [],
+                 [], "价格政策维护影响销售订单定价。", []),
+                ("信用管理控制", "CREDIT_MGMT", "INVOICE", [],
+                 [], "信用管理维护影响开票审核。", []),
                 # 取消
                 ("取消订单", "DRAFT", "CANCELLED", ["SALES_ASSISTANT", "OPERATIONS", "BOSS"],
                  [], "", []),
@@ -737,7 +793,7 @@ async def seed():
         INITIAL_EDIT_FIELDS = {
             "VOUCHER": ["voucher_date", "voucher_type", "description", "period_id", "source_doc_type", "source_doc_id"],
             "VOUCHER_ADJUSTMENT": ["voucher_date", "voucher_type", "description", "period_id"],
-            "ACCOUNTS_RECEIVABLE": ["customer_id", "sales_order_id", "invoice_number", "amount", "currency", "due_date"],
+            "ACCOUNTS_RECEIVABLE": ["customer_id", "sales_order_id", "contract_id", "invoice_number", "amount", "currency", "due_date"],
             "ACCOUNTS_PAYABLE": ["supplier_id", "purchase_order_id", "invoice_number", "amount", "currency", "due_date"],
             "PURCHASE_ORDER": ["supplier_id", "order_number", "currency", "total_amount", "expected_delivery_date", "related_sales_order_id", "purchase_assistant_id", "notes"],
             "SALES_ORDER": ["customer_id", "order_number", "currency", "total_amount", "payment_terms_days", "shipping_method", "order_type", "sales_engineer_id", "sales_assistant_id", "notes"],
@@ -827,6 +883,8 @@ async def seed():
                 # B 模型：原 is_initial 转成"首个业务节点"，不再标 is_initial（交给 START）
                 if s_def.get("is_terminal"):
                     new_state["is_terminal"] = True
+                if s_def.get("node_type"):
+                    new_state["node_type"] = s_def["node_type"]
                 new_states.append(new_state)
 
             # === 注入 START 状态（B 模型：所有流程的唯一起点）===
@@ -872,6 +930,11 @@ async def seed():
 
             # === 注入钩子示例（演示钩子 DSL，commit 前执行的副作用脚本） ===
             HOOKS_DEMO = {
+                # 销售发货出库 → 回写已发数量
+                ("SALES_ORDER", "SHIPPING_NOTICE", "SALES_OUTBOUND"): [
+                    "for line in lines:\n"
+                    "    update('sales_order_line', {'id': line.id}, {'shipped_quantity': line.quantity})"
+                ],
                 # 采购质检合格入库 → 为每行生成库存批次
                 ("PURCHASE_ORDER", "QUALITY_CHECK", "STOCKED_IN"): [
                     "for line in lines:\n"
@@ -899,6 +962,59 @@ async def seed():
                     "        'company_id': doc.company_id,\n"
                     "        'status': 'AVAILABLE',\n"
                     "    })"
+                ],
+                # 销售转应收款管理 → 生成 AR 记录（状态=INVOICED，直接进入AR流程的发票节点）
+                ("SALES_ORDER", "INVOICE", "AR_MANAGED"): [
+                    "insert('accounts_receivable', {\n"
+                    "    'customer_id': doc.customer_id,\n"
+                    "    'sales_order_id': doc.id,\n"
+                    "    'invoice_number': 'INV-' + str(doc.id),\n"
+                    "    'amount': doc.total_amount,\n"
+                    "    'currency': doc.currency,\n"
+                    "    'due_date': today(),\n"
+                    "    'company_id': doc.company_id,\n"
+                    "    'status': 'INVOICED',\n"
+                    "})"
+                ],
+                # 应收款生成凭证 → 自动创建 voucher + 分录（借银行存款，贷应收账款）
+                ("ACCOUNTS_RECEIVABLE", "COLLECTING", "VOUCHER_PROCESSED"): [
+                    "fy = lookup('fiscal_year', company_id=doc.company_id, status='OPEN')\n"
+                    "period = lookup('accounting_period', fiscal_year_id=fy.id, status='OPEN')\n"
+                    "bank_acct = lookup('account', code='1002', company_id=doc.company_id)\n"
+                    "ar_acct = lookup('account', code='1122', company_id=doc.company_id)\n"
+                    "v = insert('voucher', {\n"
+                    "    'voucher_number': 'AR-RCV-' + str(doc.id),\n"
+                    "    'voucher_date': today(),\n"
+                    "    'period_id': period.id,\n"
+                    "    'voucher_type': 'GENERAL',\n"
+                    "    'description': 'AR收款 ' + str(doc.invoice_number),\n"
+                    "    'total_debit': float(doc.amount),\n"
+                    "    'total_credit': float(doc.amount),\n"
+                    "    'status': 'DRAFT',\n"
+                    "    'is_auto_generated': True,\n"
+                    "    'source_doc_type': 'ACCOUNTS_RECEIVABLE',\n"
+                    "    'source_doc_id': doc.id,\n"
+                    "    'company_id': doc.company_id,\n"
+                    "})\n"
+                    "insert('voucher_entry', {\n"
+                    "    'voucher_id': v.id,\n"
+                    "    'line_number': 1,\n"
+                    "    'account_id': bank_acct.id,\n"
+                    "    'description': 'AR收款-银行存款',\n"
+                    "    'debit': float(doc.amount),\n"
+                    "    'credit': 0,\n"
+                    "    'currency': doc.currency,\n"
+                    "})\n"
+                    "insert('voucher_entry', {\n"
+                    "    'voucher_id': v.id,\n"
+                    "    'line_number': 2,\n"
+                    "    'account_id': ar_acct.id,\n"
+                    "    'description': 'AR收款-冲应收',\n"
+                    "    'debit': 0,\n"
+                    "    'credit': float(doc.amount),\n"
+                    "    'currency': doc.currency,\n"
+                    "})\n"
+                    "update('accounts_receivable', {'id': doc.id}, {'voucher_id': v.id})"
                 ],
                 # 采购转应付款管理 → 生成 AP 记录
                 ("PURCHASE_ORDER", "INVOICED", "TRANSFERRED_AP"): [
@@ -951,11 +1067,93 @@ async def seed():
                 "INVENTORY": "仓储", "INVENTORY_VIRTUAL": "仓储",
                 "INVENTORY_COUNT": "仓储", "INVENTORY_COSTING": "仓储",
             }
+            # 销售流程预设节点位置（匹配K3流程图布局）
+            INITIAL_POSITIONS = {
+                "SALES_ORDER": {
+                    "START": {"x": 370, "y": 0},
+                    "CONTRACT": {"x": 160, "y": 100},
+                    "QUOTATION": {"x": 370, "y": 100},
+                    "SIMULATED_QUOTE": {"x": 580, "y": 100},
+                    "PRICE_POLICY": {"x": 30, "y": 230},
+                    "DRAFT": {"x": 370, "y": 230},
+                    "PRODUCTION_PLAN": {"x": 630, "y": 230},
+                    "DISCOUNT_POLICY": {"x": 30, "y": 340},
+                    "CREDIT_MGMT": {"x": 30, "y": 450},
+                    "SHIPPING_NOTICE": {"x": 370, "y": 380},
+                    "RETURN_NOTICE": {"x": 620, "y": 450},
+                    "SALES_OUTBOUND": {"x": 370, "y": 530},
+                    "INV_ACCOUNTED": {"x": 80, "y": 680},
+                    "INVOICE": {"x": 370, "y": 680},
+                    "AR_MANAGED": {"x": 370, "y": 830},
+                    "CANCELLED": {"x": 630, "y": 680},
+                    "RPT_ORDER_TRACK": {"x": 850, "y": 100},
+                    "RPT_ORDER_SUMMARY": {"x": 850, "y": 190},
+                    "RPT_ORDER_DETAIL": {"x": 850, "y": 280},
+                    "RPT_OUTBOUND_SUMMARY": {"x": 850, "y": 380},
+                    "RPT_OUTBOUND_DETAIL": {"x": 850, "y": 470},
+                    "RPT_REVENUE": {"x": 850, "y": 580},
+                    "RPT_GROSS_PROFIT": {"x": 850, "y": 670},
+                },
+                "VOUCHER": {
+                    "START": {"x": 120, "y": 0},
+                    # 主干（中间列）
+                    "ACCOUNT_READY": {"x": 120, "y": 100},
+                    "DRAFT": {"x": 300, "y": 100},
+                    "AUDITED": {"x": 300, "y": 230},
+                    "POSTED": {"x": 300, "y": 370},
+                    "FX_ADJUSTED": {"x": 300, "y": 530},
+                    "PL_TRANSFERRED": {"x": 300, "y": 660},
+                    "CLOSED": {"x": 300, "y": 790},
+                    # 左分支
+                    "RECONCILED": {"x": 80, "y": 370},
+                    # 右分支（cross_module）
+                    "LEDGER_QUERIED": {"x": 550, "y": 330},
+                    "REPORT_QUERIED": {"x": 550, "y": 430},
+                    # 报表（最右列）
+                    "RPT_GENERAL_LEDGER": {"x": 780, "y": 100},
+                    "RPT_DETAIL_LEDGER": {"x": 780, "y": 190},
+                    "RPT_MULTI_COL": {"x": 780, "y": 280},
+                    "RPT_PROJECT_DETAIL": {"x": 780, "y": 370},
+                    "RPT_PROJECT_BALANCE": {"x": 780, "y": 460},
+                    "RPT_TRIAL_BALANCE": {"x": 780, "y": 550},
+                    "RPT_ACCOUNT_BALANCE": {"x": 780, "y": 640},
+                },
+                "ACCOUNTS_RECEIVABLE": {
+                    "START": {"x": 350, "y": 0},
+                    # 核心流程（中间列）
+                    "CONTRACT_REGISTERED": {"x": 250, "y": 120},
+                    "INVOICED": {"x": 350, "y": 180},
+                    "COLLECTING": {"x": 350, "y": 330},
+                    "VOUCHER_PROCESSED": {"x": 350, "y": 480},
+                    "CLOSED": {"x": 350, "y": 630},
+                    # 左右分支
+                    "CREDIT_MANAGED": {"x": 470, "y": 120},
+                    "BAD_DEBT": {"x": 570, "y": 180},
+                    "NOTES_RECV": {"x": 570, "y": 330},
+                    "SETTLED": {"x": 570, "y": 480},
+                    # 外部模块（左侧）
+                    "SALES_MGMT": {"x": 120, "y": 180},
+                    "CASH_MGMT": {"x": 120, "y": 330},
+                    "GL_LINK": {"x": 120, "y": 480},
+                    # 报表（右侧）
+                    "RPT_AR_DETAIL": {"x": 800, "y": 30},
+                    "RPT_AR_SUMMARY": {"x": 800, "y": 100},
+                    "RPT_RECONCILIATION": {"x": 800, "y": 170},
+                    "RPT_AGING": {"x": 800, "y": 240},
+                    "RPT_DUE_LIST": {"x": 800, "y": 310},
+                    "RPT_SALES_ANALYSIS": {"x": 800, "y": 380},
+                    "RPT_COLLECTION": {"x": 800, "y": 450},
+                    "RPT_CONTRACT_EXEC": {"x": 800, "y": 520},
+                    "RPT_CONTRACT_DUE": {"x": 800, "y": 590},
+                    "RPT_CREDIT_LIMIT": {"x": 800, "y": 660},
+                },
+            }
             wf = m.WorkflowDefinition(
                 doc_type=doc_type, name=wf_name, description=wf_desc,
                 states=new_states, created_by_id=users["admin"].id,
                 group_name=GROUP_MAP.get(doc_type, "其他"),
-                is_published=True, is_active=True,  # seed 流程默认上线
+                is_published=True, is_active=True,
+                node_positions=INITIAL_POSITIONS.get(doc_type, {}),
             )
             db.add(wf)
 

@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from routers import admin, agent, auth, data, misc, workflow
+from routers import admin, agent, auth, data, misc, reports, workflow
 
 app = FastAPI(title="PHOTONTECK", version="2.0")
 
@@ -17,3 +17,4 @@ app.include_router(workflow.router)
 app.include_router(agent.router)
 app.include_router(misc.router)
 app.include_router(admin.router)
+app.include_router(reports.router)

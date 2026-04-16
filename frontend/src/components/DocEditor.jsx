@@ -7,7 +7,7 @@
  *            点提交才真正调后端 /transition
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef } from 'react';
 import {
   Card, Input, InputNumber, DatePicker, Select, Table, Button, Space, Spin,
   message, Tag, Empty, Timeline, Collapse, Badge,
@@ -131,7 +131,7 @@ function FieldInput({ field, value, onChange, disabled, fkOptions, stateLabels }
 }
 
 // ===== 子表编辑器 =====
-function SubTableEditor({ subInfo, parentId, onUpdate, readOnly = false }) {
+const SubTableEditor = forwardRef(function SubTableEditor({ subInfo, parentId, readOnly = false }, ref) {
   const [schema, setSchema] = useState(null);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -159,18 +159,50 @@ function SubTableEditor({ subInfo, parentId, onUpdate, readOnly = false }) {
     })();
   }, [subInfo.table, parentId]);
 
+  // 暴露给父组件：获取待保存的变更
+  useImperativeHandle(ref, () => ({
+    getPendingUpdates() {
+      if (!schema) return [];
+      const skip = new Set(['id', subInfo.parent_fk, 'created_at', 'updated_at', 'created_by_id', 'updated_by_id']);
+      const editableCols = schema.fields.filter(f => !skip.has(f.name));
+      return rows.filter(r => r._new || r._modified || r._delete).map(r => {
+        const fields = {};
+        editableCols.forEach(c => { if (r[c.name] !== undefined) fields[c.name] = r[c.name]; });
+        fields[subInfo.parent_fk] = parentId;
+        return { table: subInfo.table, id: r._new ? undefined : r.id, _delete: r._delete, fields, parent_fk: subInfo.parent_fk };
+      });
+    },
+  }), [rows, schema, subInfo, parentId]);
+
   if (loading) return <Spin />;
   if (!schema) return null;
 
   const skipFields = new Set(['id', subInfo.parent_fk, 'created_at', 'updated_at', 'created_by_id', 'updated_by_id']);
   const cols = schema.fields.filter(f => !skipFields.has(f.name));
+
+  // 自动管理的字段：行号自增、小计=数量*单价
+  const autoFields = new Set(['line_number']);
+  const hasAutoTotal = cols.some(c => c.name === 'quantity') && cols.some(c => c.name === 'unit_price');
+  if (hasAutoTotal) autoFields.add('total_price');
+
+  // 合计行只汇总有业务意义的列（排除行号、单价等）
   const numericFields = cols.filter(c => c.type === 'number' || c.type === 'integer');
+  const notSummable = n => n.includes('number') || n.startsWith('unit_') || n.endsWith('_id');
+  const summableCols = numericFields.filter(f => !notSummable(f.name));
   const totals = {};
-  numericFields.forEach(f => { totals[f.name] = rows.reduce((sum, r) => sum + (Number(r[f.name]) || 0), 0); });
+  const visibleForSum = rows.filter(r => !r._delete);
+  summableCols.forEach(f => { totals[f.name] = visibleForSum.reduce((sum, r) => sum + (Number(r[f.name]) || 0), 0); });
 
   const addRow = () => {
     const newRow = { _new: true, _tempId: Date.now(), [subInfo.parent_fk]: parentId };
-    cols.forEach(c => { newRow[c.name] = c.type === 'number' || c.type === 'integer' ? 0 : ''; });
+    const visible = rows.filter(r => !r._delete);
+    cols.forEach(c => {
+      if (c.name === 'line_number') {
+        newRow[c.name] = visible.reduce((max, r) => Math.max(max, Number(r.line_number) || 0), 0) + 1;
+      } else {
+        newRow[c.name] = c.type === 'number' || c.type === 'integer' ? 0 : '';
+      }
+    });
     setRows([...rows, newRow]);
   };
   const deleteRow = (row) => {
@@ -178,20 +210,16 @@ function SubTableEditor({ subInfo, parentId, onUpdate, readOnly = false }) {
     else setRows(rows.map(r => r.id === row.id ? { ...r, _delete: true } : r));
   };
   const editCell = (row, field, value) => {
-    if (row._new) setRows(rows.map(r => r._tempId === row._tempId ? { ...r, [field]: value } : r));
-    else setRows(rows.map(r => r.id === row.id ? { ...r, [field]: value, _modified: true } : r));
+    const updated = { [field]: value };
+    // 数量或单价变化时自动算小计
+    if (hasAutoTotal && (field === 'quantity' || field === 'unit_price')) {
+      const qty = field === 'quantity' ? Number(value) || 0 : Number(row.quantity) || 0;
+      const price = field === 'unit_price' ? Number(value) || 0 : Number(row.unit_price) || 0;
+      updated.total_price = Math.round(qty * price * 100) / 100;
+    }
+    if (row._new) setRows(rows.map(r => r._tempId === row._tempId ? { ...r, ...updated } : r));
+    else setRows(rows.map(r => r.id === row.id ? { ...r, ...updated, _modified: true } : r));
   };
-  const save = async () => {
-    const updates = rows.filter(r => r._new || r._modified || r._delete).map(r => {
-      const fields = {};
-      cols.forEach(c => { if (r[c.name] !== undefined) fields[c.name] = r[c.name]; });
-      fields[subInfo.parent_fk] = parentId;
-      return { table: subInfo.table, id: r._new ? undefined : r.id, _delete: r._delete, fields, parent_fk: subInfo.parent_fk };
-    });
-    if (updates.length === 0) { message.info('无变更'); return; }
-    onUpdate(updates);
-  };
-
   const visibleRows = rows.filter(r => !r._delete);
   const tableColumns = [
     ...cols.map(col => ({
@@ -201,7 +229,9 @@ function SubTableEditor({ subInfo, parentId, onUpdate, readOnly = false }) {
         ? (col.fk
           ? (() => { const opt = (fkOptions[col.name] || []).find(o => o.id === v); return opt ? rowLabel(opt) : (v != null ? `#${v}` : ''); })()
           : <span>{formatValue(col.name, v)}</span>)
-        : <FieldInput field={col} value={row[col.name]} onChange={val => editCell(row, col.name, val)} fkOptions={fkOptions[col.name]} disabled={false} />,
+        : autoFields.has(col.name)
+          ? <span style={{ color: '#333', padding: '0 8px' }}>{formatValue(col.name, row[col.name])}</span>
+          : <FieldInput field={col} value={row[col.name]} onChange={val => editCell(row, col.name, val)} fkOptions={fkOptions[col.name]} disabled={false} />,
     })),
     ...(readOnly ? [] : [{
       title: '', key: '_a', width: 50, fixed: 'right',
@@ -209,32 +239,30 @@ function SubTableEditor({ subInfo, parentId, onUpdate, readOnly = false }) {
     }]),
   ];
 
-  const dirty = rows.some(r => r._new || r._modified || r._delete);
   const subTitle = subInfo.table_label || subInfo.table;
   return (
     <Card size="small" title={`${subTitle} · ${visibleRows.length}行`}
       style={{ marginBottom: 8, borderRadius: 8 }}
       extra={!readOnly && (
-        <Space>
-          <Button size="small" icon={<PlusOutlined />} onClick={addRow}>添加</Button>
-          {dirty && <Button size="small" type="primary" icon={<SaveOutlined />} onClick={save}>保存子表</Button>}
-        </Space>
+        <Button size="small" icon={<PlusOutlined />} onClick={addRow}>添加</Button>
       )}>
       <Table dataSource={visibleRows} columns={tableColumns} rowKey={r => r.id || r._tempId}
         size="small" pagination={false} scroll={{ x: 'max-content' }}
-        summary={() => Object.keys(totals).length > 0 ? (
+        summary={() => summableCols.length > 0 ? (
           <Table.Summary.Row style={{ background: '#fafafa' }}>
-            <Table.Summary.Cell index={0} colSpan={cols.length - Object.keys(totals).length}><strong>合计</strong></Table.Summary.Cell>
-            {cols.filter(c => c.type === 'number' || c.type === 'integer').map(c => (
-              <Table.Summary.Cell key={c.name} index={0}><strong>{totals[c.name].toLocaleString()}</strong></Table.Summary.Cell>
+            {cols.map((c, i) => (
+              <Table.Summary.Cell key={c.name} index={i}>
+                {i === 0 ? <strong>合计</strong> :
+                 totals[c.name] != null ? <strong>{totals[c.name].toLocaleString()}</strong> : null}
+              </Table.Summary.Cell>
             ))}
-            {!readOnly && <Table.Summary.Cell />}
+            {!readOnly && <Table.Summary.Cell index={cols.length} />}
           </Table.Summary.Row>
         ) : null}
       />
     </Card>
   );
-}
+});
 
 // ===== FK 信息卡片（关联主对象）=====
 function ForwardFkCard({ field, target_table_label, row, labels = {}, fieldLabel }) {
@@ -277,6 +305,8 @@ export default function DocEditor({ docType, docId, currentState, actions = [], 
   const [busy, setBusy] = useState(false);
   const [stateLabels, setStateLabels] = useState({});
   const [selectedActionIdx, setSelectedActionIdx] = useState(0);
+  const [subRefreshKey, setSubRefreshKey] = useState(0);
+  const subTableRefs = useRef({});
 
   const selectedAction = actions[selectedActionIdx] || null;
   const selectedEditableSet = useMemo(() => new Set(selectedAction?.editable_fields || []), [selectedAction]);
@@ -321,31 +351,33 @@ export default function DocEditor({ docType, docId, currentState, actions = [], 
   useEffect(() => { load(); }, [docType, docId, actions.length]);
 
   const saveFields = async () => {
-    if (Object.keys(editingFields).length === 0) { message.info('无变更'); return; }
+    // 收集子表变更
+    const allSubUpdates = [];
+    Object.values(subTableRefs.current).forEach(r => {
+      if (r?.getPendingUpdates) allSubUpdates.push(...r.getPendingUpdates());
+    });
+    if (Object.keys(editingFields).length === 0 && allSubUpdates.length === 0) {
+      message.info('无变更'); return;
+    }
     setBusy(true);
     try {
-      const { data } = await api.post('/transition', { doc_type: docType, doc_id: docId, field_updates: editingFields });
+      const { data } = await api.post('/transition', {
+        doc_type: docType, doc_id: docId,
+        field_updates: editingFields,
+        sub_updates: allSubUpdates,
+      });
       if (data.success) {
         const n = Object.keys(data.changed_fields || {}).length;
-        message.success(`已保存 ${n} 项`);
-        setEditingFields({}); load();
+        const s = (data.sub_changes || []).length;
+        message.success(`已保存${n ? ` ${n}项字段` : ''}${s ? ` ${s}项子表` : ''}`);
+        setEditingFields({});
+        setSubRefreshKey(k => k + 1);
+        load();
       } else if (data.rule_failures) {
         message.error('校验未通过');
         data.rule_failures.forEach(f => message.warning(f));
       } else message.error(data.error || '保存失败');
     } catch (e) { message.error('保存失败'); }
-    setBusy(false);
-  };
-
-  const saveSubTable = async (updates) => {
-    setBusy(true);
-    try {
-      const { data } = await api.post('/transition', { doc_type: docType, doc_id: docId, field_updates: {}, sub_updates: updates });
-      if (data.success) {
-        message.success(`子表更新: ${(data.sub_changes || []).join(', ')}`);
-        load();
-      } else message.error(data.error || '保存失败');
-    } catch { message.error('保存失败'); }
     setBusy(false);
   };
 
@@ -388,12 +420,19 @@ export default function DocEditor({ docType, docId, currentState, actions = [], 
     schema.fields.forEach(f => {
       const cat = classifyField(f.name, isAdminRole);
       if (cat === 'hidden' || cat === 'hero_status') return;
-      if (selectedEditableSet.has(f.name)) {
+      // hero字段始终留在Hero卡片，同时如果可编辑也加入editable
+      if (cat === 'hero_id' && !g.hero_id) {
+        g.hero_id = f;
+        if (selectedEditableSet.has(f.name)) g.editable.push(f);
+      } else if (cat === 'hero_party' && !g.hero_party) {
+        g.hero_party = f;
+        if (selectedEditableSet.has(f.name)) g.editable.push(f);
+      } else if (cat === 'hero_amount' && !g.hero_amount) {
+        g.hero_amount = f;
+        if (selectedEditableSet.has(f.name)) g.editable.push(f);
+      } else if (selectedEditableSet.has(f.name)) {
         g.editable.push(f);
-      } else if (cat === 'hero_id' && !g.hero_id) g.hero_id = f;
-      else if (cat === 'hero_party' && !g.hero_party) g.hero_party = f;
-      else if (cat === 'hero_amount' && !g.hero_amount) g.hero_amount = f;
-      else if (cat === 'system') g.system.push(f);
+      } else if (cat === 'system') g.system.push(f);
       else g.detail.push(f);
     });
     return g;
@@ -408,8 +447,9 @@ export default function DocEditor({ docType, docId, currentState, actions = [], 
   const currency = doc.currency || '';
   const statusLabel = stateLabels[doc.status] || doc.status;
   const dirty = Object.keys(editingFields).length > 0;
-  // 子表编辑：只要有任何动作可选，就允许编辑（真正提交靠点按钮）
   const hasOps = actions.length > 0;
+  // 子表仅在有可编辑字段的动作时才可编辑（无字段=纯推进，如物流发货，子表只读）
+  const subEditable = actions.some(a => (a.editable_fields || []).length > 0);
   const selectedEditableList = grouped.editable;
   const selectedEditableCount = selectedEditableList.length;
   const cleanedDesc = cleanDescription(nodeDescription);
@@ -499,7 +539,7 @@ export default function DocEditor({ docType, docId, currentState, actions = [], 
 
         {/* 子表：没有任何可选动作时全部只读展示（否则放到下面动作区编辑）*/}
         {!hasOps && schema.sub_tables.map(sub => (
-          <SubTableEditor key={sub.table} subInfo={sub} parentId={docId} onUpdate={saveSubTable} readOnly={true} />
+          <SubTableEditor key={sub.table} subInfo={sub} parentId={docId} readOnly={true} />
         ))}
 
         {/* 反向关联（折叠）*/}
@@ -617,13 +657,18 @@ export default function DocEditor({ docType, docId, currentState, actions = [], 
 
                 {/* 子表（可编辑，所有动作共享）*/}
                 {schema.sub_tables.map(sub => (
-                  <SubTableEditor key={sub.table} subInfo={sub} parentId={docId} onUpdate={saveSubTable} readOnly={false} />
+                  <SubTableEditor key={`${sub.table}-${subRefreshKey}`}
+                    ref={el => { subTableRefs.current[sub.table] = el; }}
+                    subInfo={sub} parentId={docId} readOnly={!subEditable} />
                 ))}
 
                 {/* 备注 + 提交 */}
                 <Input.TextArea value={comment} onChange={e => setComment(e.target.value)}
                   placeholder="备注（可选）" autoSize={{ minRows: 1, maxRows: 3 }} style={{ marginBottom: 10, marginTop: 10 }} />
                 <Space>
+                  <Button icon={<SaveOutlined />} onClick={saveFields} loading={busy}>
+                    保存
+                  </Button>
                   <Button type="primary" size="large" icon={<ArrowRightOutlined />}
                     onClick={() => requestAction(selectedAction)} loading={busy}>
                     {selectedAction.action_label} → {stateLabels[selectedAction.to_state] || selectedAction.to_state}

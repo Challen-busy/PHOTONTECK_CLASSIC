@@ -30,6 +30,7 @@ function AppRoutes() {
         <Route path="data" element={<DataExplorer />} />
         <Route path="data/:table" element={<DataExplorer />} />
         <Route path="actions" element={<WorkflowActions />} />
+        <Route path="actions/:workflowId" element={<WorkflowActions />} />
         <Route path="agent" element={<AgentChat />} />
         <Route path="history/:docType/:docId" element={<DocHistory />} />
         <Route path="node/:workflowId/:stateCode" element={<NodeView />} />
