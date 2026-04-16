@@ -382,11 +382,36 @@ export default function DocEditor({ docType, docId, currentState, actions = [], 
   };
 
   const requestAction = async (action) => {
+    setBusy(true);
+
+    // 先自动保存子表变更（销售订单行等），避免流转时丢数据
+    const allSubUpdates = [];
+    Object.values(subTableRefs.current).forEach(r => {
+      if (r?.getPendingUpdates) allSubUpdates.push(...r.getPendingUpdates());
+    });
+    if (allSubUpdates.length > 0) {
+      try {
+        const { data } = await api.post('/transition', {
+          doc_type: docType, doc_id: docId,
+          field_updates: {}, sub_updates: allSubUpdates,
+        });
+        if (!data.success) {
+          message.error(data.error || '子表保存失败');
+          setBusy(false);
+          return;
+        }
+        setSubRefreshKey(k => k + 1);
+      } catch {
+        message.error('子表保存失败');
+        setBusy(false);
+        return;
+      }
+    }
+
     // 提交前：只带上该动作允许的字段（跨 tab 填写的其他字段忽略）
     const allowed = new Set(action.editable_fields || []);
     const filtered = {};
     Object.entries(editingFields).forEach(([k, v]) => { if (allowed.has(k)) filtered[k] = v; });
-    setBusy(true);
     try {
       const { data: card } = await previewTransition({
         doc_type: docType, doc_id: docId,

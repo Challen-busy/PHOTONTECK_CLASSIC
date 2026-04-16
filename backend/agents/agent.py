@@ -1,8 +1,8 @@
 """
-LLM Agent 层：用户自然语言对话 → 调工具查数据 / 提交操作申请
+LLM Agent 层：用户自然语言对话 -> 调工具查数据 / 提交操作申请
 
-注意：卡片协议（preview / commit / list_user_actions）不在这里 —— 那部分是确定性代码，
-已搬到 services/workflow.py。本文件只关心真·LLM 调度。
+注意：卡片协议（preview / commit / list_user_actions）不在这里 -- 那部分是确定性代码，
+已搬到 services/workflow.py。本文件只关心真 LLM 调度。
 """
 
 import json
@@ -16,6 +16,39 @@ from agents import llm
 from services import workflow
 from services.tools import TOOLS
 import models as m
+
+
+# ============================================================
+# 辅助：工具摘要（给思维链用）
+# ============================================================
+
+def _tool_call_summary(name: str, params: dict) -> str:
+    if name == "query_data":
+        s = f"查询 {params.get('table', '?')}"
+        if params.get("search"):
+            s += f" (搜索: {params['search']})"
+        if params.get("filters"):
+            s += f" (过滤: {params['filters']})"
+        return s
+    if name == "calculate":
+        return f"计算 {params.get('expression', '?')}"
+    if name == "aggregate":
+        return f"聚合 {params.get('table', '?')}.{params.get('field', '?')}"
+    if name == "compare":
+        return "比较数据"
+    if name == "request_action":
+        return f"提交 {params.get('action_label') or '操作'} 申请"
+    return name
+
+
+def _tool_result_summary(name: str, result) -> str:
+    if name == "query_data" and isinstance(result, dict):
+        return f"返回 {len(result.get('data', []))} 条记录"
+    if name in ("calculate", "compare", "aggregate") and isinstance(result, dict):
+        return f"结果: {result.get('result', '?')}"
+    if name == "request_action":
+        return "已生成修改申请"
+    return "完成"
 
 
 # ============================================================
@@ -191,6 +224,132 @@ async def chat(db: AsyncSession, user_query: str, user: m.UserAccount) -> dict:
     await db.commit()
 
     return {
+        "response": response_text,
+        "tools_called": tools_called,
+        "cards": cards,
+        "tokens_used": total_tokens,
+        "duration_ms": duration_ms,
+    }
+
+
+async def chat_stream(db: AsyncSession, user_query: str, user: m.UserAccount):
+    """chat() 的流式版本，yield SSE 事件 dict（thinking / tool_call / tool_result / done）。"""
+    start_time = time.time()
+    elapsed = lambda: int((time.time() - start_time) * 1000)
+
+    yield {"type": "thinking", "content": "正在准备上下文...", "elapsed_ms": elapsed()}
+
+    company_intro = await _get_company_intro(db)
+    role_intro = await _get_role_intro(user)
+    workflows_summary = await _get_workflows_summary(db, user.role)
+
+    system_prompt = f"""# 公司背景
+{company_intro}
+
+# 你的身份
+{role_intro}
+
+# 你的职责
+你是用户Agent（调度员）。
+- 回答查询问题: 用query_data/aggregate/calculate/compare工具
+- 当用户想执行写操作: 用request_action工具提交申请，不要说"已执行"，说"已提交申请，等待您确认"
+- 回答简洁准确，中文，金额加千分位
+- 没有权限的数据直接说明，不猜测
+- 查不到就说没有，不编造
+
+# 当前日期
+{date.today().isoformat()}
+
+# 可用的流程和操作
+{workflows_summary}
+
+# 重要: 你不能执行任何修改。所有修改都通过request_action提交申请，由用户确认后才执行。一次可以提交多个申请。"""
+
+    tool_schemas = [TOOLS[t]["schema"] for t in ["query_data", "calculate", "compare", "aggregate"]]
+    available_actions = await workflow.list_user_actions(db, user)
+    action_desc = "\n".join(
+        f"- {a['action_label']} ({a['doc_type']}: {a['from_state']}->{a['to_state']})" for a in available_actions[:50]
+    )
+    tool_schemas.append({
+        "name": "request_action",
+        "description": f"提交写操作申请。可在一次对话中多次调用。\n\n可用操作（部分）:\n{action_desc}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc_type": {"type": "string", "description": "单据类型，如 SALES_ORDER"},
+                "doc_id": {"type": "integer", "description": "单据ID（创建时不传）"},
+                "to_state": {"type": "string", "description": "目标状态。不传=纯编辑（不改状态）"},
+                "action_label": {"type": "string", "description": "动作名（用于多路径同target时区分）"},
+                "field_updates": {"type": "object", "description": "要修改的字段 {字段名: 新值}"},
+            },
+            "required": ["doc_type"],
+        },
+    })
+
+    yield {"type": "thinking", "content": "正在思考...", "elapsed_ms": elapsed()}
+
+    messages = [{"role": "user", "content": user_query}]
+    tools_called = []
+    total_tokens = 0
+    cards = []
+    response_text = ""
+
+    for round_num in range(5):
+        if round_num > 0:
+            yield {"type": "thinking", "content": f"第 {round_num + 1} 轮推理...", "elapsed_ms": elapsed()}
+
+        llm_result = await llm.call_llm(messages=messages, system=system_prompt, tools=tool_schemas)
+        total_tokens += llm_result["tokens"]
+
+        if not llm_result["tool_calls"]:
+            response_text = llm_result["text"]
+            break
+
+        tool_results = []
+        for tc in llm_result["tool_calls"]:
+            summary = _tool_call_summary(tc["name"], tc["input"])
+            yield {"type": "tool_call", "tool": tc["name"], "summary": summary, "elapsed_ms": elapsed()}
+
+            if tc["name"] == "request_action":
+                inp = tc["input"]
+                card = await workflow.preview_transition(
+                    db, doc_type=inp.get("doc_type", ""), doc_id=inp.get("doc_id"),
+                    to_state=inp.get("to_state") or "", action_label=inp.get("action_label") or "",
+                    user=user, field_updates=inp.get("field_updates") or {},
+                )
+                cards.append(card)
+                tools_called.append({"tool": "request_action", "params": tc["input"]})
+                tool_results.append(f"[Tool Result]: 已生成修改申请: {card['action_label']} on {card['doc_type']}#{card['doc_id']}，等待用户确认。")
+                yield {"type": "tool_result", "tool": tc["name"], "summary": "已生成修改申请", "elapsed_ms": elapsed()}
+            else:
+                func = TOOLS.get(tc["name"], {}).get("function")
+                if func:
+                    result = await func(db, user, tc["input"])
+                    result_str = json.dumps(result, ensure_ascii=False, default=str)
+                    tools_called.append({"tool": tc["name"], "params": tc["input"], "result": result})
+                    yield {"type": "tool_result", "tool": tc["name"], "summary": _tool_result_summary(tc["name"], result), "elapsed_ms": elapsed()}
+                else:
+                    result_str = json.dumps({"error": f"工具 {tc['name']} 未注册"})
+                    yield {"type": "tool_result", "tool": tc["name"], "summary": "工具未注册", "elapsed_ms": elapsed()}
+                tool_results.append(f"[Tool Result]: {result_str}")
+
+        raw_msg = llm_result["raw"].get("choices", [{}])[0].get("message", {})
+        messages.append({"role": "assistant", "content": raw_msg.get("content", "") or ""})
+        messages.append({"role": "user", "content": "\n".join(tool_results)})
+    else:
+        response_text = response_text or "处理超时"
+
+    duration_ms = elapsed()
+
+    db.add(m.AgentLog(
+        agent_type="USER", user_id=user.id, company_id=user.company_id,
+        user_query=user_query, tools_called=tools_called,
+        response=response_text, tokens_used=total_tokens, duration_ms=duration_ms,
+    ))
+    await db.commit()
+
+    yield {
+        "type": "done",
         "response": response_text,
         "tools_called": tools_called,
         "cards": cards,

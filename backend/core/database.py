@@ -24,7 +24,10 @@ def get_sync_engine():
 
 def get_async_engine():
     """异步引擎（应用运行时用），延迟创建"""
-    return create_async_engine(DATABASE_URL)
+    return create_async_engine(
+        DATABASE_URL,
+        connect_args={"server_settings": {"timezone": "Asia/Shanghai"}},
+    )
 
 
 _async_session_factory = None

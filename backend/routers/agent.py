@@ -1,9 +1,12 @@
 """Agent 路由：LLM 对话 + 知识库（preview / commit 已移至 routers/workflow.py）"""
 
+import json
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import StreamingResponse
 
 import models as m
 from agents import agent
@@ -20,6 +23,16 @@ class ChatRequest(BaseModel):
 @router.post("/api/agent/chat")
 async def agent_chat(req: ChatRequest, db: AsyncSession = Depends(get_db), user: m.UserAccount = Depends(get_current_user)):
     return await agent.chat(db, req.query, user)
+
+
+@router.post("/api/agent/chat/stream")
+async def agent_chat_stream(req: ChatRequest, db: AsyncSession = Depends(get_db), user: m.UserAccount = Depends(get_current_user)):
+    async def event_generator():
+        async for event in agent.chat_stream(db, req.query, user):
+            yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.get("/api/knowledge")
