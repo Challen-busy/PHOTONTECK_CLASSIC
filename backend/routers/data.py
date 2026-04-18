@@ -9,8 +9,9 @@ import models as m
 from core.auth import get_current_user
 from core.database import Base, get_db
 from services.labels import get_label, get_table_label
+from core.registry import table_map
 from services.tools import (
-    TABLE_MAP, TOOLS, _company_filter, _serialize_row,
+    TOOLS, _company_filter, _serialize_row,
     BUY_TABLES, SELL_TABLES, BUY_PRICE_FIELDS, SELL_PRICE_FIELDS,
     _can_view_buy_price, _can_view_sell_price,
 )
@@ -46,7 +47,7 @@ async def agg(req: AggregateRequest, db: AsyncSession = Depends(get_db), user: m
 
 @router.get("/api/schema/{table_name}")
 async def get_schema(table_name: str, user: m.UserAccount = Depends(get_current_user)):
-    model = TABLE_MAP.get(table_name)
+    model = table_map().get(table_name)
     if not model:
         raise HTTPException(status_code=404, detail=f"表 {table_name} 不存在")
 
@@ -84,7 +85,7 @@ async def get_schema(table_name: str, user: m.UserAccount = Depends(get_current_
         })
 
     sub_tables = []
-    for t_name, t_model in TABLE_MAP.items():
+    for t_name, t_model in table_map().items():
         if t_name == table_name:
             continue
         for col in t_model.__table__.columns:
@@ -114,7 +115,7 @@ SUBTABLE_HINTS = ("_line", "_entry")
 @router.get("/api/related/{table_name}/{doc_id}")
 async def get_related(table_name: str, doc_id: int, db: AsyncSession = Depends(get_db), user: m.UserAccount = Depends(get_current_user)):
     """自动探索一张单据的关联数据 forward / reverse"""
-    model = TABLE_MAP.get(table_name)
+    model = table_map().get(table_name)
     if not model:
         return {"error": "表不存在"}
     r = await db.execute(select(model).where(model.id == doc_id))
@@ -131,7 +132,7 @@ async def get_related(table_name: str, doc_id: int, db: AsyncSession = Depends(g
             continue
         fk = list(col.foreign_keys)[0]
         target_table = fk.column.table.name
-        target_model = TABLE_MAP.get(target_table)
+        target_model = table_map().get(target_table)
         if not target_model:
             continue
         rr = await db.execute(select(target_model).where(target_model.id == fk_val))
@@ -151,7 +152,7 @@ async def get_related(table_name: str, doc_id: int, db: AsyncSession = Depends(g
         })
 
     reverse = []
-    for sub_name, sub_model in TABLE_MAP.items():
+    for sub_name, sub_model in table_map().items():
         if sub_name == table_name:
             continue
         for col in sub_model.__table__.columns:
@@ -184,7 +185,7 @@ async def get_related(table_name: str, doc_id: int, db: AsyncSession = Depends(g
                     if sc.name in SKIP_FK_FIELDS or sc.name == col.name or not sc.foreign_keys:
                         continue
                     target = list(sc.foreign_keys)[0].column.table.name
-                    target_m = TABLE_MAP.get(target)
+                    target_m = table_map().get(target)
                     if not target_m:
                         continue
                     ids = {s[sc.name] for s in samples if s.get(sc.name) is not None}

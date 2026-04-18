@@ -85,10 +85,10 @@ def _get_sync_engine():
 
 def _make_helpers():
     """跨表查询助手"""
-    from services.tools import TABLE_MAP
+    from core.registry import table_map
 
     def _query_internal(table_name, **filters):
-        m = TABLE_MAP.get(table_name)
+        m = table_map().get(table_name)
         if not m:
             return []
         with Session(_get_sync_engine()) as s:
@@ -126,10 +126,10 @@ def _make_helpers():
 
 async def _build_subtables_context(db, doc) -> dict:
     """加载 doc 的子表（_line / _entry）"""
-    from services.tools import TABLE_MAP
+    from core.registry import table_map
     parent_table = doc.__table__.name
     ctx = {}
-    for sub_name, sub_model in TABLE_MAP.items():
+    for sub_name, sub_model in table_map().items():
         if sub_name == parent_table:
             continue
         for col in sub_model.__table__.columns:

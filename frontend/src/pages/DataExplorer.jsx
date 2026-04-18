@@ -14,6 +14,7 @@ import {
   TruckOutlined, GoldOutlined, FileDoneOutlined,
 } from '@ant-design/icons';
 import { query, aggregate } from '../api';
+import { useAuth } from '../auth';
 
 // ---------- 元信息：表的人文描述 ----------
 const TABLE_META = {
@@ -76,8 +77,13 @@ const DOC_TYPE_MAP = {
 
 // ---------- 落地页：表选择 ----------
 function DataLanding({ onPick }) {
+  const { user } = useAuth();
   const [counts, setCounts] = useState({});
-  const tables = Object.keys(TABLE_META);
+  // allowed_tables: null=全开,数组=受限角色的白名单
+  const allowed = user?.allowed_tables;
+  const tables = Object.keys(TABLE_META).filter(
+    t => allowed == null || allowed.includes(t)
+  );
 
   useEffect(() => {
     (async () => {

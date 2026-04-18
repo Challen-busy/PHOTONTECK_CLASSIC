@@ -86,10 +86,10 @@ def validate_hook(script: str) -> tuple[bool, str]:
 
 def _build_subtables_sync(sync_session, doc) -> dict:
     """从 sync session 加载子表（_line / _entry）"""
-    from services.tools import TABLE_MAP
+    from core.registry import table_map
     parent_table = doc.__table__.name
     ctx = {}
-    for sub_name, sub_model in TABLE_MAP.items():
+    for sub_name, sub_model in table_map().items():
         if sub_name == parent_table:
             continue
         for col in sub_model.__table__.columns:
@@ -113,12 +113,12 @@ def _build_subtables_sync(sync_session, doc) -> dict:
 
 def _build_context(sync_session, doc):
     """构建钩子可见的函数/变量，并返回操作日志 list"""
-    from services.tools import TABLE_MAP
+    from core.registry import table_map
 
     op_log: list[str] = []
 
     def _query_rows(table_name, **filters):
-        mdl = TABLE_MAP.get(table_name)
+        mdl = table_map().get(table_name)
         if not mdl:
             raise ValueError(f"未知表: {table_name}")
         stmt = select(mdl)
@@ -146,7 +146,7 @@ def _build_context(sync_session, doc):
         return total
 
     def insert(table_name, fields):
-        mdl = TABLE_MAP.get(table_name)
+        mdl = table_map().get(table_name)
         if not mdl:
             raise ValueError(f"未知表: {table_name}")
         clean = {k: v for k, v in (fields or {}).items() if hasattr(mdl, k)}
@@ -157,7 +157,7 @@ def _build_context(sync_session, doc):
         return obj
 
     def update(table_name, where, fields):
-        mdl = TABLE_MAP.get(table_name)
+        mdl = table_map().get(table_name)
         if not mdl:
             raise ValueError(f"未知表: {table_name}")
         if not where:

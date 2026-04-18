@@ -22,6 +22,7 @@ from sqlalchemy import select, Boolean, Date, DateTime, Integer, Numeric, SmallI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import models as m
+from core.registry import doc_model_map, table_map
 
 
 def _coerce_value(col, value):
@@ -69,25 +70,7 @@ def _coerce_value(col, value):
     return value
 
 
-# 单据类型 → 模型映射
-DOC_MODEL_MAP = {
-    "SALES_ORDER": m.SalesOrder,
-    "PURCHASE_ORDER": m.PurchaseOrder,
-    "SHIPMENT": m.ShipmentRequest,
-    "VOUCHER": m.Voucher,
-    "GOODS_RECEIPT": m.GoodsReceipt,
-    "CUSTOMER": m.Customer,
-    "SUPPLIER": m.Supplier,
-    "PROJECT": m.Project,
-    "FRAMEWORK_CONTRACT": m.FrameworkContract,
-    "ACCOUNTS_RECEIVABLE": m.AccountsReceivable,
-    "ACCOUNTS_PAYABLE": m.AccountsPayable,
-    "INVENTORY": m.Inventory,
-    "INVENTORY_VIRTUAL": m.Inventory,
-    "INVENTORY_COUNT": m.Inventory,
-    "INVENTORY_COSTING": m.InventoryTransaction,
-    "VOUCHER_ADJUSTMENT": m.Voucher,
-}
+# 单据类型 → 模型映射:统一在 core.registry.doc_model_map() 中从 __doc_types__ 自动生成。
 
 
 def _serialize_doc(doc) -> dict:
@@ -176,10 +159,9 @@ async def _auto_fill_required_fields(db, model, provided: dict, doc_type: str) -
 
 
 async def _apply_sub_updates(db, sub_updates: list, parent_id: int) -> list[str]:
-    from services.tools import TABLE_MAP
     changes = []
     for sub in sub_updates or []:
-        sub_model = TABLE_MAP.get(sub.get("table"))
+        sub_model = table_map().get(sub.get("table"))
         if not sub_model:
             continue
         if sub.get("_delete"):
@@ -236,7 +218,7 @@ async def execute_transition(
     field_updates = field_updates or {}
     sub_updates = sub_updates or []
 
-    model = DOC_MODEL_MAP.get(doc_type)
+    model = doc_model_map().get(doc_type)
     if not model:
         return {"success": False, "error": f"不支持的单据类型: {doc_type}"}
 
@@ -543,7 +525,7 @@ async def preview_transition(
         return _make_card(doc_type, None, "", target["code"], action_label or "创建", changes, checks)
 
     # 加载已有单据
-    model = DOC_MODEL_MAP.get(doc_type)
+    model = doc_model_map().get(doc_type)
     doc = None
     if model:
         r = await db.execute(select(model).where(model.id == doc_id))
@@ -656,7 +638,7 @@ async def commit_card(
 async def list_user_actions(db: AsyncSession, user: m.UserAccount) -> list[dict]:
     """列出当前用户能触发的所有 (doc_type, from_state, next_action)。"""
     actions = []
-    for doc_type in DOC_MODEL_MAP:
+    for doc_type in doc_model_map():
         wf = await get_active_workflow(db, doc_type)
         if not wf:
             continue
@@ -715,7 +697,7 @@ async def list_user_todos(db: AsyncSession, user: m.UserAccount) -> list[dict]:
     """
     is_admin = bool(getattr(user, "is_admin", False)) or user.role == "ADMIN"
     todos = []
-    for doc_type, model in DOC_MODEL_MAP.items():
+    for doc_type, model in doc_model_map().items():
         wf = await get_active_workflow(db, doc_type)
         if not wf:
             continue

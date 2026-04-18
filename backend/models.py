@@ -49,6 +49,7 @@ class AuditMixin:
 
 class Company(Base):
     __tablename__ = "company"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     code = Column(String(20), unique=True, nullable=False)
     name = Column(String(200), nullable=False)
@@ -64,6 +65,7 @@ class Company(Base):
 
 class UserAccount(Base):
     __tablename__ = "user_account"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     username = Column(String(50), unique=True, nullable=False)
     password_hash = Column(String(200), nullable=False)
@@ -94,6 +96,7 @@ class UserCompanyAccess(Base):
 
 class Customer(AuditMixin, Base):
     __tablename__ = "customer"
+    __doc_types__ = ("CUSTOMER",)
     id = Column(Integer, primary_key=True)
     code = Column(String(30), index=True)
     code_type = Column(String(15), default="LONG_TERM")
@@ -115,6 +118,7 @@ class Customer(AuditMixin, Base):
 
 class Supplier(AuditMixin, Base):
     __tablename__ = "supplier"
+    __doc_types__ = ("SUPPLIER",)
     id = Column(Integer, primary_key=True)
     code = Column(String(30), index=True)
     name = Column(String(200))
@@ -132,6 +136,7 @@ class Supplier(AuditMixin, Base):
 
 class MaterialCategory(Base):
     __tablename__ = "material_category"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     code = Column(String(20), unique=True, nullable=False)
     name = Column(String(100), nullable=False)
@@ -140,6 +145,7 @@ class MaterialCategory(Base):
 
 class Material(Base):
     __tablename__ = "material"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     sku = Column(String(50), unique=True, nullable=False, index=True)
     name = Column(String(300), nullable=False)
@@ -163,6 +169,7 @@ class Material(Base):
 
 class FrameworkContract(AuditMixin, Base):
     __tablename__ = "framework_contract"
+    __doc_types__ = ("FRAMEWORK_CONTRACT",)
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey("customer.id"))
     contract_number = Column(String(50), index=True, nullable=False)
@@ -180,6 +187,7 @@ class FrameworkContract(AuditMixin, Base):
 
 class SalesOrder(AuditMixin, Base):
     __tablename__ = "sales_order"
+    __doc_types__ = ("SALES_ORDER",)
     id = Column(Integer, primary_key=True)
     order_number = Column(String(30), unique=True, index=True, nullable=False)
     customer_id = Column(Integer, ForeignKey("customer.id"))
@@ -200,6 +208,7 @@ class SalesOrder(AuditMixin, Base):
 
 class SalesOrderLine(Base):
     __tablename__ = "sales_order_line"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=False)
     line_number = Column(SmallInteger, nullable=False)
@@ -221,6 +230,7 @@ class SalesOrderLine(Base):
 
 class PurchaseOrder(AuditMixin, Base):
     __tablename__ = "purchase_order"
+    __doc_types__ = ("PURCHASE_ORDER",)
     id = Column(Integer, primary_key=True)
     order_number = Column(String(30), unique=True, index=True, nullable=False)
     supplier_id = Column(Integer, ForeignKey("supplier.id"))
@@ -240,6 +250,7 @@ class PurchaseOrder(AuditMixin, Base):
 
 class PurchaseOrderLine(Base):
     __tablename__ = "purchase_order_line"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     purchase_order_id = Column(Integer, ForeignKey("purchase_order.id"), nullable=False)
     line_number = Column(SmallInteger, nullable=False)
@@ -260,6 +271,7 @@ class PurchaseOrderLine(Base):
 
 class Warehouse(AuditMixin, Base):
     __tablename__ = "warehouse"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     code = Column(String(20), nullable=False)
     name = Column(String(100), nullable=False)
@@ -272,6 +284,7 @@ class Warehouse(AuditMixin, Base):
 
 class WarehouseLocation(Base):
     __tablename__ = "warehouse_location"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     warehouse_id = Column(Integer, ForeignKey("warehouse.id"), nullable=False)
     code = Column(String(30), nullable=False)
@@ -284,6 +297,7 @@ class WarehouseLocation(Base):
 
 class Inventory(AuditMixin, Base):
     __tablename__ = "inventory"
+    __doc_types__ = ("INVENTORY", "INVENTORY_VIRTUAL", "INVENTORY_COUNT")
     id = Column(Integer, primary_key=True)
     material_id = Column(Integer, ForeignKey("material.id"))
     warehouse_id = Column(Integer, ForeignKey("warehouse.id"))
@@ -303,6 +317,7 @@ class Inventory(AuditMixin, Base):
 
 class GoodsReceipt(AuditMixin, Base):
     __tablename__ = "goods_receipt"
+    __doc_types__ = ("GOODS_RECEIPT",)
     id = Column(Integer, primary_key=True)
     receipt_number = Column(String(30), unique=True, nullable=False)
     purchase_order_id = Column(Integer, ForeignKey("purchase_order.id"))
@@ -315,6 +330,7 @@ class GoodsReceipt(AuditMixin, Base):
 
 class GoodsReceiptLine(Base):
     __tablename__ = "goods_receipt_line"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     goods_receipt_id = Column(Integer, ForeignKey("goods_receipt.id"), nullable=False)
     purchase_order_line_id = Column(Integer, ForeignKey("purchase_order_line.id"), nullable=False)
@@ -328,6 +344,7 @@ class GoodsReceiptLine(Base):
 
 class ShipmentRequest(AuditMixin, Base):
     __tablename__ = "shipment_request"
+    __doc_types__ = ("SHIPMENT",)
     id = Column(Integer, primary_key=True)
     shipment_number = Column(String(30), unique=True, nullable=False)
     sales_order_id = Column(Integer, ForeignKey("sales_order.id"))
@@ -343,6 +360,7 @@ class ShipmentRequest(AuditMixin, Base):
 
 class ShipmentLine(Base):
     __tablename__ = "shipment_line"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     shipment_id = Column(Integer, ForeignKey("shipment_request.id"), nullable=False)
     sales_order_line_id = Column(Integer, ForeignKey("sales_order_line.id"), nullable=False)
@@ -352,6 +370,7 @@ class ShipmentLine(Base):
 
 class PickingList(Base):
     __tablename__ = "picking_list"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     shipment_id = Column(Integer, ForeignKey("shipment_request.id"), nullable=False)
     warehouse_id = Column(Integer, ForeignKey("warehouse.id"), nullable=False)
@@ -363,6 +382,7 @@ class PickingList(Base):
 
 class PickingListLine(Base):
     __tablename__ = "picking_list_line"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     picking_list_id = Column(Integer, ForeignKey("picking_list.id"), nullable=False)
     material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
@@ -374,6 +394,7 @@ class PickingListLine(Base):
 
 class LabelTemplate(Base):
     __tablename__ = "label_template"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey("customer.id"), nullable=False)
     name = Column(String(100), nullable=False)
@@ -389,6 +410,7 @@ class LabelTemplate(Base):
 
 class FiscalYear(Base):
     __tablename__ = "fiscal_year"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
     year = Column(Integer, nullable=False)
@@ -400,6 +422,7 @@ class FiscalYear(Base):
 
 class AccountingPeriod(Base):
     __tablename__ = "accounting_period"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     fiscal_year_id = Column(Integer, ForeignKey("fiscal_year.id"), nullable=False)
     period_number = Column(SmallInteger, nullable=False)
@@ -413,6 +436,7 @@ class AccountingPeriod(Base):
 
 class Account(Base):
     __tablename__ = "account"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
     code = Column(String(20), nullable=False, index=True)
@@ -429,6 +453,7 @@ class Account(Base):
 
 class Voucher(AuditMixin, Base):
     __tablename__ = "voucher"
+    __doc_types__ = ("VOUCHER", "VOUCHER_ADJUSTMENT")
     id = Column(Integer, primary_key=True)
     voucher_number = Column(String(30), index=True, nullable=False)
     voucher_date = Column(Date, nullable=False)
@@ -448,6 +473,7 @@ class Voucher(AuditMixin, Base):
 
 class VoucherEntry(Base):
     __tablename__ = "voucher_entry"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     voucher_id = Column(Integer, ForeignKey("voucher.id"), nullable=False)
     line_number = Column(SmallInteger, nullable=False)
@@ -464,6 +490,7 @@ class VoucherEntry(Base):
 
 class AccountBalance(Base):
     __tablename__ = "account_balance"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
     account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
@@ -479,6 +506,7 @@ class AccountBalance(Base):
 
 class ExchangeRate(Base):
     __tablename__ = "exchange_rate"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     from_currency = Column(String(3), nullable=False)
     to_currency = Column(String(3), nullable=False)
@@ -489,6 +517,7 @@ class ExchangeRate(Base):
 
 class AccountsReceivable(AuditMixin, Base):
     __tablename__ = "accounts_receivable"
+    __doc_types__ = ("ACCOUNTS_RECEIVABLE",)
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey("customer.id"))
     sales_order_id = Column(Integer, ForeignKey("sales_order.id"))
@@ -507,6 +536,7 @@ class AccountsReceivable(AuditMixin, Base):
 
 class AccountsPayable(AuditMixin, Base):
     __tablename__ = "accounts_payable"
+    __doc_types__ = ("ACCOUNTS_PAYABLE",)
     id = Column(Integer, primary_key=True)
     supplier_id = Column(Integer, ForeignKey("supplier.id"))
     purchase_order_id = Column(Integer, ForeignKey("purchase_order.id"))
@@ -522,6 +552,7 @@ class AccountsPayable(AuditMixin, Base):
 
 class SupplierCredit(AuditMixin, Base):
     __tablename__ = "supplier_credit"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=False)
     credit_limit = Column(Numeric(16, 2), nullable=False)
@@ -533,6 +564,7 @@ class SupplierCredit(AuditMixin, Base):
 
 class CustomerCredit(AuditMixin, Base):
     __tablename__ = "customer_credit"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey("customer.id"), nullable=False)
     credit_limit = Column(Numeric(16, 2), nullable=False)
@@ -590,6 +622,7 @@ class ARSettlement(AuditMixin, Base):
 
 class InventoryValuation(AuditMixin, Base):
     __tablename__ = "inventory_valuation"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
     cost_method = Column(String(15), default="WEIGHTED_AVG")
@@ -602,6 +635,7 @@ class InventoryValuation(AuditMixin, Base):
 
 class InventoryTransaction(Base):
     __tablename__ = "inventory_transaction"
+    __doc_types__ = ("INVENTORY_COSTING",)
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
     material_id = Column(Integer, ForeignKey("material.id"))
@@ -627,6 +661,7 @@ class InventoryTransaction(Base):
 
 class Project(AuditMixin, Base):
     __tablename__ = "project"
+    __doc_types__ = ("PROJECT",)
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey("customer.id"))
     name = Column(String(200))
@@ -644,6 +679,7 @@ class Project(AuditMixin, Base):
 
 class ProjectMaterial(Base):
     __tablename__ = "project_material"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("project.id"), nullable=False)
     material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
@@ -655,6 +691,7 @@ class ProjectMaterial(Base):
 
 class ProjectActivity(Base):
     __tablename__ = "project_activity"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("project.id"), nullable=False)
     activity_type = Column(String(15), nullable=False)
@@ -704,6 +741,7 @@ class WorkflowDefinition(Base):
 class WorkflowLog(Base):
     """第五层：操作日志（只增不改）"""
     __tablename__ = "workflow_log"
+    __queryable__ = True
     id = Column(Integer, primary_key=True)
     doc_type = Column(String(30), nullable=False, index=True)
     doc_id = Column(BigInteger, nullable=False, index=True)

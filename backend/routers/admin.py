@@ -9,6 +9,7 @@ import models as m
 from agents.admin_agent import admin_chat
 from core.auth import get_current_user, hash_password
 from core.database import get_db
+from core.registry import doc_model_map
 from services import workflow
 
 router = APIRouter()
@@ -275,7 +276,7 @@ async def admin_disable_workflow(workflow_id: int, request: Request, db: AsyncSe
         return {"error": "流程不存在"}
     if not wf.is_active:
         return {"error": "已是停用状态"}
-    model = workflow.DOC_MODEL_MAP.get(wf.doc_type)
+    model = doc_model_map().get(wf.doc_type)
     if model and hasattr(model, "status"):
         terminal_codes = [s["code"] for s in (wf.states or []) if s.get("is_terminal")]
         r = await db.execute(select(model).where(~model.status.in_(terminal_codes)) if terminal_codes else select(model))

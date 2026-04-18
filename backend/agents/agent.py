@@ -13,8 +13,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents import llm
+from core.registry import doc_model_map
 from services import workflow
-from services.tools import TOOLS
+from services.tools import TOOLS, get_tool_schemas
 import models as m
 
 
@@ -80,7 +81,7 @@ async def _get_role_intro(user: m.UserAccount) -> str:
 async def _get_workflows_summary(db: AsyncSession, user_role: str) -> str:
     """所有流程的概览（流程→节点→出边）"""
     lines = []
-    for doc_type in workflow.DOC_MODEL_MAP:
+    for doc_type in doc_model_map():
         wf = await workflow.get_active_workflow(db, doc_type)
         if not wf:
             continue
@@ -146,7 +147,7 @@ async def chat(db: AsyncSession, user_query: str, user: m.UserAccount) -> dict:
 
 # 重要: 你不能执行任何修改。所有修改都通过request_action提交申请，由用户确认后才执行。一次可以提交多个申请。"""
 
-    tool_schemas = [TOOLS[t]["schema"] for t in ["query_data", "calculate", "compare", "aggregate"]]
+    tool_schemas = list(get_tool_schemas(user))
 
     available_actions = await workflow.list_user_actions(db, user)
     action_desc = "\n".join(
@@ -265,7 +266,7 @@ async def chat_stream(db: AsyncSession, user_query: str, user: m.UserAccount):
 
 # 重要: 你不能执行任何修改。所有修改都通过request_action提交申请，由用户确认后才执行。一次可以提交多个申请。"""
 
-    tool_schemas = [TOOLS[t]["schema"] for t in ["query_data", "calculate", "compare", "aggregate"]]
+    tool_schemas = list(get_tool_schemas(user))
     available_actions = await workflow.list_user_actions(db, user)
     action_desc = "\n".join(
         f"- {a['action_label']} ({a['doc_type']}: {a['from_state']}->{a['to_state']})" for a in available_actions[:50]
@@ -401,8 +402,8 @@ async def _run_node_agent_check(db, wf, state, doc_type, doc_id, user, node_desc
 - 检查完调 confirm_check 报告结果
 - proceed=true 可执行，proceed=false 说明原因"""
 
-    # Agent 工具始终全开 —— 节点级别不再限制
-    node_tools = [TOOLS[t]["schema"] for t in TOOLS]
+    # 节点 Agent 走用户身份的表级权限(和日常 Agent 一致)
+    node_tools = list(get_tool_schemas(user))
     node_tools.append({
         "name": "confirm_check",
         "description": "报告检查结果",
