@@ -12,22 +12,46 @@ import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { ReactFlow, Background, Controls, MiniMap, useNodesState, useEdgesState, MarkerType } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
-  Card, Tag, Button, Space, Spin, Tabs, Form, Input, Select, Modal, message,
+  Card, Button, Space, Spin, Tabs, Form, Input, Select, Modal, message,
   Popconfirm, Empty, Tooltip, Badge, Collapse,
 } from 'antd';
 import {
   SaveOutlined, PlusOutlined, DeleteOutlined, BranchesOutlined,
   RocketOutlined, PauseOutlined, PlayCircleOutlined, RobotOutlined, SendOutlined,
-  EditOutlined, AppstoreOutlined, WarningOutlined, HistoryOutlined,
+  EditOutlined, AppstoreOutlined, WarningOutlined, HistoryOutlined, LockOutlined,
 } from '@ant-design/icons';
 import api from '../api';
 import { layoutGraph } from '../utils/layout';
 
+const CARD_SHADOW =
+  'rgba(0,0,0,0.06) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 1px 2px, rgba(0,0,0,0.04) 0px 2px 4px';
+
+function Pill({ bg, color, children }) {
+  return (
+    <span style={{
+      display: 'inline-block', padding: '1px 8px', borderRadius: 4,
+      background: bg, color, fontSize: 11, fontWeight: 500, letterSpacing: '0.02em',
+    }}>{children}</span>
+  );
+}
+
+// 降饱和状态色
+const NEUTRAL = { bg: '#f5f2ef', color: '#4e4e4e', border: '#bfbbb5' };
 const stateColors = {
-  DRAFT: '#d9d9d9', AUDITED: '#1890ff', POSTED: '#52c41a', RECONCILED: '#13c2c2',
-  FX_ADJUSTED: '#722ed1', PL_TRANSFERRED: '#eb2f96', CLOSED: '#8c8c8c',
-  REVERSED: '#ff4d4f', PENDING: '#faad14', PARTIAL: '#ffa940', PAID: '#52c41a',
-  OVERDUE: '#ff4d4f', BAD_DEBT: '#434343', CANCELLED: '#ff4d4f',
+  DRAFT:        NEUTRAL,
+  AUDITED:      { bg: '#eaf1fb', color: '#1f5aa8', border: '#1f5aa8' },
+  POSTED:       { bg: '#ebf5ee', color: '#1f8f3a', border: '#1f8f3a' },
+  RECONCILED:   { bg: '#e7f3f5', color: '#0e7490', border: '#0e7490' },
+  FX_ADJUSTED:  { bg: '#f1ebfa', color: '#6b46c1', border: '#6b46c1' },
+  PL_TRANSFERRED:{ bg: '#fbeaf1', color: '#b83280', border: '#b83280' },
+  CLOSED:       { bg: '#f5f5f5', color: '#1a1a1a', border: '#4e4e4e' },
+  REVERSED:     { bg: '#fdecea', color: '#b42318', border: '#b42318' },
+  PENDING:      { bg: '#fbf5e4', color: '#b8860b', border: '#b8860b' },
+  PARTIAL:      { bg: '#fbf5e4', color: '#b8860b', border: '#b8860b' },
+  PAID:         { bg: '#ebf5ee', color: '#1f8f3a', border: '#1f8f3a' },
+  OVERDUE:      { bg: '#fdecea', color: '#b42318', border: '#b42318' },
+  BAD_DEBT:     { bg: '#f5f5f5', color: '#1a1a1a', border: '#4e4e4e' },
+  CANCELLED:    { bg: '#fdecea', color: '#b42318', border: '#b42318' },
 };
 
 const ROLE_OPTIONS = ['BOSS','OPERATIONS','FINANCE','SALES_ENGINEER','SALES_ASSISTANT','PRODUCT_MANAGER','PRODUCT_ASSISTANT','LOGISTICS','ADMIN'];
@@ -35,33 +59,44 @@ const ROLE_OPTIONS = ['BOSS','OPERATIONS','FINANCE','SALES_ENGINEER','SALES_ASSI
 function getNodeStyle(s) {
   const t = s.node_type;
   if (t === 'policy') return {
-    background: '#fffbe6', color: '#8c6d1f',
-    border: '1.5px solid #ffe58f', borderLeft: '4px solid #faad14',
-    borderRadius: 4, padding: '6px 14px', minWidth: 120,
+    background: '#fbf5e4', color: '#8c6d1f',
+    border: '1px solid #ece0b7', borderLeft: '4px solid #b8860b',
+    borderRadius: 6, padding: '6px 14px', minWidth: 120,
   };
   if (t === 'cross_module') return {
-    background: '#52c41a', color: '#fff',
-    border: '2px solid #389e0d', borderRadius: 20,
-    padding: '6px 14px', minWidth: 120,
+    background: '#ebf5ee', color: '#1f8f3a',
+    border: '1px solid #c7e6cf', borderLeft: '4px solid #1f8f3a',
+    borderRadius: 9999, padding: '6px 14px', minWidth: 120,
   };
   if (t === 'report') return {
-    background: '#e6f7ff', color: '#0050b3',
-    border: '1.5px dashed #91d5ff', borderRadius: 4,
+    background: '#eaf1fb', color: '#1f5aa8',
+    border: '1px dashed #a8c4e7', borderRadius: 6,
     padding: '6px 14px', minWidth: 120,
   };
+  const c = stateColors[s.code] || NEUTRAL;
   return {
-    background: stateColors[s.code] || '#d9d9d9',
-    color: ['DRAFT', 'COMPLETED', 'CLOSED', 'EXPIRED', 'PROSPECTING'].includes(s.code) ? '#333' : '#fff',
-    border: s.is_initial ? '3px solid #1a1a2e' : s.is_terminal ? '2px dashed #999' : '1px solid #ddd',
-    borderRadius: 8, padding: '6px 14px', minWidth: 120,
+    background: c.bg,
+    color: c.color,
+    border: `1px solid ${c.border}`,
+    borderLeft: `4px solid ${c.border}`,
+    boxShadow: s.is_initial
+      ? 'rgba(0,0,0,0.06) 0px 0px 0px 1.5px, rgba(0,0,0,0.04) 0px 4px 8px'
+      : 'rgba(0,0,0,0.04) 0px 1px 2px',
+    borderRadius: 8,
+    padding: '6px 14px',
+    minWidth: 120,
+    fontSize: 12,
+    fontWeight: 500,
+    letterSpacing: '0.01em',
+    opacity: s.is_terminal ? 0.75 : 1,
+    borderStyle: s.is_terminal ? 'dashed' : 'solid',
   };
 }
 
-// 流程状态 helpers
 function getStatusBadge(wf) {
-  if (!wf.is_published) return <Tag color="orange">草稿</Tag>;
-  if (wf.is_active) return <Tag color="green">上线</Tag>;
-  return <Tag>停用</Tag>;
+  if (!wf.is_published) return <Pill bg="#fbf5e4" color="#b8860b">草稿</Pill>;
+  if (wf.is_active)     return <Pill bg="#ebf5ee" color="#1f8f3a">上线</Pill>;
+  return <Pill bg="#f5f2ef" color="#4e4e4e">停用</Pill>;
 }
 function isLocked(wf, dangerMode) { return !!wf.is_published && !dangerMode; }
 
@@ -79,8 +114,8 @@ export default function FlowEditor() {
   const [createForm] = Form.useForm();
   const [addNodeForm] = Form.useForm();
   const [nodeForm] = Form.useForm();
-  const [nextEdges, setNextEdges] = useState([]);  // 当前节点的"出边"编辑状态
-  const [dangerMode, setDangerMode] = useState(false);  // 危险修改模式
+  const [nextEdges, setNextEdges] = useState([]);
+  const [dangerMode, setDangerMode] = useState(false);
   const [auditModal, setAuditModal] = useState(false);
   const [auditLogs, setAuditLogs] = useState([]);
 
@@ -109,7 +144,7 @@ export default function FlowEditor() {
       return;
     }
     setLayoutDirty(false);
-    setDangerMode(false);  // 切流程时关闭危险模式
+    setDangerMode(false);
     const states = selected.states || [];
     const savedPos = selected.node_positions || {};
     const hasSaved = Object.keys(savedPos).length > 0;
@@ -123,8 +158,11 @@ export default function FlowEditor() {
       data: {
         label: (
           <div style={{ textAlign: 'center', cursor: 'pointer' }}>
-            <div style={{ fontWeight: 600, fontSize: 12 }}>{s.name}</div>
-            <div style={{ fontSize: 9, color: '#aaa' }}>{s.code}</div>
+            <div style={{ fontWeight: 500, fontSize: 12, letterSpacing: '0.01em' }}>{s.name}</div>
+            <div style={{
+              fontSize: 9, opacity: 0.6, marginTop: 2,
+              fontFamily: 'ui-monospace, monospace',
+            }}>{s.code}</div>
           </div>
         ),
       },
@@ -141,12 +179,12 @@ export default function FlowEditor() {
             id: `e-${s.code}-${n.to}-${i}`,
             source: s.code, target: n.to,
             label: isPolicy ? '' : n.label,
-            labelStyle: { fontSize: 10, fill: '#555' },
-            labelBgStyle: { fill: '#fff', fillOpacity: 0.9 },
-            markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+            labelStyle: { fontSize: 10, fill: '#4e4e4e', letterSpacing: '0.02em' },
+            labelBgStyle: { fill: '#fff', fillOpacity: 0.95 },
+            markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: '#bfbbb5' },
             style: isPolicy
-              ? { strokeWidth: 1.5, stroke: '#faad14', strokeDasharray: '6 3' }
-              : { strokeWidth: 1.5, stroke: '#999' },
+              ? { strokeWidth: 1.5, stroke: '#b8860b', strokeDasharray: '6 3' }
+              : { strokeWidth: 1.5, stroke: '#bfbbb5' },
             type: 'smoothstep',
           };
         })
@@ -160,7 +198,6 @@ export default function FlowEditor() {
     setSelectedNodeCode(null);
   }, [selected]);
 
-  // 节点拖拽
   const handleNodesChange = useCallback((changes) => {
     onNodesChange(changes);
     if (changes.some(c => c.type === 'position' && c.dragging === false)) {
@@ -168,7 +205,6 @@ export default function FlowEditor() {
     }
   }, [onNodesChange]);
 
-  // 点节点 → 跳到详情 Tab
   const onNodeClick = useCallback((_, node) => {
     setSelectedNodeCode(node.id);
     setRightTab('detail');
@@ -199,7 +235,6 @@ export default function FlowEditor() {
     load();
   };
 
-  // 保存节点（仅草稿态）
   const saveNode = async () => {
     if (isLocked(selected, dangerMode)) { message.warning('已上线流程不能改节点内容'); return; }
     const v = await nodeForm.validateFields();
@@ -216,7 +251,7 @@ export default function FlowEditor() {
       custom_html: v.custom_html || '',
       is_initial: !!v.is_initial,
       is_terminal: !!v.is_terminal,
-      next: nextEdges.filter(n => n.to && n.label),  // 出边（editable_fields/hard_rules/hooks 挂在这里）
+      next: nextEdges.filter(n => n.to && n.label),
     };
     const newStates = [...selected.states];
     newStates[idx] = newState;
@@ -226,11 +261,9 @@ export default function FlowEditor() {
     load();
   };
 
-  // 删节点
   const deleteNode = async () => {
     if (isLocked(selected, dangerMode)) return;
     const newStates = (selected.states || []).filter(s => s.code !== selectedNodeCode);
-    // 同时清掉其他节点指向它的 next
     newStates.forEach(s => {
       s.next = (s.next || []).filter(n => n.to !== selectedNodeCode);
     });
@@ -241,7 +274,6 @@ export default function FlowEditor() {
     load();
   };
 
-  // 加节点
   const addNode = async () => {
     if (isLocked(selected, dangerMode)) return;
     const v = await addNodeForm.validateFields();
@@ -263,7 +295,6 @@ export default function FlowEditor() {
     load();
   };
 
-  // 流程级操作
   const createWorkflow = async () => {
     const v = await createForm.validateFields();
     const { data } = await api.post('/admin/workflows', v);
@@ -312,7 +343,6 @@ export default function FlowEditor() {
     load();
   };
 
-  // Agent chat
   const sendChat = async () => {
     if (!chatInput.trim()) return;
     const q = chatInput.trim();
@@ -325,7 +355,6 @@ export default function FlowEditor() {
         role: 'agent', content: data.response,
         tools: data.tools_called, tokens: data.tokens_used,
       }]);
-      // Agent 可能改了流程，刷新
       await load();
     } catch (e) {
       setChatMessages(prev => [...prev, { role: 'agent', content: '错误: ' + (e.response?.data?.detail || e.message) }]);
@@ -334,7 +363,6 @@ export default function FlowEditor() {
     setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
   };
 
-  // 分组
   const grouped = useMemo(() => {
     const g = {};
     workflows.forEach(wf => {
@@ -344,6 +372,7 @@ export default function FlowEditor() {
     });
     return g;
   }, [workflows]);
+
   const allGroups = useMemo(() =>
     Array.from(new Set(workflows.map(w => w.group_name || '未分组'))).sort()
   , [workflows]);
@@ -352,41 +381,74 @@ export default function FlowEditor() {
     ? (selected.states || []).find(s => s.code === selectedNodeCode)
     : null;
 
+  const locked = isLocked(selected, dangerMode);
+
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '80px auto' }} />;
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 100px)', gap: 12 }}>
+    <div style={{ display: 'flex', height: 'calc(100vh - 100px)', gap: 14 }}>
       {/* === 左栏：分组流程列表 === */}
-      <div style={{ width: 240, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <h3 style={{ margin: 0, fontSize: 14 }}>所有流程</h3>
+      <div style={{ width: 250, display: 'flex', flexDirection: 'column' }}>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          marginBottom: 10,
+        }}>
+          <h3 style={{
+            margin: 0, fontSize: 13, fontWeight: 500,
+            color: '#4e4e4e', letterSpacing: '0.03em', textTransform: 'uppercase',
+          }}>
+            所有流程
+          </h3>
           <Tooltip title="新建空白流程">
             <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setCreateModal(true)} />
           </Tooltip>
         </div>
-        <Card size="small" style={{ flex: 1, overflow: 'auto', borderRadius: 8 }} styles={{ body: { padding: 8 } }}>
-          <Collapse defaultActiveKey={Object.keys(grouped)} ghost size="small"
+        <Card
+          size="small"
+          style={{ flex: 1, overflow: 'auto', borderRadius: 14, boxShadow: CARD_SHADOW, border: 'none' }}
+          styles={{ body: { padding: 8 } }}
+        >
+          <Collapse
+            defaultActiveKey={Object.keys(grouped)} ghost size="small"
             items={Object.entries(grouped).map(([groupName, wfs]) => ({
               key: groupName,
-              label: <span style={{ fontSize: 12, color: '#555' }}><AppstoreOutlined /> {groupName} ({wfs.length})</span>,
+              label: (
+                <span style={{ fontSize: 12, color: '#4e4e4e', fontWeight: 500, letterSpacing: '0.02em' }}>
+                  <AppstoreOutlined style={{ marginRight: 6 }} />
+                  {groupName} <span style={{ color: '#bfbbb5' }}>({wfs.length})</span>
+                </span>
+              ),
               children: (
                 <div>
-                  {wfs.map(wf => (
-                    <div key={wf.id}
-                      style={{
-                        padding: '6px 10px', borderRadius: 6, marginBottom: 4, cursor: 'pointer',
-                        background: selected?.id === wf.id ? '#1a1a2e' : '#fafafa',
-                        color: selected?.id === wf.id ? '#fff' : '#333',
-                        fontSize: 12,
-                      }}
-                      onClick={() => setSelected(wf)}>
-                      <div style={{ fontWeight: 500 }}>{wf.name}</div>
-                      <div style={{ marginTop: 2, fontSize: 10, opacity: 0.8 }}>
-                        {getStatusBadge(wf)}
-                        <span style={{ marginLeft: 4 }}>v{wf.version} · {(wf.states||[]).length} 节点</span>
+                  {wfs.map(wf => {
+                    const isSel = selected?.id === wf.id;
+                    return (
+                      <div
+                        key={wf.id}
+                        style={{
+                          padding: '8px 10px', borderRadius: 8, marginBottom: 4, cursor: 'pointer',
+                          background: isSel ? '#000' : 'transparent',
+                          color: isSel ? '#fff' : '#000',
+                          fontSize: 12, transition: 'background 0.15s',
+                        }}
+                        onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = 'rgba(245, 242, 239, 0.6)'; }}
+                        onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
+                        onClick={() => setSelected(wf)}
+                      >
+                        <div style={{ fontWeight: 500, letterSpacing: '0.01em' }}>{wf.name}</div>
+                        <div style={{
+                          marginTop: 4, display: 'flex', alignItems: 'center',
+                          gap: 6, fontSize: 10,
+                          opacity: isSel ? 0.85 : 1,
+                        }}>
+                          {getStatusBadge(wf)}
+                          <span style={{ color: isSel ? 'rgba(255,255,255,0.7)' : '#777169' }}>
+                            v{wf.version} · {(wf.states||[]).length} 节点
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ),
             }))}
@@ -397,25 +459,40 @@ export default function FlowEditor() {
       {/* === 中栏：画布 === */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         {!selected ? (
-          <Card style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Card
+            style={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              borderRadius: 14, boxShadow: CARD_SHADOW, border: 'none',
+            }}
+          >
             <Empty description="选择一个流程查看 / 编辑" />
           </Card>
         ) : (
           <>
             {/* 顶部工具栏 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '6px 10px', background: '#fff', borderRadius: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-              <h3 style={{ margin: 0, fontSize: 14 }}>{selected.name}</h3>
-              <Tag>{selected.doc_type}</Tag>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
+              padding: '10px 14px', background: '#fff',
+              borderRadius: 14, boxShadow: CARD_SHADOW,
+              flexWrap: 'wrap',
+            }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 500, letterSpacing: '0.01em' }}>
+                {selected.name}
+              </h3>
+              <Pill bg="#eaf1fb" color="#1f5aa8">{selected.doc_type}</Pill>
               {getStatusBadge(selected)}
-              <span style={{ color: '#888', fontSize: 11 }}>v{selected.version}</span>
+              <span style={{
+                color: '#777169', fontSize: 11,
+                fontFamily: 'ui-monospace, monospace',
+              }}>v{selected.version}</span>
               <Tooltip title="分组只是前端显示，上线流程也可以任意改">
                 <Select
                   size="small"
                   value={selected.group_name || '未分组'}
-                  style={{ minWidth: 110 }}
+                  style={{ minWidth: 120 }}
                   onChange={changeGroup}
                   options={[
-                    ...allGroups.map(g => ({ value: g, label: `📁 ${g}` })),
+                    ...allGroups.map(g => ({ value: g, label: g })),
                     { value: '__new__', label: '＋ 新分组…' },
                   ]}
                   onSelect={(v) => {
@@ -428,12 +505,12 @@ export default function FlowEditor() {
               </Tooltip>
               <div style={{ flex: 1 }} />
 
-              {/* 节点位置始终能改 */}
               {layoutDirty && (
-                <Button size="small" type="primary" icon={<SaveOutlined />} onClick={savePositions}>保存布局</Button>
+                <Button size="small" type="primary" icon={<SaveOutlined />} onClick={savePositions}>
+                  保存布局
+                </Button>
               )}
 
-              {/* 草稿态：加节点 + 上线 + 删除 */}
               {!selected.is_published && (
                 <>
                   <Button size="small" icon={<PlusOutlined />} onClick={() => setAddNodeModal(true)}>加节点</Button>
@@ -446,7 +523,6 @@ export default function FlowEditor() {
                 </>
               )}
 
-              {/* 已上线：Fork + 停用/启用 + 危险修改 + 修改记录 */}
               {selected.is_published && (
                 <>
                   <Button size="small" icon={<BranchesOutlined />} onClick={forkWorkflow}>Fork</Button>
@@ -458,30 +534,50 @@ export default function FlowEditor() {
                     <Button size="small" type="primary" icon={<PlayCircleOutlined />} onClick={enableWorkflow}>启用</Button>
                   )}
                   <Tooltip title={dangerMode ? "关闭危险修改" : "开启后可直接改已上线流程，所有改动会被记录"}>
-                    <Button size="small" danger={dangerMode} icon={<WarningOutlined />}
-                      type={dangerMode ? "primary" : "default"}
-                      onClick={() => setDangerMode(!dangerMode)}>
-                      {dangerMode ? "🚨 危险修改 ON" : "危险修改"}
+                    <Button
+                      size="small"
+                      danger={dangerMode}
+                      icon={<WarningOutlined />}
+                      type={dangerMode ? 'primary' : 'default'}
+                      onClick={() => setDangerMode(!dangerMode)}
+                    >
+                      {dangerMode ? '危险修改 ON' : '危险修改'}
                     </Button>
                   </Tooltip>
                 </>
               )}
-              <Button size="small" icon={<HistoryOutlined />} onClick={async () => {
-                const { data } = await api.get(`/admin/workflows/${selected.id}/audit`);
-                setAuditLogs(data || []);
-                setAuditModal(true);
-              }}>修改记录</Button>
+              <Button
+                size="small"
+                icon={<HistoryOutlined />}
+                onClick={async () => {
+                  const { data } = await api.get(`/admin/workflows/${selected.id}/audit`);
+                  setAuditLogs(data || []);
+                  setAuditModal(true);
+                }}
+              >
+                修改记录
+              </Button>
             </div>
 
             {/* 危险修改警告条 */}
             {dangerMode && selected.is_published && (
-              <div style={{ background: '#fff1f0', border: '1px solid #ffa39e', padding: '6px 12px', borderRadius: 6, marginBottom: 8, color: '#cf1322', fontSize: 12 }}>
-                ⚠️ 危险修改模式：你正在直接编辑已上线流程。所有改动会被审计日志记录，慎重操作。
+              <div style={{
+                background: '#fdecea',
+                border: '1px solid #f5c6ce',
+                borderLeft: '4px solid #b42318',
+                padding: '10px 14px', borderRadius: 10, marginBottom: 10,
+                color: '#b42318', fontSize: 12, letterSpacing: '0.01em',
+              }}>
+                <WarningOutlined style={{ marginRight: 6 }} />
+                危险修改模式：你正在直接编辑已上线流程。所有改动会被审计日志记录，慎重操作。
               </div>
             )}
 
             {/* 画布 */}
-            <Card style={{ flex: 1, borderRadius: 8 }} styles={{ body: { padding: 0, height: '100%' } }}>
+            <Card
+              style={{ flex: 1, borderRadius: 14, boxShadow: CARD_SHADOW, border: 'none', overflow: 'hidden' }}
+              styles={{ body: { padding: 0, height: '100%' } }}
+            >
               {nodes.length === 0 ? (
                 <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center' }}>
                   <Empty description={selected.is_published ? '空流程' : '空流程，点"加节点"开始'} />
@@ -491,10 +587,19 @@ export default function FlowEditor() {
                   nodes={nodes} edges={edges}
                   onNodesChange={handleNodesChange} onEdgesChange={onEdgesChange}
                   onNodeClick={onNodeClick} fitView
-                  nodesDraggable={true}>
-                  <Background />
+                  nodesDraggable={true}
+                >
+                  <Background gap={24} size={1} color="rgba(0,0,0,0.06)" />
                   <Controls />
-                  <MiniMap style={{ borderRadius: 8 }} nodeStrokeWidth={2} />
+                  <MiniMap
+                    style={{
+                      borderRadius: 10,
+                      background: 'rgba(245,242,239,0.8)',
+                      border: '1px solid rgba(0,0,0,0.05)',
+                    }}
+                    nodeStrokeWidth={2}
+                    maskColor="rgba(0,0,0,0.04)"
+                  />
                 </ReactFlow>
               )}
             </Card>
@@ -503,8 +608,11 @@ export default function FlowEditor() {
       </div>
 
       {/* === 右栏：节点详情 / AI 助手 === */}
-      <div style={{ width: 380, display: 'flex', flexDirection: 'column' }}>
-        <Tabs activeKey={rightTab} onChange={setRightTab} size="small"
+      <div style={{ width: 400, display: 'flex', flexDirection: 'column' }}>
+        <Tabs
+          activeKey={rightTab}
+          onChange={setRightTab}
+          size="small"
           items={[
             {
               key: 'detail',
@@ -512,117 +620,176 @@ export default function FlowEditor() {
               children: !selectedNode ? (
                 <Empty description="点画布上的节点编辑" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ paddingTop: 60 }} />
               ) : (
-                <Card size="small" style={{ borderRadius: 8 }}>
-                  <div style={{ marginBottom: 12 }}>
-                    <Tag color="blue">{selectedNode.code}</Tag>
-                    {isLocked(selected, dangerMode) && <Tag color="red">🔒 已上线，不可改</Tag>}
+                <Card
+                  size="small"
+                  style={{ borderRadius: 12, boxShadow: CARD_SHADOW, border: 'none' }}
+                >
+                  <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Pill bg="#eaf1fb" color="#1f5aa8">{selectedNode.code}</Pill>
+                    {locked && (
+                      <Pill bg="#fdecea" color="#b42318">
+                        <LockOutlined style={{ fontSize: 10, marginRight: 2 }} />
+                        已上线，不可改
+                      </Pill>
+                    )}
                   </div>
-                  <Form form={nodeForm} layout="vertical" disabled={isLocked(selected, dangerMode)}>
+                  <Form form={nodeForm} layout="vertical" disabled={locked}>
                     <Form.Item name="name" label="节点名" rules={[{ required: true }]}>
                       <Input />
                     </Form.Item>
                     <Form.Item name="allowed_roles" label="允许角色">
                       <Select mode="multiple" options={ROLE_OPTIONS.map(r => ({ value: r, label: r }))} />
                     </Form.Item>
-                    <Form.Item name="description" label="描述（给Agent看的中文）">
+                    <Form.Item name="description" label="描述（给 Agent 看的中文）">
                       <Input.TextArea rows={4} />
                     </Form.Item>
-                    <Form.Item label="出边（用户在此节点可以做的动作）"
-                      help={<span style={{ fontSize: 10 }}>每条出边 = 一个按钮 + 此按钮打开的录入字段 + 可选校验/钩子。</span>}>
+                    <Form.Item
+                      label="出边（用户在此节点可做的动作）"
+                      help={<span style={{ fontSize: 10, color: '#777169' }}>
+                        每条出边 = 一个按钮 + 此按钮打开的录入字段 + 可选校验/钩子。
+                      </span>}
+                    >
                       <div>
                         {nextEdges.map((n, i) => (
-                          <div key={i} style={{ border: '1px dashed #ddd', padding: 8, borderRadius: 6, marginBottom: 6, background: '#fafafa' }}>
-                            <Space.Compact style={{ width: '100%', marginBottom: 6 }}>
-                              <Input value={n.label} placeholder="按钮名（如:提交审核）"
-                                onChange={e => { const a=[...nextEdges]; a[i] = {...a[i], label:e.target.value}; setNextEdges(a); }}
-                                disabled={isLocked(selected, dangerMode)} />
-                              <span style={{ padding: '4px 6px', background: '#fff', border: '1px solid #d9d9d9' }}>→</span>
-                              <Select value={n.to} placeholder="目标节点" style={{ minWidth: 130 }}
-                                disabled={isLocked(selected, dangerMode)}
+                          <div
+                            key={i}
+                            style={{
+                              border: '1px solid rgba(0,0,0,0.08)',
+                              padding: 10, borderRadius: 10, marginBottom: 8,
+                              background: 'rgba(245, 242, 239, 0.5)',
+                            }}
+                          >
+                            <Space.Compact style={{ width: '100%', marginBottom: 8 }}>
+                              <Input
+                                value={n.label}
+                                placeholder="按钮名（如: 提交审核）"
+                                onChange={e => { const a = [...nextEdges]; a[i] = { ...a[i], label: e.target.value }; setNextEdges(a); }}
+                                disabled={locked}
+                              />
+                              <span style={{
+                                padding: '0 10px', background: '#fff',
+                                border: '1px solid #e5e5e5',
+                                display: 'flex', alignItems: 'center',
+                                color: '#777169',
+                              }}>→</span>
+                              <Select
+                                value={n.to}
+                                placeholder="目标节点"
+                                style={{ minWidth: 140 }}
+                                disabled={locked}
                                 options={(selected.states || []).filter(s => s.code !== selectedNodeCode).map(s => ({
                                   value: s.code, label: s.name,
                                 }))}
-                                onChange={v => { const a=[...nextEdges]; a[i] = {...a[i], to:v}; setNextEdges(a); }}
+                                onChange={v => { const a = [...nextEdges]; a[i] = { ...a[i], to: v }; setNextEdges(a); }}
                               />
-                              {!isLocked(selected, dangerMode) && (
-                                <Button danger icon={<DeleteOutlined />}
-                                  onClick={() => setNextEdges(nextEdges.filter((_, idx) => idx !== i))} />
+                              {!locked && (
+                                <Button danger icon={<DeleteOutlined />} onClick={() => setNextEdges(nextEdges.filter((_, idx) => idx !== i))} />
                               )}
                             </Space.Compact>
-                            <div style={{ fontSize: 10, color: '#888', margin: '4px 0 2px' }}>① 角色限制（留空 = 继承节点）</div>
-                            <Select mode="multiple" value={n.roles || []} placeholder="不填 = 节点角色都能点"
-                              style={{ width: '100%', marginBottom: 4 }} size="small"
-                              disabled={isLocked(selected, dangerMode)}
+                            <div style={{ fontSize: 10, color: '#777169', margin: '6px 0 2px', letterSpacing: '0.02em' }}>
+                              1. 角色限制（留空 = 继承节点）
+                            </div>
+                            <Select
+                              mode="multiple"
+                              value={n.roles || []}
+                              placeholder="不填 = 节点角色都能点"
+                              style={{ width: '100%', marginBottom: 4 }}
+                              size="small"
+                              disabled={locked}
                               options={ROLE_OPTIONS.map(r => ({ value: r, label: r }))}
-                              onChange={v => { const a=[...nextEdges]; a[i] = {...a[i], roles: v.length ? v : undefined}; setNextEdges(a); }}
+                              onChange={v => { const a = [...nextEdges]; a[i] = { ...a[i], roles: v.length ? v : undefined }; setNextEdges(a); }}
                             />
-                            <div style={{ fontSize: 10, color: '#888', margin: '4px 0 2px' }}>② 录入字段（点按钮时打开这些字段让用户填；逗号分隔）</div>
-                            <Input value={(n.editable_fields || []).join(', ')}
+                            <div style={{ fontSize: 10, color: '#777169', margin: '6px 0 2px', letterSpacing: '0.02em' }}>
+                              2. 录入字段（点按钮时打开这些字段让用户填；逗号分隔）
+                            </div>
+                            <Input
+                              value={(n.editable_fields || []).join(', ')}
                               placeholder="如: amount, notes"
-                              style={{ marginBottom: 4, fontSize: 12 }} size="small"
-                              disabled={isLocked(selected, dangerMode)}
+                              style={{ marginBottom: 4, fontSize: 12 }}
+                              size="small"
+                              disabled={locked}
                               onChange={e => {
                                 const a = [...nextEdges];
                                 const fields = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
-                                a[i] = {...a[i], editable_fields: fields};
+                                a[i] = { ...a[i], editable_fields: fields };
                                 setNextEdges(a);
                               }}
                             />
-                            <div style={{ fontSize: 10, color: '#888', margin: '4px 0 2px' }}>③ 硬规则（只读判定，一行一条；不通过拦截）</div>
-                            <Input.TextArea value={(n.hard_rules || []).join('\n')} rows={2}
+                            <div style={{ fontSize: 10, color: '#777169', margin: '6px 0 2px', letterSpacing: '0.02em' }}>
+                              3. 硬规则（只读判定，一行一条；不通过拦截）
+                            </div>
+                            <Input.TextArea
+                              value={(n.hard_rules || []).join('\n')}
+                              rows={2}
                               placeholder="如: doc.total_amount > 0"
                               style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, marginBottom: 4 }}
-                              disabled={isLocked(selected, dangerMode)}
+                              disabled={locked}
                               onChange={e => {
                                 const a = [...nextEdges];
                                 const rules = e.target.value.split('\n').map(s => s.trim()).filter(Boolean);
-                                a[i] = {...a[i], hard_rules: rules.length ? rules : undefined};
+                                a[i] = { ...a[i], hard_rules: rules.length ? rules : undefined };
                                 setNextEdges(a);
                               }}
                             />
-                            <div style={{ fontSize: 10, color: '#888', margin: '4px 0 2px' }}>④ 钩子脚本（commit 前副作用；--- 分隔多段）</div>
-                            <Input.TextArea value={(n.hooks || []).join('\n---\n')} rows={3}
+                            <div style={{ fontSize: 10, color: '#777169', margin: '6px 0 2px', letterSpacing: '0.02em' }}>
+                              4. 钩子脚本（commit 前副作用；--- 分隔多段）
+                            </div>
+                            <Input.TextArea
+                              value={(n.hooks || []).join('\n---\n')}
+                              rows={3}
                               placeholder={`for line in lines:\n  insert("inventory", {...})`}
                               style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}
-                              disabled={isLocked(selected, dangerMode)}
+                              disabled={locked}
                               onChange={e => {
                                 const a = [...nextEdges];
                                 const hks = e.target.value.split(/\n---\n/).map(s => s.trim()).filter(Boolean);
-                                a[i] = {...a[i], hooks: hks.length ? hks : undefined};
+                                a[i] = { ...a[i], hooks: hks.length ? hks : undefined };
                                 setNextEdges(a);
                               }}
                             />
                           </div>
                         ))}
-                        {!isLocked(selected, dangerMode) && (
-                          <Button block size="small" icon={<PlusOutlined />}
-                            onClick={() => setNextEdges([...nextEdges, { to: '', label: '' }])}>
+                        {!locked && (
+                          <Button block size="small" icon={<PlusOutlined />} onClick={() => setNextEdges([...nextEdges, { to: '', label: '' }])}>
                             加出边
                           </Button>
                         )}
                       </div>
                     </Form.Item>
-                    <Form.Item name="hard_rules" label="节点级硬规则（任何动作都查；可选）"
-                      help={<span style={{ fontSize: 10 }}>跟出边的硬规则区分：节点级永远查，出边级只查这条边</span>}>
+                    <Form.Item
+                      name="hard_rules"
+                      label="节点级硬规则（任何动作都查；可选）"
+                      help={<span style={{ fontSize: 10, color: '#777169' }}>
+                        跟出边的硬规则区分：节点级永远查，出边级只查这条边
+                      </span>}
+                    >
                       <Input.TextArea rows={2} style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }} />
                     </Form.Item>
-                    <Form.Item name="hooks" label="节点级钩子（进入此节点时执行；可选）"
-                      help={<span style={{ fontSize: 10 }}>commit 前运行的副作用脚本。多段用 --- 分隔。可写其他表（insert/update），失败则整单回滚。</span>}>
-                      <Input.TextArea rows={3} style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}
-                        placeholder={`for line in lines:\n    insert("inventory", {"material_id": line.material_id, ...})`} />
+                    <Form.Item
+                      name="hooks"
+                      label="节点级钩子（进入此节点时执行；可选）"
+                      help={<span style={{ fontSize: 10, color: '#777169' }}>
+                        commit 前运行的副作用脚本。多段用 --- 分隔。可写其他表，失败则整单回滚。
+                      </span>}
+                    >
+                      <Input.TextArea
+                        rows={3}
+                        style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}
+                        placeholder={`for line in lines:\n    insert("inventory", {"material_id": line.material_id, ...})`}
+                      />
                     </Form.Item>
-                    <Form.Item name="custom_html" label="自定义HTML"><Input.TextArea rows={2} /></Form.Item>
+                    <Form.Item name="custom_html" label="自定义 HTML"><Input.TextArea rows={2} /></Form.Item>
                     <Space>
                       <Form.Item name="is_initial" valuePropName="checked" noStyle>
-                        <label><input type="checkbox" /> 起始</label>
+                        <label style={{ fontSize: 13, color: '#4e4e4e' }}><input type="checkbox" /> 起始</label>
                       </Form.Item>
                       <Form.Item name="is_terminal" valuePropName="checked" noStyle>
-                        <label><input type="checkbox" /> 终止</label>
+                        <label style={{ fontSize: 13, color: '#4e4e4e' }}><input type="checkbox" /> 终止</label>
                       </Form.Item>
                     </Space>
                   </Form>
-                  {!isLocked(selected, dangerMode) && (
-                    <Space style={{ marginTop: 12, width: '100%', justifyContent: 'space-between' }}>
+                  {!locked && (
+                    <Space style={{ marginTop: 14, width: '100%', justifyContent: 'space-between' }}>
                       <Popconfirm title="删除节点？" onConfirm={deleteNode}>
                         <Button size="small" danger icon={<DeleteOutlined />}>删除节点</Button>
                       </Popconfirm>
@@ -637,35 +804,70 @@ export default function FlowEditor() {
               label: <span><RobotOutlined /> AI 助手</span>,
               children: (
                 <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 200px)' }}>
-                  <Card size="small" style={{ flex: 1, overflow: 'auto', borderRadius: 8, marginBottom: 8 }} styles={{ body: { padding: 10 } }}>
+                  <Card
+                    size="small"
+                    style={{
+                      flex: 1, overflow: 'auto', borderRadius: 12, marginBottom: 10,
+                      boxShadow: CARD_SHADOW, border: 'none',
+                    }}
+                    styles={{ body: { padding: 12 } }}
+                  >
                     {chatMessages.length === 0 && (
-                      <div style={{ textAlign: 'center', padding: 40, color: '#999', fontSize: 12 }}>
-                        <RobotOutlined style={{ fontSize: 28, marginBottom: 10 }} /><br/>
-                        让 Agent 帮你改流程<br/>
-                        <span style={{ fontSize: 10 }}>"给凭证录入加金额&gt;0规则" / "fork 凭证流程"</span>
+                      <div style={{ textAlign: 'center', padding: 40, color: '#777169', fontSize: 12 }}>
+                        <div style={{
+                          width: 52, height: 52, margin: '0 auto 12px',
+                          borderRadius: 14, background: '#f5f2ef',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          <RobotOutlined style={{ fontSize: 24, color: '#4e4e4e' }} />
+                        </div>
+                        <div style={{ fontSize: 14, fontWeight: 300, color: '#000', marginBottom: 4 }}>
+                          让 Agent 帮你改流程
+                        </div>
+                        <span style={{ fontSize: 11 }}>
+                          "给凭证录入加金额&gt;0规则" / "fork 凭证流程"
+                        </span>
                       </div>
                     )}
-                    {chatMessages.map((m, i) => (
-                      <div key={i} style={{
-                        padding: '6px 10px', margin: '4px 0', borderRadius: 6, fontSize: 12,
-                        background: m.role === 'user' ? '#1a1a2e' : '#f5f5f5',
-                        color: m.role === 'user' ? '#fff' : '#333',
-                        whiteSpace: 'pre-wrap',
-                      }}>
-                        {m.content}
-                        {m.tools?.length > 0 && (
-                          <div style={{ marginTop: 4, fontSize: 9, opacity: 0.6 }}>
-                            工具: {m.tools.map(t => t.tool).join(', ')}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    {chatLoading && <Spin size="small" style={{ display: 'block', margin: 8 }} />}
+                    {chatMessages.map((m, i) => {
+                      const isUser = m.role === 'user';
+                      return (
+                        <div
+                          key={i}
+                          style={{
+                            padding: '8px 12px', margin: '6px 0',
+                            borderRadius: 12, fontSize: 12,
+                            background: isUser ? '#000' : '#ffffff',
+                            color: isUser ? '#fff' : '#000',
+                            boxShadow: isUser ? 'none' : 'rgba(0,0,0,0.06) 0px 0px 0px 1px',
+                            whiteSpace: 'pre-wrap',
+                            letterSpacing: '0.01em',
+                          }}
+                        >
+                          {m.content}
+                          {m.tools?.length > 0 && (
+                            <div style={{
+                              marginTop: 4, fontSize: 10,
+                              opacity: 0.65, letterSpacing: '0.02em',
+                            }}>
+                              工具: {m.tools.map(t => t.tool).join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {chatLoading && <Spin size="small" style={{ display: 'block', margin: 10 }} />}
                     <div ref={chatEndRef} />
                   </Card>
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <Input size="small" value={chatInput} onChange={e => setChatInput(e.target.value)}
-                      onPressEnter={sendChat} placeholder="跟 Agent 说..." />
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <Input
+                      size="small"
+                      value={chatInput}
+                      onChange={e => setChatInput(e.target.value)}
+                      onPressEnter={sendChat}
+                      placeholder="跟 Agent 说..."
+                      style={{ borderRadius: 10 }}
+                    />
                     <Button size="small" type="primary" icon={<SendOutlined />} onClick={sendChat} loading={chatLoading} />
                   </div>
                 </div>
@@ -678,8 +880,12 @@ export default function FlowEditor() {
       {/* === 新建流程弹窗 === */}
       <Modal title="新建空白流程" open={createModal} onCancel={() => setCreateModal(false)} onOk={createWorkflow}>
         <Form form={createForm} layout="vertical">
-          <Form.Item name="doc_type" label="标识符（英文）" rules={[{ required: true }]}
-            help="流程的英文标签，如 EXPENSE_REPORT。已存在的会自动加后缀">
+          <Form.Item
+            name="doc_type"
+            label="标识符（英文）"
+            rules={[{ required: true }]}
+            help="流程的英文标签，如 EXPENSE_REPORT。已存在的会自动加后缀"
+          >
             <Input placeholder="EXPENSE_REPORT" />
           </Form.Item>
           <Form.Item name="name" label="流程名（中文）" rules={[{ required: true }]}>
@@ -705,46 +911,82 @@ export default function FlowEditor() {
           </Form.Item>
           <Space>
             <Form.Item name="is_initial" valuePropName="checked" noStyle>
-              <label><input type="checkbox" /> 起始节点</label>
+              <label style={{ fontSize: 13, color: '#4e4e4e' }}><input type="checkbox" /> 起始节点</label>
             </Form.Item>
             <Form.Item name="is_terminal" valuePropName="checked" noStyle>
-              <label><input type="checkbox" /> 终止节点</label>
+              <label style={{ fontSize: 13, color: '#4e4e4e' }}><input type="checkbox" /> 终止节点</label>
             </Form.Item>
           </Space>
         </Form>
       </Modal>
 
       {/* === 修改记录弹窗 === */}
-      <Modal title={<span><HistoryOutlined /> 修改记录 — {selected?.name}</span>}
-        open={auditModal} onCancel={() => setAuditModal(false)} footer={null} width={780}>
+      <Modal
+        title={<span><HistoryOutlined /> 修改记录 — {selected?.name}</span>}
+        open={auditModal}
+        onCancel={() => setAuditModal(false)}
+        footer={null}
+        width={780}
+      >
         {auditLogs.length === 0 ? (
           <Empty description="无记录" />
         ) : (
           <div style={{ maxHeight: 500, overflow: 'auto' }}>
-            {auditLogs.map(l => (
-              <div key={l.id} style={{
-                padding: 10, marginBottom: 8, borderRadius: 6,
-                background: l.danger_mode ? '#fff1f0' : '#fafafa',
-                border: l.danger_mode ? '1px solid #ffa39e' : '1px solid #f0f0f0',
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Space>
-                    <Tag color={({
-                      create: 'green', delete: 'red', fork: 'blue', publish: 'green',
-                      disable: 'orange', enable: 'green', edit_states: 'cyan',
-                      change_group: 'purple', save_positions: 'default', fork_source: 'blue',
-                    })[l.change_type] || 'default'}>{l.change_type}</Tag>
-                    {l.danger_mode && <Tag color="red">🚨 危险修改</Tag>}
-                    <span style={{ fontSize: 12, color: '#888' }}>{l.by}</span>
-                  </Space>
-                  <span style={{ fontSize: 11, color: '#999' }}>
-                    {l.timestamp?.replace('T', ' ').slice(0, 19)}
-                  </span>
+            {auditLogs.map(l => {
+              const typeColor = {
+                create:        { bg: '#ebf5ee', color: '#1f8f3a' },
+                delete:        { bg: '#fdecea', color: '#b42318' },
+                fork:          { bg: '#eaf1fb', color: '#1f5aa8' },
+                fork_source:   { bg: '#eaf1fb', color: '#1f5aa8' },
+                publish:       { bg: '#ebf5ee', color: '#1f8f3a' },
+                disable:       { bg: '#fbf5e4', color: '#b8860b' },
+                enable:        { bg: '#ebf5ee', color: '#1f8f3a' },
+                edit_states:   { bg: '#e7f3f5', color: '#0e7490' },
+                change_group:  { bg: '#f1ebfa', color: '#6b46c1' },
+                save_positions:{ bg: '#f5f2ef', color: '#4e4e4e' },
+              }[l.change_type] || { bg: '#f5f2ef', color: '#4e4e4e' };
+              return (
+                <div
+                  key={l.id}
+                  style={{
+                    padding: 12, marginBottom: 10, borderRadius: 10,
+                    background: l.danger_mode ? '#fdecea' : 'rgba(245,242,239,0.5)',
+                    border: l.danger_mode
+                      ? '1px solid #f5c6ce'
+                      : '1px solid rgba(0,0,0,0.05)',
+                    borderLeft: l.danger_mode ? '4px solid #b42318' : undefined,
+                  }}
+                >
+                  <div style={{
+                    display: 'flex', justifyContent: 'space-between', marginBottom: 6,
+                    alignItems: 'center', flexWrap: 'wrap', gap: 6,
+                  }}>
+                    <Space size={6}>
+                      <Pill bg={typeColor.bg} color={typeColor.color}>{l.change_type}</Pill>
+                      {l.danger_mode && <Pill bg="#fff" color="#b42318">危险修改</Pill>}
+                      <span style={{ fontSize: 12, color: '#4e4e4e', letterSpacing: '0.01em' }}>{l.by}</span>
+                    </Space>
+                    <span style={{
+                      fontSize: 11, color: '#bfbbb5',
+                      fontFamily: 'ui-monospace, monospace',
+                    }}>
+                      {l.timestamp?.replace('T', ' ').slice(0, 19)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#000', letterSpacing: '0.01em' }}>
+                    {l.summary || '(无描述)'}
+                  </div>
+                  {l.ip && (
+                    <div style={{
+                      fontSize: 10, color: '#bfbbb5', marginTop: 4,
+                      fontFamily: 'ui-monospace, monospace',
+                    }}>
+                      IP: {l.ip}
+                    </div>
+                  )}
                 </div>
-                <div style={{ fontSize: 12 }}>{l.summary || '(无描述)'}</div>
-                {l.ip && <div style={{ fontSize: 10, color: '#aaa', marginTop: 4 }}>IP: {l.ip}</div>}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Modal>

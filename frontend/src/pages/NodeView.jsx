@@ -5,12 +5,24 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Tag, Button, Space, Empty, Spin } from 'antd';
+import { Card, Button, Space, Empty, Spin } from 'antd';
 import { ArrowLeftOutlined, FileSearchOutlined } from '@ant-design/icons';
 import { query, getTransitions } from '../api';
 import api from '../api';
 import DocEditor from '../components/DocEditor';
 import ReportDrawer from '../components/ReportDrawer';
+
+const CARD_SHADOW =
+  'rgba(0,0,0,0.06) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 1px 2px, rgba(0,0,0,0.04) 0px 2px 4px';
+
+function Pill({ bg, color, children }) {
+  return (
+    <span style={{
+      display: 'inline-block', padding: '2px 10px', borderRadius: 4,
+      background: bg, color, fontSize: 12, fontWeight: 500, letterSpacing: '0.02em',
+    }}>{children}</span>
+  );
+}
 
 const tableMap = {
   SALES_ORDER: 'sales_order', PURCHASE_ORDER: 'purchase_order',
@@ -40,7 +52,6 @@ export default function NodeView() {
   const isInitial = stateInfo?.is_initial;
 
   // 报表云朵配置（按 doc_type）
-  // VOUCHER 报表已搬到流程图节点（WorkflowActions），此处只保留 AR
   const REPORT_CONFIG = {
     ACCOUNTS_RECEIVABLE: {
       states: new Set(['COLLECTING', 'VOUCHER_PROCESSED', 'CLOSED']),
@@ -63,12 +74,9 @@ export default function NodeView() {
   const reportCfg = REPORT_CONFIG[workflow?.doc_type];
   const showReports = reportCfg && reportCfg.states.has(stateCode);
   const reports = reportCfg?.reports || [];
-  const openReport = (key, name) => {
-    setReportDrawer({ open: true, key, name });
-  };
+  const openReport = (key, name) => setReportDrawer({ open: true, key, name });
 
   const loadData = async () => {
-    // 加载流程定义
     const { data: wfs } = await api.get('/workflows');
     const wf = wfs.find(w => w.id === Number(workflowId));
     if (!wf) { navigate('/actions'); return; }
@@ -77,18 +85,15 @@ export default function NodeView() {
     const state = wf.states?.find(s => s.code === stateCode);
     setStateInfo(state || { code: stateCode, name: stateCode });
 
-    // 加载用户可用操作（当前 state 的 next 列表，按角色过滤）
     const { data: allActions } = await getTransitions();
     const nodeActions = allActions.filter(a => a.doc_type === wf.doc_type && a.from_state === stateCode);
     setActions(nodeActions);
 
-    // 节点描述和自定义HTML 直接来自 state
     if (state) {
       if (state.custom_html) setCustomHtml(state.custom_html);
       if (state.description) setNodePrompt(state.description);
     }
 
-    // 加载该状态的单据
     const table = tableMap[wf.doc_type];
     if (table) {
       try {
@@ -118,13 +123,17 @@ export default function NodeView() {
   if (customHtml) {
     return (
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/actions/${workflowId}`)}>返回</Button>
-          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
-            {stateInfo?.name} — {workflow?.name}
+          <h2 style={{
+            margin: 0, fontSize: 22, fontWeight: 300,
+            letterSpacing: '-0.01em', color: '#000', lineHeight: 1.15,
+          }}>
+            {stateInfo?.name}
+            <span style={{ color: '#777169', fontWeight: 300 }}> — {workflow?.name}</span>
           </h2>
         </div>
-        <Card style={{ borderRadius: 12 }}>
+        <Card style={{ borderRadius: 16, boxShadow: CARD_SHADOW, border: 'none' }}>
           <div ref={htmlRef} />
         </Card>
       </div>
@@ -134,59 +143,106 @@ export default function NodeView() {
   // === 通用页面 ===
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        marginBottom: 16, flexWrap: 'wrap',
+      }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/actions/${workflowId}`)}>返回</Button>
-        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: '#1a1a2e' }}>
+        <h2 style={{
+          margin: 0, fontSize: 22, fontWeight: 300,
+          letterSpacing: '-0.01em', color: '#000', lineHeight: 1.15,
+        }}>
           {stateInfo?.name}
         </h2>
-        <Tag color="blue">{workflow?.name}</Tag>
-        <Tag>{docs.length} 条</Tag>
-        {isInitial && <Tag color="gold">起始</Tag>}
+        <Pill bg="#eaf1fb" color="#1f5aa8">{workflow?.name}</Pill>
+        <Pill bg="#f5f2ef" color="#4e4e4e">{docs.length} 条</Pill>
+        {isInitial && <Pill bg="#fbf5e4" color="#b8860b">起始</Pill>}
       </div>
 
       {showReports && (
-        <Card size="small" style={{ borderRadius: 12, marginBottom: 12 }}
-          title={<span><FileSearchOutlined /> 相关报表</span>}>
+        <Card
+          size="small"
+          style={{ borderRadius: 16, marginBottom: 14, boxShadow: CARD_SHADOW, border: 'none' }}
+          title={(
+            <span style={{ fontSize: 13, fontWeight: 500, letterSpacing: '0.01em' }}>
+              <FileSearchOutlined style={{ color: '#777169', marginRight: 6 }} />
+              相关报表
+            </span>
+          )}
+        >
           <Space wrap size={[8, 8]}>
             {reports.map(r => (
-              <Button key={r.key} size="small" style={{ borderRadius: 14 }}
-                onClick={() => openReport(r.key, r.name)}>{r.name}</Button>
+              <Button
+                key={r.key}
+                size="small"
+                style={{ borderRadius: 9999, fontSize: 12 }}
+                onClick={() => openReport(r.key, r.name)}
+              >
+                {r.name}
+              </Button>
             ))}
           </Space>
         </Card>
       )}
 
       {docs.length === 0 ? (
-        <Card style={{ borderRadius: 12 }}>
-          <Empty description={isInitial ? `当前无单据 — 请在流程页点击【发起新${workflow?.name || '流程'}】` : "当前无单据在此节点"} />
+        <Card style={{ borderRadius: 16, boxShadow: CARD_SHADOW, border: 'none' }}>
+          <Empty
+            description={isInitial
+              ? `当前无单据 — 请在流程页点击【发起新${workflow?.name || '流程'}】`
+              : '当前无单据在此节点'}
+          />
         </Card>
       ) : (
-        <div style={{ display: 'flex', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 14 }}>
           {/* 左侧：单据列表 */}
-          <Card size="small" style={{ width: 220, flexShrink: 0, borderRadius: 12, height: 'fit-content' }}
-            title="单据">
+          <Card
+            size="small"
+            style={{
+              width: 240, flexShrink: 0,
+              borderRadius: 16, height: 'fit-content',
+              boxShadow: CARD_SHADOW, border: 'none',
+            }}
+            title={<span style={{ fontSize: 13, fontWeight: 500, letterSpacing: '0.01em' }}>单据</span>}
+            styles={{ body: { padding: 8 } }}
+          >
             <div style={{ maxHeight: 600, overflow: 'auto' }}>
-              {docs.map(d => (
-                <div key={d.id}
-                  style={{
-                    padding: '8px 10px', borderRadius: 6, marginBottom: 4, cursor: 'pointer',
-                    background: selectedDocId === d.id ? '#1a1a2e' : '#fafafa',
-                    color: selectedDocId === d.id ? '#fff' : '#333',
-                  }}
-                  onClick={() => setSelectedDocId(d.id)}>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>
-                    #{d.id}
-                    {(d.order_number || d.voucher_number || d.shipment_number || d.receipt_number || d.contract_number || d.invoice_number || d.name) &&
-                      <span> · {(d.order_number || d.voucher_number || d.shipment_number || d.receipt_number || d.contract_number || d.invoice_number || d.name).slice(0, 15)}</span>
-                    }
-                  </div>
-                  {(d.total_amount != null || d.amount != null) && (
-                    <div style={{ fontSize: 11, opacity: 0.8 }}>
-                      {Number(d.total_amount ?? d.amount).toLocaleString()} {d.currency || ''}
+              {docs.map(d => {
+                const selected = selectedDocId === d.id;
+                const label = d.order_number || d.voucher_number || d.shipment_number
+                           || d.receipt_number || d.contract_number || d.invoice_number || d.name;
+                return (
+                  <div
+                    key={d.id}
+                    style={{
+                      padding: '10px 12px', borderRadius: 10, marginBottom: 4, cursor: 'pointer',
+                      background: selected ? '#000' : 'transparent',
+                      color: selected ? '#fff' : '#000',
+                      transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={e => { if (!selected) e.currentTarget.style.background = 'rgba(245, 242, 239, 0.6)'; }}
+                    onMouseLeave={e => { if (!selected) e.currentTarget.style.background = 'transparent'; }}
+                    onClick={() => setSelectedDocId(d.id)}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 500, letterSpacing: '0.01em' }}>
+                      <span style={{
+                        fontFamily: 'ui-monospace, monospace',
+                        opacity: selected ? 0.7 : 0.5,
+                        marginRight: 6,
+                      }}>#{d.id}</span>
+                      {label && label.slice(0, 15)}
                     </div>
-                  )}
-                </div>
-              ))}
+                    {(d.total_amount != null || d.amount != null) && (
+                      <div style={{
+                        fontSize: 11, marginTop: 2,
+                        color: selected ? 'rgba(255,255,255,0.75)' : '#777169',
+                      }}>
+                        {Number(d.total_amount ?? d.amount).toLocaleString()} {d.currency || ''}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </Card>
 

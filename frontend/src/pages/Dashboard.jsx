@@ -4,6 +4,73 @@ import { ShoppingCartOutlined, ShoppingOutlined, DollarOutlined, InboxOutlined }
 import { aggregate, query } from '../api';
 import { useAuth } from '../auth';
 
+// 降饱和状态色 —— 淡底 + 深字，克制可辨
+const STATUS_STYLE = {
+  DRAFT:            { bg: '#f5f2ef', color: '#4e4e4e' },
+  PENDING_APPROVAL: { bg: '#fbf5e4', color: '#b8860b' },
+  APPROVED:         { bg: '#ebf5ee', color: '#1f8f3a' },
+  IN_PROCUREMENT:   { bg: '#eaf1fb', color: '#1f5aa8' },
+  SHIPPED:          { bg: '#e7f3f5', color: '#0e7490' },
+  COMPLETED:        { bg: '#f5f5f5', color: '#4e4e4e' },
+  CANCELLED:        { bg: '#fdecea', color: '#b42318' },
+  ORDERED:          { bg: '#eaf1fb', color: '#1f5aa8' },
+};
+
+function StatusTag({ value }) {
+  const s = STATUS_STYLE[value] || { bg: '#f5f2ef', color: '#4e4e4e' };
+  return (
+    <span style={{
+      display: 'inline-block',
+      padding: '2px 10px',
+      borderRadius: 4,
+      background: s.bg,
+      color: s.color,
+      fontSize: 12,
+      fontWeight: 500,
+      letterSpacing: '0.02em',
+    }}>
+      {value}
+    </span>
+  );
+}
+
+// 统计卡片 —— 图标单色 + 暖石底圆角方块
+function Stat({ title, value, icon, precision }) {
+  return (
+    <Card
+      size="small"
+      style={{
+        borderRadius: 16,
+        boxShadow: 'rgba(0,0,0,0.06) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 1px 2px, rgba(0,0,0,0.04) 0px 2px 4px',
+      }}
+      styles={{ body: { padding: 20 } }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: 12,
+          background: '#f5f2ef', color: '#4e4e4e',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 18,
+        }}>{icon}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Statistic
+            title={<span style={{ fontSize: 12, color: '#777169', letterSpacing: '0.02em' }}>{title}</span>}
+            value={value ?? 0}
+            precision={precision}
+            valueStyle={{
+              fontSize: 24,
+              fontWeight: 300,
+              letterSpacing: '-0.01em',
+              color: '#000',
+              lineHeight: 1.1,
+            }}
+          />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   const [stats, setStats] = useState({});
   const [orders, setOrders] = useState([]);
@@ -34,44 +101,62 @@ export default function Dashboard() {
 
   if (loading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>;
 
-  const statusColors = { DRAFT: 'default', PENDING_APPROVAL: 'orange', APPROVED: 'green', IN_PROCUREMENT: 'blue', SHIPPED: 'cyan', COMPLETED: 'default', CANCELLED: 'red', ORDERED: 'blue' };
-
   return (
     <div>
-      <h2 style={{ fontSize: 20, fontWeight: 600, color: '#1a1a2e', marginBottom: 20 }}>
-        {user?.full_name}，欢迎回来
-      </h2>
+      {/* Hero —— Inter 300 whisper-thin */}
+      <div style={{ marginBottom: 28 }}>
+        <h2 style={{
+          fontSize: 28,
+          fontWeight: 300,
+          letterSpacing: '-0.01em',
+          color: '#000',
+          margin: 0,
+          lineHeight: 1.15,
+        }}>
+          {user?.full_name}
+          <span style={{ color: '#777169' }}>，欢迎回来</span>
+        </h2>
+        <div style={{ marginTop: 6, color: '#777169', fontSize: 13, letterSpacing: '0.01em' }}>
+          今日业务一览
+        </div>
+      </div>
+
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={12} lg={6}>
-          <Card size="small" style={{ borderRadius: 12 }}>
-            <Statistic title="销售订单" value={stats.soCount || 0} prefix={<ShoppingCartOutlined style={{ color: '#4dabf7' }} />} />
-          </Card>
+          <Stat title="销售订单" value={stats.soCount} icon={<ShoppingCartOutlined />} />
         </Col>
         <Col xs={12} lg={6}>
-          <Card size="small" style={{ borderRadius: 12 }}>
-            <Statistic title="销售总额" value={stats.soTotal || 0} prefix={<DollarOutlined style={{ color: '#51cf66' }} />} precision={0} />
-          </Card>
+          <Stat title="销售总额" value={stats.soTotal} icon={<DollarOutlined />} precision={0} />
         </Col>
         <Col xs={12} lg={6}>
-          <Card size="small" style={{ borderRadius: 12 }}>
-            <Statistic title="采购订单" value={stats.poCount || 0} prefix={<ShoppingOutlined style={{ color: '#ffa94d' }} />} />
-          </Card>
+          <Stat title="采购订单" value={stats.poCount} icon={<ShoppingOutlined />} />
         </Col>
         <Col xs={12} lg={6}>
-          <Card size="small" style={{ borderRadius: 12 }}>
-            <Statistic title="库存总量" value={stats.invQty || 0} prefix={<InboxOutlined style={{ color: '#845ef7' }} />} precision={0} />
-          </Card>
+          <Stat title="库存总量" value={stats.invQty} icon={<InboxOutlined />} precision={0} />
         </Col>
       </Row>
 
-      <Card title="最近销售订单" size="small" style={{ borderRadius: 12 }}>
-        <Table dataSource={orders} rowKey="id" size="small" pagination={false} columns={[
-          { title: '订单号', dataIndex: 'order_number' },
-          { title: '客户ID', dataIndex: 'customer_id' },
-          { title: '状态', dataIndex: 'status', render: v => <Tag color={statusColors[v]}>{v}</Tag> },
-          { title: '金额', dataIndex: 'total_amount', align: 'right', render: v => v != null ? Number(v).toLocaleString() : '-' },
-          { title: '日期', dataIndex: 'order_date' },
-        ]} />
+      <Card
+        title={<span style={{ fontSize: 16, fontWeight: 500, letterSpacing: '0.01em' }}>最近销售订单</span>}
+        size="small"
+        style={{
+          borderRadius: 16,
+          boxShadow: 'rgba(0,0,0,0.06) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 1px 2px, rgba(0,0,0,0.04) 0px 2px 4px',
+        }}
+      >
+        <Table
+          dataSource={orders}
+          rowKey="id"
+          size="small"
+          pagination={false}
+          columns={[
+            { title: '订单号', dataIndex: 'order_number' },
+            { title: '客户ID', dataIndex: 'customer_id', width: 100 },
+            { title: '状态', dataIndex: 'status', width: 140, render: v => <StatusTag value={v} /> },
+            { title: '金额', dataIndex: 'total_amount', align: 'right', render: v => v != null ? Number(v).toLocaleString() : '—' },
+            { title: '日期', dataIndex: 'order_date', width: 130 },
+          ]}
+        />
       </Card>
     </div>
   );

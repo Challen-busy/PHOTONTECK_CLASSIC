@@ -48,23 +48,61 @@ const TABLE_META = {
   workflow_log:       { cn: '操作日志',     desc: '所有数据修改的完整审计流水',   icon: <LogOutlined />,         cat: 'sys' },
 };
 
+// 降饱和的分类色调
 const CATEGORIES = [
-  { key: 'master', label: '主数据',  hint: '业务的基石，相对稳定',        color: '#4dabf7', bg: '#e7f5ff' },
-  { key: 'txn',    label: '交易单据', hint: '订单流转，业务的脉搏',        color: '#51cf66', bg: '#ebfbee' },
-  { key: 'wms',    label: '仓储',    hint: '货物的进、存、出',            color: '#ffa94d', bg: '#fff4e6' },
-  { key: 'fin',    label: '财务',    hint: '凭证、应收应付、信用与汇率',  color: '#f0a020', bg: '#fff9db' },
-  { key: 'crm',    label: 'CRM',     hint: '客户关系与项目跟踪',          color: '#845ef7', bg: '#f3f0ff' },
-  { key: 'sys',    label: '系统',    hint: '只增不改的审计现场',          color: '#868e96', bg: '#f1f3f5' },
+  { key: 'master', label: '主数据',  hint: '业务的基石，相对稳定',        color: '#4e4e4e', bg: '#f5f2ef' },
+  { key: 'txn',    label: '交易单据', hint: '订单流转，业务的脉搏',        color: '#1f5aa8', bg: '#eaf1fb' },
+  { key: 'wms',    label: '仓储',    hint: '货物的进、存、出',            color: '#b8860b', bg: '#fbf5e4' },
+  { key: 'fin',    label: '财务',    hint: '凭证、应收应付、信用与汇率',  color: '#6b46c1', bg: '#f1ebfa' },
+  { key: 'crm',    label: 'CRM',     hint: '客户关系与项目跟踪',          color: '#1f8f3a', bg: '#ebf5ee' },
+  { key: 'sys',    label: '系统',    hint: '只增不改的审计现场',          color: '#777169', bg: '#f5f5f5' },
 ];
 
-const STATUS_COLORS = {
-  DRAFT: 'default', PENDING_APPROVAL: 'orange', APPROVED: 'green',
-  IN_PROCUREMENT: 'blue', SHIPPED: 'cyan', COMPLETED: '#999',
-  CANCELLED: 'red', ORDERED: 'blue', RECEIVED: 'green',
-  AVAILABLE: 'green', RESERVED: 'orange', DAMAGED: 'red',
-  PENDING: 'orange', POSTED: 'green', REVERSED: 'red',
-  ACTIVE: 'green', OPEN: 'green', CLOSED: 'default',
+// 状态 —— 淡底 + 深字的克制方案
+const STATUS_STYLE = {
+  DRAFT:            { bg: '#f5f2ef', color: '#4e4e4e' },
+  PENDING_APPROVAL: { bg: '#fbf5e4', color: '#b8860b' },
+  PENDING:          { bg: '#fbf5e4', color: '#b8860b' },
+  PENDING_FINANCE:  { bg: '#fbf5e4', color: '#b8860b' },
+  APPROVED:         { bg: '#ebf5ee', color: '#1f8f3a' },
+  IN_PROCUREMENT:   { bg: '#eaf1fb', color: '#1f5aa8' },
+  ORDERED:          { bg: '#eaf1fb', color: '#1f5aa8' },
+  SHIPPED:          { bg: '#e7f3f5', color: '#0e7490' },
+  COMPLETED:        { bg: '#f5f5f5', color: '#4e4e4e' },
+  CANCELLED:        { bg: '#fdecea', color: '#b42318' },
+  RECEIVED:         { bg: '#ebf5ee', color: '#1f8f3a' },
+  AVAILABLE:        { bg: '#ebf5ee', color: '#1f8f3a' },
+  RESERVED:         { bg: '#fbf5e4', color: '#b8860b' },
+  DAMAGED:          { bg: '#fdecea', color: '#b42318' },
+  POSTED:           { bg: '#ebf5ee', color: '#1f8f3a' },
+  REVERSED:         { bg: '#fdecea', color: '#b42318' },
+  ACTIVE:           { bg: '#ebf5ee', color: '#1f8f3a' },
+  OPEN:             { bg: '#ebf5ee', color: '#1f8f3a' },
+  CLOSED:           { bg: '#f5f5f5', color: '#4e4e4e' },
+  AUDITED:          { bg: '#eaf1fb', color: '#1f5aa8' },
+  RECONCILED:       { bg: '#e7f3f5', color: '#0e7490' },
+  PAID:             { bg: '#ebf5ee', color: '#1f8f3a' },
+  OVERDUE:          { bg: '#fdecea', color: '#b42318' },
+  BAD_DEBT:         { bg: '#f5f5f5', color: '#1a1a1a' },
 };
+
+function StatusPill({ value }) {
+  const s = STATUS_STYLE[value] || { bg: '#f5f2ef', color: '#4e4e4e' };
+  return (
+    <span style={{
+      display: 'inline-block',
+      padding: '2px 10px',
+      borderRadius: 4,
+      background: s.bg,
+      color: s.color,
+      fontSize: 12,
+      fontWeight: 500,
+      letterSpacing: '0.02em',
+    }}>
+      {value}
+    </span>
+  );
+}
 
 const DOC_TYPE_MAP = {
   sales_order: 'SALES_ORDER', purchase_order: 'PURCHASE_ORDER',
@@ -74,6 +112,9 @@ const DOC_TYPE_MAP = {
   accounts_receivable: 'ACCOUNTS_RECEIVABLE',
   accounts_payable: 'ACCOUNTS_PAYABLE',
 };
+
+const CARD_SHADOW =
+  'rgba(0,0,0,0.06) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 1px 2px, rgba(0,0,0,0.04) 0px 2px 4px';
 
 // ---------- 落地页：表选择 ----------
 function DataLanding({ onPick }) {
@@ -100,11 +141,19 @@ function DataLanding({ onPick }) {
 
   return (
     <div>
-      <div style={{ marginBottom: 24 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 600, color: '#1a1a2e', margin: 0 }}>
+      {/* Hero */}
+      <div style={{ marginBottom: 32 }}>
+        <h2 style={{
+          fontSize: 28,
+          fontWeight: 300,
+          letterSpacing: '-0.01em',
+          color: '#000',
+          margin: 0,
+          lineHeight: 1.15,
+        }}>
           数据
         </h2>
-        <div style={{ color: '#868e96', marginTop: 6, fontSize: 13 }}>
+        <div style={{ color: '#777169', marginTop: 6, fontSize: 13, letterSpacing: '0.01em' }}>
           一群人按规则操作的一张共享表格 · 选一张看看
         </div>
       </div>
@@ -113,15 +162,16 @@ function DataLanding({ onPick }) {
         const items = tables.filter(t => TABLE_META[t].cat === cat.key);
         if (items.length === 0) return null;
         return (
-          <div key={cat.key} style={{ marginBottom: 28 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 12 }}>
+          <div key={cat.key} style={{ marginBottom: 32 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 14 }}>
               <span style={{
-                fontSize: 14, fontWeight: 600, color: cat.color,
-                padding: '2px 10px', background: cat.bg, borderRadius: 6,
+                fontSize: 12, fontWeight: 500, color: cat.color,
+                padding: '3px 10px', background: cat.bg, borderRadius: 4,
+                letterSpacing: '0.02em',
               }}>
                 {cat.label}
               </span>
-              <span style={{ fontSize: 12, color: '#adb5bd' }}>{cat.hint}</span>
+              <span style={{ fontSize: 12, color: '#777169', letterSpacing: '0.01em' }}>{cat.hint}</span>
             </div>
             <Row gutter={[16, 16]}>
               {items.map(t => {
@@ -133,15 +183,17 @@ function DataLanding({ onPick }) {
                       hoverable
                       onClick={() => onPick(t)}
                       style={{
-                        borderRadius: 12, cursor: 'pointer',
-                        borderTop: `3px solid ${cat.color}`,
+                        borderRadius: 16,
+                        cursor: 'pointer',
                         height: '100%',
+                        boxShadow: CARD_SHADOW,
+                        border: 'none',
                       }}
-                      styles={{ body: { padding: 16 } }}
+                      styles={{ body: { padding: 18 } }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
                         <div style={{
-                          width: 32, height: 32, borderRadius: 8,
+                          width: 36, height: 36, borderRadius: 10,
                           background: cat.bg, color: cat.color,
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                           fontSize: 16,
@@ -149,26 +201,35 @@ function DataLanding({ onPick }) {
                           {meta.icon}
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 15, fontWeight: 600, color: '#1a1a2e' }}>
+                          <div style={{ fontSize: 15, fontWeight: 500, color: '#000', letterSpacing: '0.01em' }}>
                             {meta.cn}
                           </div>
-                          <div style={{ fontSize: 11, color: '#adb5bd', fontFamily: 'ui-monospace, monospace' }}>
+                          <div style={{ fontSize: 11, color: '#bfbbb5', fontFamily: 'ui-monospace, monospace' }}>
                             {t}
                           </div>
                         </div>
                       </div>
-                      <div style={{ fontSize: 12, color: '#868e96', minHeight: 32, lineHeight: '16px' }}>
+                      <div style={{
+                        fontSize: 12,
+                        color: '#777169',
+                        minHeight: 32,
+                        lineHeight: '16px',
+                        letterSpacing: '0.01em',
+                      }}>
                         {meta.desc}
                       </div>
                       <div style={{
-                        marginTop: 12, paddingTop: 10,
-                        borderTop: '1px dashed #f0f0f0',
+                        marginTop: 14, paddingTop: 12,
+                        borderTop: '1px solid rgba(0,0,0,0.05)',
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                       }}>
-                        <span style={{ fontSize: 12, color: '#495057' }}>
-                          {c == null ? '—' : <><strong>{c.toLocaleString()}</strong> 条</>}
+                        <span style={{ fontSize: 12, color: '#4e4e4e' }}>
+                          {c == null
+                            ? <span style={{ color: '#bfbbb5' }}>—</span>
+                            : <><strong style={{ fontWeight: 500 }}>{c.toLocaleString()}</strong>
+                                <span style={{ color: '#777169' }}> 条</span></>}
                         </span>
-                        <ArrowRightOutlined style={{ color: cat.color, fontSize: 12 }} />
+                        <ArrowRightOutlined style={{ color: '#777169', fontSize: 12 }} />
                       </div>
                     </Card>
                   </Col>
@@ -259,13 +320,13 @@ function DataTableView({ table, onBack }) {
         filters, onFilter,
         align: isNum && k !== 'id' ? 'right' : undefined,
         render: (v) => {
-          if (v == null) return <span style={{ color: '#ced4da' }}>—</span>;
-          if (k === 'status') return <Tag color={STATUS_COLORS[v] || 'default'}>{v}</Tag>;
+          if (v == null) return <span style={{ color: '#bfbbb5' }}>—</span>;
+          if (k === 'status') return <StatusPill value={v} />;
           if (typeof v === 'number' && (k.includes('amount') || k.includes('price') ||
               k.includes('cost') || k.includes('quantity') || k.includes('total'))) {
             return Number(v).toLocaleString();
           }
-          if (typeof v === 'object') return <span style={{ color: '#868e96' }}>{JSON.stringify(v).slice(0, 60)}</span>;
+          if (typeof v === 'object') return <span style={{ color: '#777169' }}>{JSON.stringify(v).slice(0, 60)}</span>;
           if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v)) return v.slice(0, 19).replace('T', ' ');
           return String(v);
         },
@@ -318,21 +379,43 @@ function DataTableView({ table, onBack }) {
       <Breadcrumb
         style={{ marginBottom: 12 }}
         items={[
-          { title: <a onClick={onBack}><HomeOutlined /> 数据</a> },
-          { title: <span><Tag color={cat.color} style={{ marginRight: 6 }}>{cat.label}</Tag>{meta.cn}</span> },
+          { title: <a onClick={onBack} style={{ color: '#4e4e4e' }}><HomeOutlined /> 数据</a> },
+          { title: (
+            <span style={{ color: '#000' }}>
+              <span style={{
+                display: 'inline-block',
+                padding: '1px 8px',
+                marginRight: 8,
+                fontSize: 11,
+                fontWeight: 500,
+                background: cat.bg,
+                color: cat.color,
+                borderRadius: 4,
+                letterSpacing: '0.02em',
+              }}>
+                {cat.label}
+              </span>
+              {meta.cn}
+            </span>
+          ) },
         ]}
       />
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        marginBottom: 16, flexWrap: 'wrap', gap: 12,
+      }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{
-              width: 36, height: 36, borderRadius: 8,
+              width: 40, height: 40, borderRadius: 12,
               background: cat.bg, color: cat.color,
               display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18,
             }}>{meta.icon}</div>
             <div>
-              <div style={{ fontSize: 18, fontWeight: 600, color: '#1a1a2e' }}>{meta.cn}</div>
-              <div style={{ fontSize: 12, color: '#adb5bd', fontFamily: 'ui-monospace, monospace' }}>
+              <div style={{ fontSize: 22, fontWeight: 300, letterSpacing: '-0.01em', color: '#000', lineHeight: 1.15 }}>
+                {meta.cn}
+              </div>
+              <div style={{ fontSize: 12, color: '#bfbbb5', fontFamily: 'ui-monospace, monospace', marginTop: 2 }}>
                 {table} · {total.toLocaleString()} 条
               </div>
             </div>
@@ -368,7 +451,10 @@ function DataTableView({ table, onBack }) {
         </Space>
       </div>
 
-      <Card style={{ borderRadius: 12 }} styles={{ body: { padding: 0 } }}>
+      <Card
+        style={{ borderRadius: 16, boxShadow: CARD_SHADOW, border: 'none' }}
+        styles={{ body: { padding: 0 } }}
+      >
         <Table
           dataSource={data}
           columns={visibleCols}
@@ -384,19 +470,32 @@ function DataTableView({ table, onBack }) {
       </Card>
 
       <Drawer
-        title={<span><Tag color={cat.color}>{meta.cn}</Tag> 详情</span>}
+        title={(
+          <span>
+            <span style={{
+              display: 'inline-block', padding: '1px 8px', marginRight: 8,
+              fontSize: 11, fontWeight: 500,
+              background: cat.bg, color: cat.color,
+              borderRadius: 4, letterSpacing: '0.02em',
+            }}>{cat.label}</span>
+            <span style={{ fontWeight: 500, letterSpacing: '0.01em' }}>{meta.cn} 详情</span>
+          </span>
+        )}
         open={!!detailRow}
         onClose={() => setDetailRow(null)}
         width={520}
       >
         {detailRow && Object.entries(detailRow).map(([k, v]) => (
-          <div key={k} style={{ display: 'flex', padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
-            <span style={{ width: 160, color: '#868e96', flexShrink: 0, fontSize: 13 }}>{k}</span>
-            <span style={{ wordBreak: 'break-all', fontSize: 13 }}>
+          <div key={k} style={{
+            display: 'flex', padding: '10px 0',
+            borderBottom: '1px solid rgba(0,0,0,0.05)',
+          }}>
+            <span style={{ width: 160, color: '#777169', flexShrink: 0, fontSize: 13, letterSpacing: '0.01em' }}>{k}</span>
+            <span style={{ wordBreak: 'break-all', fontSize: 13, color: '#000' }}>
               {v == null
-                ? <span style={{ color: '#ced4da' }}>—</span>
+                ? <span style={{ color: '#bfbbb5' }}>—</span>
                 : typeof v === 'object'
-                  ? <pre style={{ margin: 0, fontSize: 12 }}>{JSON.stringify(v, null, 2)}</pre>
+                  ? <pre style={{ margin: 0, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{JSON.stringify(v, null, 2)}</pre>
                   : String(v)}
             </span>
           </div>

@@ -5,10 +5,33 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Empty, Spin, Tag, Button, Tooltip } from 'antd';
+import { Card, Empty, Spin, Button, Tooltip } from 'antd';
 import { ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { getMyTodos } from '../api';
 import { useAuth } from '../auth';
+
+const CARD_SHADOW =
+  'rgba(0,0,0,0.06) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 1px 2px, rgba(0,0,0,0.04) 0px 2px 4px';
+
+// 极简"淡底深字"小徽章
+function Pill({ bg, color, children, border }) {
+  return (
+    <span style={{
+      display: 'inline-block',
+      padding: '2px 10px',
+      background: bg,
+      color,
+      border: border ? `1px solid ${border}` : 'none',
+      borderRadius: 4,
+      fontSize: 12,
+      fontWeight: 500,
+      letterSpacing: '0.02em',
+      lineHeight: '18px',
+    }}>
+      {children}
+    </span>
+  );
+}
 
 export default function MyTodos() {
   const navigate = useNavigate();
@@ -57,10 +80,20 @@ export default function MyTodos() {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-        <h2 style={{ fontSize: 20, fontWeight: 600, color: '#1a1a2e', margin: 0 }}>我的待办</h2>
-        <Tag color="orange">{total} 条</Tag>
-        <span style={{ color: '#888', fontSize: 12 }}>
+      {/* Hero */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+        <h2 style={{
+          fontSize: 28,
+          fontWeight: 300,
+          letterSpacing: '-0.01em',
+          color: '#000',
+          margin: 0,
+          lineHeight: 1.15,
+        }}>
+          我的待办
+        </h2>
+        <Pill bg="#fbf5e4" color="#b8860b">{total} 条</Pill>
+        <span style={{ color: '#777169', fontSize: 13, letterSpacing: '0.01em' }}>
           {user?.full_name} · {user?.role}
         </span>
         <div style={{ flex: 1 }} />
@@ -70,51 +103,87 @@ export default function MyTodos() {
       {loading ? (
         <Spin size="large" style={{ display: 'block', margin: '80px auto' }} />
       ) : grouped.length === 0 ? (
-        <Card style={{ borderRadius: 12 }}>
+        <Card style={{ borderRadius: 16, boxShadow: CARD_SHADOW, border: 'none' }}>
           <Empty description={`无待办 — ${user?.role} 当前没有可处理的单据`} />
         </Card>
       ) : (
         grouped.map(g => (
-          <Card key={`${g.workflow_id}-${g.state_code}`}
-            size="small" style={{ borderRadius: 12, marginBottom: 12 }}
-            title={
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontWeight: 600 }}>{g.workflow_name}</span>
-                <Tag color="blue">{g.state_name}</Tag>
-                {g.is_initial && <Tag color="gold">起始</Tag>}
-                <Tag>{g.items.length}</Tag>
+          <Card
+            key={`${g.workflow_id}-${g.state_code}`}
+            size="small"
+            style={{
+              borderRadius: 16,
+              marginBottom: 14,
+              boxShadow: CARD_SHADOW,
+              border: 'none',
+            }}
+            styles={{ body: { padding: 0 } }}
+            title={(
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0' }}>
+                <span style={{ fontWeight: 500, fontSize: 15, letterSpacing: '0.01em', color: '#000' }}>
+                  {g.workflow_name}
+                </span>
+                <Pill bg="#eaf1fb" color="#1f5aa8">{g.state_name}</Pill>
+                {g.is_initial && <Pill bg="#fbf5e4" color="#b8860b">起始</Pill>}
+                <Pill bg="#f5f2ef" color="#4e4e4e">{g.items.length}</Pill>
               </div>
-            }
-            extra={
-              <Button size="small" type="link"
-                onClick={() => navigate(`/node/${g.workflow_id}/${g.state_code}`)}>
-                打开节点 <RightOutlined />
+            )}
+            extra={(
+              <Button
+                size="small"
+                type="text"
+                style={{ color: '#4e4e4e', fontWeight: 500 }}
+                onClick={() => navigate(`/node/${g.workflow_id}/${g.state_code}`)}
+              >
+                打开节点 <RightOutlined style={{ fontSize: 11 }} />
               </Button>
-            }>
+            )}
+          >
             <div>
-              {g.items.slice(0, 20).map(it => (
-                <div key={it.doc_id}
+              {g.items.slice(0, 20).map((it, idx, arr) => (
+                <div
+                  key={it.doc_id}
                   style={{
-                    padding: '8px 10px', borderBottom: '1px solid #f0f0f0',
-                    display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+                    padding: '12px 20px',
+                    borderBottom: idx === arr.length - 1 && g.items.length <= 20 ? 'none' : '1px solid rgba(0, 0, 0, 0.05)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    cursor: 'pointer',
+                    transition: 'background 0.15s',
                   }}
-                  onClick={() => navigate(`/node/${g.workflow_id}/${g.state_code}`)}>
-                  <span style={{ color: '#888', fontSize: 12, minWidth: 52 }}>#{it.doc_id}</span>
-                  <span style={{ flex: 1, fontSize: 13 }}>{it.summary}</span>
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(245, 242, 239, 0.5)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  onClick={() => navigate(`/node/${g.workflow_id}/${g.state_code}`)}
+                >
+                  <span style={{
+                    color: '#bfbbb5', fontSize: 12, minWidth: 52,
+                    fontFamily: 'ui-monospace, monospace',
+                  }}>#{it.doc_id}</span>
+                  <span style={{
+                    flex: 1, fontSize: 13, color: '#000',
+                    letterSpacing: '0.01em',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>{it.summary}</span>
                   {it.actions.length > 0 && (
                     <Tooltip title={it.actions.map(a => a.label).join(' / ')}>
-                      <Tag color="green">{it.actions.length} 个动作</Tag>
+                      <Pill bg="#ebf5ee" color="#1f8f3a">
+                        {it.actions.length} 个动作
+                      </Pill>
                     </Tooltip>
                   )}
                   {it.updated_at && (
-                    <span style={{ color: '#bbb', fontSize: 11 }}>
+                    <span style={{ color: '#bfbbb5', fontSize: 11, letterSpacing: '0.01em' }}>
                       {it.updated_at.replace('T', ' ').slice(0, 16)}
                     </span>
                   )}
                 </div>
               ))}
               {g.items.length > 20 && (
-                <div style={{ textAlign: 'center', padding: 8, color: '#888', fontSize: 12 }}>
+                <div style={{
+                  textAlign: 'center', padding: 12, color: '#777169', fontSize: 12,
+                  borderTop: '1px solid rgba(0,0,0,0.05)', background: 'rgba(245,242,239,0.3)',
+                }}>
                   …还有 {g.items.length - 20} 条，点"打开节点"查看全部
                 </div>
               )}

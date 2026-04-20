@@ -2,12 +2,27 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ReactFlow, Background, Controls, MiniMap, useNodesState, useEdgesState, MarkerType } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Card, Tag, Button, Spin, Badge, Segmented, Empty, Timeline, message } from 'antd';
-import { ArrowLeftOutlined, ApartmentOutlined, UnorderedListOutlined, ClockCircleOutlined, RocketOutlined } from '@ant-design/icons';
+import { Card, Button, Spin, Badge, Segmented, Empty, Timeline, message } from 'antd';
+import {
+  ArrowLeftOutlined, ApartmentOutlined, UnorderedListOutlined,
+  ClockCircleOutlined, RocketOutlined,
+} from '@ant-design/icons';
 import { layoutGraph } from '../utils/layout';
 import { query } from '../api';
 import api from '../api';
 import ReportDrawer from '../components/ReportDrawer';
+
+const CARD_SHADOW =
+  'rgba(0,0,0,0.06) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 1px 2px, rgba(0,0,0,0.04) 0px 2px 4px';
+
+function Pill({ bg, color, children }) {
+  return (
+    <span style={{
+      display: 'inline-block', padding: '2px 10px', borderRadius: 4,
+      background: bg, color, fontSize: 12, fontWeight: 500, letterSpacing: '0.02em',
+    }}>{children}</span>
+  );
+}
 
 // 报表节点 code → ReportDrawer key 映射
 const REPORT_NODE_MAP = {
@@ -30,20 +45,44 @@ const REPORT_NODE_MAP = {
   RPT_CREDIT_LIMIT: { key: 'credit_limit', name: '信用额度分析' },
 };
 
+// 状态 → 淡底+深字+左色条 三元色
+const NEUTRAL       = { bg: '#f5f2ef', color: '#4e4e4e', border: '#bfbbb5' };
+const SEMANTIC_INFO = { bg: '#eaf1fb', color: '#1f5aa8', border: '#1f5aa8' };
+const SEMANTIC_WARN = { bg: '#fbf5e4', color: '#b8860b', border: '#b8860b' };
+const SEMANTIC_OK   = { bg: '#ebf5ee', color: '#1f8f3a', border: '#1f8f3a' };
+const SEMANTIC_ERR  = { bg: '#fdecea', color: '#b42318', border: '#b42318' };
+const SEMANTIC_TEAL = { bg: '#e7f3f5', color: '#0e7490', border: '#0e7490' };
+const SEMANTIC_PURP = { bg: '#f1ebfa', color: '#6b46c1', border: '#6b46c1' };
+const SEMANTIC_PINK = { bg: '#fbeaf1', color: '#b83280', border: '#b83280' };
+const SEMANTIC_END  = { bg: '#f5f5f5', color: '#1a1a1a', border: '#4e4e4e' };
+
 const stateColors = {
-  DRAFT: '#d9d9d9', QUOTED: '#b37feb', PENDING_APPROVAL: '#faad14', APPROVED: '#52c41a',
-  IN_PROCUREMENT: '#1890ff', READY_TO_SHIP: '#13c2c2', PARTIAL_SHIPPED: '#ffa940',
-  SHIPPED: '#13c2c2', INVOICED: '#722ed1', COMPLETED: '#8c8c8c',
-  CANCELLED: '#ff4d4f', ORDERED: '#1890ff', PARTIAL_RECEIVED: '#ffa940',
-  RECEIVED: '#52c41a', INSPECTING: '#eb2f96', IN_WAREHOUSE: '#52c41a',
-  PENDING_FINANCE: '#faad14', PICKING: '#722ed1', LABELING: '#eb2f96', PACKED: '#13c2c2',
-  PENDING: '#faad14', RECEIVING: '#1890ff', DISCREPANCY: '#ff4d4f',
-  AUDITED: '#1890ff', POSTED: '#52c41a', REVERSED: '#ff4d4f', RECONCILED: '#13c2c2', ADJUSTMENT: '#722ed1',
-  PARTIAL: '#ffa940', PAID: '#52c41a', OVERDUE: '#ff4d4f', BAD_DEBT: '#434343',
-  PROSPECTING: '#d9d9d9', QUALIFICATION: '#1890ff', SAMPLING: '#722ed1',
-  TESTING: '#eb2f96', SMALL_BATCH: '#ffa940', MASS_PRODUCTION: '#52c41a', LOST: '#ff4d4f',
-  ACTIVE: '#52c41a', EXPIRING: '#faad14', EXPIRED: '#8c8c8c', RENEWED: '#52c41a',
-  OPEN: '#52c41a', VOUCHERS_DONE: '#1890ff', FX_ADJUSTED: '#722ed1', PL_TRANSFERRED: '#eb2f96', CLOSED: '#8c8c8c',
+  DRAFT: NEUTRAL, PROSPECTING: NEUTRAL,
+  QUOTED: SEMANTIC_PURP, SAMPLING: SEMANTIC_PURP, INVOICED: SEMANTIC_PURP,
+  PICKING: SEMANTIC_PURP, ADJUSTMENT: SEMANTIC_PURP, FX_ADJUSTED: SEMANTIC_PURP,
+
+  PENDING_APPROVAL: SEMANTIC_WARN, PENDING: SEMANTIC_WARN, PENDING_FINANCE: SEMANTIC_WARN,
+  PARTIAL_SHIPPED: SEMANTIC_WARN, PARTIAL_RECEIVED: SEMANTIC_WARN, PARTIAL: SEMANTIC_WARN,
+  EXPIRING: SEMANTIC_WARN, SMALL_BATCH: SEMANTIC_WARN,
+
+  APPROVED: SEMANTIC_OK, RECEIVED: SEMANTIC_OK, IN_WAREHOUSE: SEMANTIC_OK,
+  POSTED: SEMANTIC_OK, PAID: SEMANTIC_OK, ACTIVE: SEMANTIC_OK, OPEN: SEMANTIC_OK,
+  RENEWED: SEMANTIC_OK, MASS_PRODUCTION: SEMANTIC_OK,
+
+  IN_PROCUREMENT: SEMANTIC_INFO, ORDERED: SEMANTIC_INFO, RECEIVING: SEMANTIC_INFO,
+  AUDITED: SEMANTIC_INFO, QUALIFICATION: SEMANTIC_INFO, VOUCHERS_DONE: SEMANTIC_INFO,
+
+  READY_TO_SHIP: SEMANTIC_TEAL, SHIPPED: SEMANTIC_TEAL, PACKED: SEMANTIC_TEAL,
+  RECONCILED: SEMANTIC_TEAL,
+
+  INSPECTING: SEMANTIC_PINK, LABELING: SEMANTIC_PINK, TESTING: SEMANTIC_PINK,
+  PL_TRANSFERRED: SEMANTIC_PINK,
+
+  CANCELLED: SEMANTIC_ERR, DISCREPANCY: SEMANTIC_ERR, REVERSED: SEMANTIC_ERR,
+  OVERDUE: SEMANTIC_ERR, LOST: SEMANTIC_ERR,
+
+  COMPLETED: SEMANTIC_END, CLOSED: SEMANTIC_END, EXPIRED: SEMANTIC_END,
+  BAD_DEBT: SEMANTIC_END,
 };
 
 const tableMap = {
@@ -55,29 +94,41 @@ const tableMap = {
   ACCOUNTING_PERIOD: 'accounting_period',
 };
 
-// 根据 node_type 返回不同的节点样式
+// 节点样式：淡底 + 深字 + 左色条
 function getNodeStyle(s) {
   const t = s.node_type;
   if (t === 'policy') return {
-    background: '#fffbe6', color: '#8c6d1f',
-    border: '1.5px solid #ffe58f', borderLeft: '4px solid #faad14',
-    borderRadius: 4, padding: '6px 14px', minWidth: 110, fontSize: 12,
+    background: '#fbf5e4', color: '#8c6d1f',
+    border: '1px solid #ece0b7', borderLeft: '4px solid #b8860b',
+    borderRadius: 6, padding: '6px 14px', minWidth: 110, fontSize: 12,
   };
   if (t === 'cross_module') return {
-    background: '#52c41a', color: '#fff',
-    border: '2px solid #389e0d', borderRadius: 20,
-    padding: '6px 14px', minWidth: 110, fontSize: 12,
+    background: '#ebf5ee', color: '#1f8f3a',
+    border: '1px solid #c7e6cf', borderLeft: '4px solid #1f8f3a',
+    borderRadius: 9999, padding: '6px 14px', minWidth: 110, fontSize: 12,
   };
   if (t === 'report') return {
-    background: '#e6f7ff', color: '#0050b3',
-    border: '1.5px dashed #91d5ff', borderRadius: 4,
+    background: '#eaf1fb', color: '#1f5aa8',
+    border: '1px dashed #a8c4e7', borderRadius: 6,
     padding: '6px 14px', minWidth: 110, fontSize: 12,
   };
+  const c = stateColors[s.code] || NEUTRAL;
   return {
-    background: stateColors[s.code] || '#d9d9d9',
-    color: ['DRAFT', 'COMPLETED', 'CLOSED', 'EXPIRED', 'PROSPECTING', 'OPEN'].includes(s.code) ? '#333' : '#fff',
-    border: s.is_initial ? '3px solid #1a1a2e' : s.is_terminal ? '2px dashed #999' : '1px solid #ddd',
-    borderRadius: 8, padding: '6px 14px', minWidth: 110, fontSize: 12,
+    background: c.bg,
+    color: c.color,
+    border: `1px solid ${c.border}`,
+    borderLeft: `4px solid ${c.border}`,
+    boxShadow: s.is_initial
+      ? 'rgba(0,0,0,0.06) 0px 0px 0px 1.5px, rgba(0,0,0,0.04) 0px 4px 8px'
+      : s.is_terminal ? 'none' : 'rgba(0,0,0,0.04) 0px 1px 2px',
+    borderRadius: 8,
+    padding: '6px 14px',
+    minWidth: 110,
+    fontSize: 12,
+    fontWeight: 500,
+    letterSpacing: '0.01em',
+    opacity: s.is_terminal ? 0.75 : 1,
+    borderStyle: s.is_terminal ? 'dashed' : 'solid',
   };
 }
 
@@ -90,7 +141,7 @@ export default function WorkflowActions() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [stateCounts, setStateCounts] = useState({});
-  const [viewMode, setViewMode] = useState('flow');  // 'flow' | 'overview'
+  const [viewMode, setViewMode] = useState('flow');
   const [recentLogs, setRecentLogs] = useState([]);
   const [creating, setCreating] = useState(false);
   const [reportDrawer, setReportDrawer] = useState({ open: false, key: '', name: '' });
@@ -99,7 +150,6 @@ export default function WorkflowActions() {
     api.get('/workflows').then(r => { setWorkflows(r.data || []); setLoading(false); }).catch(() => setLoading(false));
   }, []);
 
-  // URL带workflowId时自动进入该流程图
   useEffect(() => {
     if (workflowId && workflows.length > 0 && !selectedWf) {
       const wf = workflows.find(w => w.id === Number(workflowId));
@@ -113,7 +163,6 @@ export default function WorkflowActions() {
     setSelectedWf(wf);
 
     const states = wf.states || [];
-    // 边由 state.next 派生
     const transitions = states.flatMap(s =>
       (s.next || []).map(n => ({ from_state: s.code, to_state: n.to, name: n.label }))
     );
@@ -134,7 +183,7 @@ export default function WorkflowActions() {
     }
     setStateCounts(counts);
 
-    // 加载该流程的最近操作日志
+    // 最近操作日志
     try {
       const { data: logData } = await query('workflow_log', {
         filters: { doc_type: wf.doc_type }, order_by: '-timestamp', limit: 15,
@@ -154,8 +203,14 @@ export default function WorkflowActions() {
         data: {
           label: (
             <div style={{ textAlign: 'center', cursor: isDisplayOnly ? 'default' : 'pointer' }}>
-              <div style={{ fontWeight: 600, fontSize: 12 }}>{s.name}</div>
-              {!isDisplayOnly && counts[s.code] > 0 && <Badge count={counts[s.code]} size="small" style={{ backgroundColor: '#1a1a2e' }} />}
+              <div style={{ fontWeight: 500, fontSize: 12, letterSpacing: '0.01em' }}>{s.name}</div>
+              {!isDisplayOnly && counts[s.code] > 0 && (
+                <Badge
+                  count={counts[s.code]}
+                  size="small"
+                  style={{ backgroundColor: '#000', marginTop: 2 }}
+                />
+              )}
             </div>
           ),
         },
@@ -163,7 +218,6 @@ export default function WorkflowActions() {
       };
     });
 
-    // 流程图只画业务状态推进 — 过滤掉"创建"(from="")和"编辑"(自循环)元转换
     const stateCodeSet = new Set(states.map(s => s.code));
     const newEdges = transitions
       .filter(t => t.from_state && t.from_state !== t.to_state && stateCodeSet.has(t.from_state) && stateCodeSet.has(t.to_state))
@@ -172,12 +226,12 @@ export default function WorkflowActions() {
         return {
           id: `e-${i}`, source: t.from_state, target: t.to_state,
           label: isPolicy ? '' : t.name,
-          labelStyle: { fontSize: 10, fill: '#555' },
-          labelBgStyle: { fill: '#fff', fillOpacity: 0.9 },
-          markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+          labelStyle: { fontSize: 10, fill: '#4e4e4e', letterSpacing: '0.02em' },
+          labelBgStyle: { fill: '#fff', fillOpacity: 0.95 },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: '#bfbbb5' },
           style: isPolicy
-            ? { strokeWidth: 1.5, stroke: '#faad14', strokeDasharray: '6 3' }
-            : { strokeWidth: 1.5, stroke: '#999' },
+            ? { strokeWidth: 1.5, stroke: '#b8860b', strokeDasharray: '6 3' }
+            : { strokeWidth: 1.5, stroke: '#bfbbb5' },
           type: 'smoothstep',
         };
       });
@@ -207,7 +261,7 @@ export default function WorkflowActions() {
         doc_id: null,
       });
       if (data.success) {
-        message.success(`已创建 #${data.doc_id}，进入【${data.to_state}】。现在点推进进入首个业务节点录入数据`);
+        message.success(`已创建 #${data.doc_id}，进入【${data.to_state}】`);
         navigate(`/node/${selectedWf.id}/${data.to_state}`);
       } else {
         message.error(data.error || '创建失败');
@@ -222,7 +276,6 @@ export default function WorkflowActions() {
 
   // === 第一层：按分组的流程卡片 ===
   if (!selectedWf) {
-    // URL带workflowId但还没进入流程，等enterWorkflow执行，不闪列表
     if (workflowId) return <Spin size="large" style={{ display: 'block', margin: '80px auto' }} />;
     const grouped = workflows.reduce((acc, wf) => {
       const g = wf.group_name || '其他';
@@ -231,19 +284,58 @@ export default function WorkflowActions() {
     }, {});
     return (
       <div>
-        <h2 style={{ fontSize: 20, fontWeight: 600, color: '#1a1a2e', marginBottom: 16 }}>业务流程</h2>
+        <h2 style={{
+          fontSize: 28, fontWeight: 300, letterSpacing: '-0.01em',
+          color: '#000', margin: '0 0 24px', lineHeight: 1.15,
+        }}>
+          业务流程
+        </h2>
         {Object.entries(grouped).map(([groupName, wfs]) => (
-          <div key={groupName} style={{ marginBottom: 24 }}>
-            <h3 style={{ fontSize: 14, color: '#666', marginBottom: 10, borderLeft: '3px solid #1a1a2e', paddingLeft: 8 }}>{groupName}</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+          <div key={groupName} style={{ marginBottom: 32 }}>
+            <h3 style={{
+              fontSize: 12, fontWeight: 500, color: '#777169', letterSpacing: '0.04em',
+              textTransform: 'uppercase', margin: '0 0 12px',
+            }}>
+              {groupName}
+            </h3>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+              gap: 14,
+            }}>
               {wfs.map(wf => (
-                <Card key={wf.id} hoverable style={{ borderRadius: 12 }} onClick={() => enterWorkflow(wf)}>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: '#1a1a2e' }}>{wf.name}</div>
-                  <div style={{ marginTop: 4 }}>
-                    <Tag>{wf.doc_type}</Tag>
-                    <span style={{ color: '#888', fontSize: 12 }}>{(wf.states || []).length}个节点</span>
+                <Card
+                  key={wf.id}
+                  hoverable
+                  style={{
+                    borderRadius: 16,
+                    boxShadow: CARD_SHADOW,
+                    border: 'none',
+                    cursor: 'pointer',
+                  }}
+                  styles={{ body: { padding: 18 } }}
+                  onClick={() => enterWorkflow(wf)}
+                >
+                  <div style={{
+                    fontSize: 16, fontWeight: 500, color: '#000',
+                    letterSpacing: '0.01em', marginBottom: 8,
+                  }}>
+                    {wf.name}
                   </div>
-                  {wf.description && <div style={{ color: '#666', fontSize: 11, marginTop: 6 }}>{wf.description.slice(0, 60)}...</div>}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <Pill bg="#eaf1fb" color="#1f5aa8">{wf.doc_type}</Pill>
+                    <span style={{ color: '#777169', fontSize: 12 }}>
+                      {(wf.states || []).length} 个节点
+                    </span>
+                  </div>
+                  {wf.description && (
+                    <div style={{
+                      color: '#4e4e4e', fontSize: 12, marginTop: 8,
+                      letterSpacing: '0.01em', lineHeight: 1.45,
+                    }}>
+                      {wf.description.slice(0, 60)}{wf.description.length > 60 ? '…' : ''}
+                    </div>
+                  )}
                 </Card>
               ))}
             </div>
@@ -260,55 +352,104 @@ export default function WorkflowActions() {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        marginBottom: 14, flexWrap: 'wrap',
+      }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => { setSelectedWf(null); navigate('/actions', { replace: true }); }}>返回</Button>
-        <h2 style={{ fontSize: 18, fontWeight: 600, color: '#1a1a2e', margin: 0 }}>{selectedWf.name}</h2>
-        <Tag>{selectedWf.doc_type}</Tag>
-        <Tag color="blue">进行中 {totalActive}</Tag>
+        <h2 style={{
+          fontSize: 22, fontWeight: 300, letterSpacing: '-0.01em',
+          color: '#000', margin: 0, lineHeight: 1.15,
+        }}>
+          {selectedWf.name}
+        </h2>
+        <Pill bg="#eaf1fb" color="#1f5aa8">{selectedWf.doc_type}</Pill>
+        <Pill bg="#fbf5e4" color="#b8860b">进行中 {totalActive}</Pill>
         <div style={{ flex: 1 }} />
-        <Segmented value={viewMode} onChange={setViewMode}
+        <Segmented
+          value={viewMode}
+          onChange={setViewMode}
           options={[
             { value: 'flow', label: '流程图', icon: <ApartmentOutlined /> },
             { value: 'overview', label: '总览', icon: <UnorderedListOutlined /> },
-          ]} />
+          ]}
+        />
         <Button type="primary" icon={<RocketOutlined />} loading={creating} onClick={createDoc}>
           发起新{selectedWf.name}
         </Button>
       </div>
 
       {viewMode === 'flow' ? (
-        <Card style={{ borderRadius: 12, height: 'calc(100vh - 160px)' }} styles={{ body: { padding: 0, height: '100%' } }}>
-          <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
-            onNodeClick={onNodeClick} fitView defaultEdgeOptions={{ type: 'smoothstep' }}>
-            <Background />
+        <Card
+          style={{
+            borderRadius: 16, height: 'calc(100vh - 160px)',
+            boxShadow: CARD_SHADOW, border: 'none', overflow: 'hidden',
+          }}
+          styles={{ body: { padding: 0, height: '100%' } }}
+        >
+          <ReactFlow
+            nodes={nodes} edges={edges}
+            onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+            onNodeClick={onNodeClick} fitView
+            defaultEdgeOptions={{ type: 'smoothstep' }}
+          >
+            <Background gap={24} size={1} color="rgba(0,0,0,0.06)" />
             <Controls />
-            <MiniMap style={{ borderRadius: 8 }} nodeStrokeWidth={2} />
+            <MiniMap
+              style={{
+                borderRadius: 10,
+                background: 'rgba(245,242,239,0.8)',
+                border: '1px solid rgba(0,0,0,0.05)',
+              }}
+              nodeStrokeWidth={2}
+              maskColor="rgba(0,0,0,0.04)"
+            />
           </ReactFlow>
         </Card>
       ) : (
-        <div style={{ display: 'flex', gap: 12 }}>
-          {/* 左：各状态的单据数量分布 */}
-          <Card size="small" style={{ flex: 1, borderRadius: 12 }} title="正在进行的流程">
+        <div style={{ display: 'flex', gap: 14 }}>
+          {/* 左：各状态单据分布 */}
+          <Card
+            size="small"
+            style={{ flex: 1, borderRadius: 16, boxShadow: CARD_SHADOW, border: 'none' }}
+            title={<span style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.01em' }}>正在进行的流程</span>}
+          >
             {(selectedWf.states || []).filter(s => (stateCounts[s.code] || 0) > 0).length === 0 ? (
               <Empty description="当前该流程无单据" />
             ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                 {(selectedWf.states || []).map(s => {
                   const count = stateCounts[s.code] || 0;
                   if (count === 0) return null;
+                  const c = stateColors[s.code] || NEUTRAL;
                   return (
-                    <div key={s.code}
+                    <div
+                      key={s.code}
                       style={{
-                        padding: '10px 16px', borderRadius: 8, cursor: 'pointer',
-                        background: stateColors[s.code] || '#f0f0f0',
-                        color: ['DRAFT', 'COMPLETED', 'CLOSED', 'EXPIRED', 'PROSPECTING', 'OPEN'].includes(s.code) ? '#333' : '#fff',
-                        minWidth: 120, textAlign: 'center',
+                        padding: '14px 20px', borderRadius: 12, cursor: 'pointer',
+                        background: c.bg, color: c.color,
+                        borderLeft: `4px solid ${c.border}`,
+                        border: `1px solid ${c.border}`,
+                        borderLeftWidth: 4,
+                        minWidth: 140, textAlign: 'center',
+                        boxShadow: 'rgba(0,0,0,0.04) 0px 1px 2px',
+                        transition: 'transform 0.15s',
                       }}
-                      onClick={() => navigate(`/node/${selectedWf.id}/${s.code}`)}>
-                      <div style={{ fontSize: 13, fontWeight: 500 }}>{s.name}</div>
-                      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>{count}</div>
-                      {s.is_initial && <Tag color="gold" style={{ marginTop: 4 }}>起始</Tag>}
-                      {s.is_terminal && <Tag style={{ marginTop: 4 }}>终止</Tag>}
+                      onMouseEnter={e => (e.currentTarget.style.transform = 'translateY(-1px)')}
+                      onMouseLeave={e => (e.currentTarget.style.transform = 'none')}
+                      onClick={() => navigate(`/node/${selectedWf.id}/${s.code}`)}
+                    >
+                      <div style={{ fontSize: 13, fontWeight: 500, letterSpacing: '0.01em' }}>{s.name}</div>
+                      <div style={{
+                        fontSize: 28, fontWeight: 300, marginTop: 4,
+                        letterSpacing: '-0.02em', lineHeight: 1.1,
+                      }}>
+                        {count}
+                      </div>
+                      <div style={{ marginTop: 6, display: 'flex', gap: 4, justifyContent: 'center' }}>
+                        {s.is_initial && <Pill bg="#fff" color={c.color}>起始</Pill>}
+                        {s.is_terminal && <Pill bg="#fff" color={c.color}>终止</Pill>}
+                      </div>
                     </div>
                   );
                 })}
@@ -316,24 +457,49 @@ export default function WorkflowActions() {
             )}
           </Card>
           {/* 右：最近操作 */}
-          <Card size="small" style={{ width: 360, borderRadius: 12 }}
-            title={<span><ClockCircleOutlined /> 最近操作</span>}>
-            {recentLogs.length === 0 ? <Empty description="无记录" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
-              <Timeline style={{ marginTop: 8 }}
+          <Card
+            size="small"
+            style={{ width: 380, borderRadius: 16, boxShadow: CARD_SHADOW, border: 'none' }}
+            title={(
+              <span style={{ fontSize: 14, fontWeight: 500, letterSpacing: '0.01em' }}>
+                <ClockCircleOutlined style={{ color: '#777169', marginRight: 6 }} />
+                最近操作
+              </span>
+            )}
+          >
+            {recentLogs.length === 0 ? (
+              <Empty description="无记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : (
+              <Timeline
+                style={{ marginTop: 8 }}
                 items={recentLogs.map(l => ({
-                  color: ['CANCELLED', 'REJECTED', 'REVERSED'].includes(l.to_state) ? 'red' :
-                         ['COMPLETED', 'CLOSED', 'PAID'].includes(l.to_state) ? 'green' : 'blue',
+                  color: ['CANCELLED', 'REJECTED', 'REVERSED'].includes(l.to_state) ? '#b42318'
+                       : ['COMPLETED', 'CLOSED', 'PAID'].includes(l.to_state) ? '#1f8f3a'
+                       : '#1f5aa8',
                   children: (
-                    <div style={{ fontSize: 12 }}>
-                      <div style={{ fontWeight: 500 }}>
+                    <div style={{ fontSize: 12, paddingBottom: 2 }}>
+                      <div style={{ fontWeight: 500, color: '#000', letterSpacing: '0.01em' }}>
                         {l.transition_name}
-                        <span style={{ color: '#888', marginLeft: 4 }}>#{l.doc_id}</span>
+                        <span style={{
+                          color: '#bfbbb5', marginLeft: 6,
+                          fontFamily: 'ui-monospace, monospace', fontWeight: 400,
+                        }}>
+                          #{l.doc_id}
+                        </span>
                       </div>
-                      <div style={{ color: '#888' }}>{l.from_state || '(空)'} → {l.to_state}</div>
-                      <div style={{ color: '#999', fontSize: 11 }}>{l.timestamp?.replace('T', ' ').slice(0, 19)}</div>
+                      <div style={{ color: '#777169', marginTop: 2 }}>
+                        {l.from_state || '(空)'} → {l.to_state}
+                      </div>
+                      <div style={{
+                        color: '#bfbbb5', fontSize: 11, marginTop: 1,
+                        fontFamily: 'ui-monospace, monospace',
+                      }}>
+                        {l.timestamp?.replace('T', ' ').slice(0, 19)}
+                      </div>
                     </div>
                   ),
-                }))} />
+                }))}
+              />
             )}
           </Card>
         </div>

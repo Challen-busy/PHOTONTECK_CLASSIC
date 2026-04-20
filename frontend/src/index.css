@@ -1,3 +1,348 @@
+/* =========================================================
+ * PHOTONTECK Design Tokens — ElevenLabs-inspired
+ * 近白画布 + 暖石强调 + 多层亚不透明阴影 + Inter 字体
+ * ========================================================= */
+
+:root {
+  /* ---- Surfaces ---- */
+  --pt-bg:              #ffffff;
+  --pt-bg-soft:         #f5f5f5;
+  --pt-bg-warm:         #f5f2ef;
+  --pt-bg-warm-soft:    rgba(245, 242, 239, 0.8);
+  --pt-bg-hover:        rgba(0, 0, 0, 0.03);
+  --pt-bg-selected:     rgba(0, 0, 0, 0.05);
+
+  /* ---- Text ---- */
+  --pt-text:            #000000;
+  --pt-text-secondary:  #4e4e4e;
+  --pt-text-muted:      #777169;
+  --pt-text-disabled:   #bfbbb5;
+  --pt-text-on-dark:    #ffffff;
+
+  /* ---- Borders ---- */
+  --pt-border:          #e5e5e5;
+  --pt-border-subtle:   rgba(0, 0, 0, 0.05);
+  --pt-border-warm:     #ece7e1;
+
+  /* ---- Semantic (降饱和状态色) ---- */
+  --pt-success:         #1f8f3a;
+  --pt-success-bg:      #ebf5ee;
+  --pt-warning:         #b8860b;
+  --pt-warning-bg:      #fbf5e4;
+  --pt-danger:          #b42318;
+  --pt-danger-bg:       #fdecea;
+  --pt-info:            #1f5aa8;
+  --pt-info-bg:         #eaf1fb;
+  --pt-accent:          #6b46c1;
+  --pt-accent-bg:       #f1ebfa;
+
+  /* ---- Shadows (sub-0.1 opacity multi-layer) ---- */
+  --pt-shadow-inset:    rgba(0,0,0,0.075) 0px 0px 0px 0.5px inset;
+  --pt-shadow-ring:     rgba(0,0,0,0.06) 0px 0px 0px 1px;
+  --pt-shadow-soft:     rgba(0,0,0,0.04) 0px 4px 4px;
+  --pt-shadow-card:
+    rgba(0,0,0,0.06) 0px 0px 0px 1px,
+    rgba(0,0,0,0.04) 0px 1px 2px,
+    rgba(0,0,0,0.04) 0px 2px 4px;
+  --pt-shadow-elevated:
+    rgba(0,0,0,0.4) 0px 0px 1px,
+    rgba(0,0,0,0.04) 0px 4px 4px;
+  --pt-shadow-warm:     rgba(78,50,23,0.04) 0px 6px 16px;
+  --pt-shadow-edge:     rgba(0,0,0,0.08) 0px 0px 0px 0.5px;
+
+  /* ---- Radii ---- */
+  --pt-r-xs: 4px;
+  --pt-r-sm: 8px;
+  --pt-r-md: 12px;
+  --pt-r-lg: 16px;
+  --pt-r-xl: 20px;
+  --pt-r-2xl: 24px;
+  --pt-r-warm: 30px;
+  --pt-r-pill: 9999px;
+
+  /* ---- Spacing (8-base) ---- */
+  --pt-s-1: 4px;
+  --pt-s-2: 8px;
+  --pt-s-3: 12px;
+  --pt-s-4: 16px;
+  --pt-s-5: 20px;
+  --pt-s-6: 24px;
+  --pt-s-8: 32px;
+  --pt-s-10: 40px;
+
+  /* ---- Type ---- */
+  --pt-font: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --pt-font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* ---- Focus ---- */
+  --pt-ring:            rgb(147 197 253 / 0.5) 0px 0px 0px 3px;
+}
+
+/* =========================================================
+ * Base
+ * ========================================================= */
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f5f5f5; }
+
+html, body {
+  font-family: var(--pt-font);
+  font-feature-settings: "cv11", "ss01", "ss03";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--pt-bg);
+  color: var(--pt-text);
+  letter-spacing: 0.01em;
+}
+
 #root { min-height: 100vh; }
+
+/* 滚动条 —— 克制、暖灰 */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--pt-border);
+  border-radius: var(--pt-r-pill);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: #c9c4bd; background-clip: content-box; }
+
+/* =========================================================
+ * Display utilities —— Inter 300 whisper-thin
+ * ========================================================= */
+
+.pt-display-hero {
+  font-size: 48px;
+  font-weight: 300;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  color: var(--pt-text);
+}
+.pt-display-section {
+  font-size: 32px;
+  font-weight: 300;
+  line-height: 1.17;
+  letter-spacing: -0.01em;
+  color: var(--pt-text);
+}
+.pt-display-card {
+  font-size: 22px;
+  font-weight: 300;
+  line-height: 1.22;
+  color: var(--pt-text);
+}
+.pt-body {
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  color: var(--pt-text-secondary);
+}
+.pt-caption {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.33;
+  color: var(--pt-text-muted);
+}
+.pt-mono { font-family: var(--pt-font-mono); }
+
+/* =========================================================
+ * Pill buttons —— 适用于关键 CTA（antd 按钮已在 main 里注入样式）
+ * ========================================================= */
+
+.pt-pill-black {
+  background: var(--pt-text);
+  color: var(--pt-text-on-dark);
+  border: none;
+  border-radius: var(--pt-r-pill);
+  padding: 8px 16px;
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.pt-pill-black:hover { background: #1a1a1a; }
+
+.pt-pill-warm {
+  background: var(--pt-bg-warm-soft);
+  color: var(--pt-text);
+  border: none;
+  border-radius: var(--pt-r-warm);
+  padding: 10px 18px;
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: var(--pt-shadow-warm);
+  transition: background 0.15s ease;
+}
+.pt-pill-warm:hover { background: var(--pt-bg-warm); }
+
+/* =========================================================
+ * antd 细节微调（局部覆盖）
+ * ========================================================= */
+
+/* Tag：克制的语义色 —— 使用淡底 + 深字 */
+.ant-tag { border-radius: var(--pt-r-xs); padding: 1px 8px; font-size: 12px; letter-spacing: 0.02em; }
+
+/* Card：统一阴影系统 */
+.ant-card { box-shadow: var(--pt-shadow-card); border: none !important; }
+.ant-card-head { border-bottom: 1px solid var(--pt-border-subtle); }
+.ant-card-head-title { font-weight: 500; letter-spacing: 0.01em; }
+
+/* 按钮圆角微调，仍保留 antd 默认（P2 会按需改成胶囊） */
+.ant-btn { letter-spacing: 0.01em; }
+
+/* Table：hover 柔和、border 极淡 */
+.ant-table-thead > tr > th {
+  background: var(--pt-bg-soft) !important;
+  color: var(--pt-text-secondary) !important;
+  font-weight: 500 !important;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--pt-border-subtle) !important;
+}
+.ant-table-tbody > tr > td { border-bottom: 1px solid var(--pt-border-subtle) !important; }
+.ant-table-tbody > tr:hover > td { background: var(--pt-bg-hover) !important; }
+
+/* Input/Select：去掉默认蓝色聚焦，换为柔和 ring */
+.ant-input:focus, .ant-input-focused,
+.ant-input-affix-wrapper:focus, .ant-input-affix-wrapper-focused,
+.ant-select-focused .ant-select-selector,
+.ant-picker-focused {
+  box-shadow: var(--pt-ring) !important;
+  border-color: var(--pt-text) !important;
+}
+
+/* Menu：侧栏选中态 */
+.ant-menu-light .ant-menu-item-selected {
+  background: var(--pt-bg-warm) !important;
+  color: var(--pt-text) !important;
+  font-weight: 500;
+}
+.ant-menu-light .ant-menu-item:hover {
+  background: var(--pt-bg-hover) !important;
+  color: var(--pt-text) !important;
+}
+
+/* Drawer/Modal 角 */
+.ant-drawer-content, .ant-modal-content { border-radius: var(--pt-r-lg); }
+.ant-modal-header { border-bottom: 1px solid var(--pt-border-subtle); }
+
+/* Form label 字重与字距 */
+.ant-form-item-label > label {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--pt-text);
+  font-size: 13px;
+}
+.ant-form-item-explain-connected {
+  font-size: 11px;
+  color: var(--pt-text-muted);
+  letter-spacing: 0.01em;
+}
+
+/* Timeline 细节 */
+.ant-timeline .ant-timeline-item-head {
+  box-shadow: none;
+}
+.ant-timeline .ant-timeline-item-tail {
+  border-inline-start-color: var(--pt-border);
+}
+
+/* Collapse 细节 —— 更宽松、无强边 */
+.ant-collapse > .ant-collapse-item > .ant-collapse-header {
+  padding: 10px 14px;
+  align-items: center;
+}
+.ant-collapse-content-box {
+  padding: 8px 14px 14px !important;
+}
+
+/* Popover / Dropdown 圆角与阴影 */
+.ant-popover .ant-popover-inner,
+.ant-dropdown .ant-dropdown-menu {
+  border-radius: var(--pt-r-md);
+  box-shadow: rgba(0,0,0,0.06) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 4px 12px;
+}
+.ant-popover .ant-popover-title {
+  border-bottom: 1px solid var(--pt-border-subtle);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* Spin 点色 —— 中性 */
+.ant-spin .ant-spin-dot-item { background-color: var(--pt-text-secondary); }
+
+/* Empty 描述色 */
+.ant-empty-description { color: var(--pt-text-muted); letter-spacing: 0.01em; }
+
+/* Tabs ink bar —— 黑色、稍细 */
+.ant-tabs-ink-bar { height: 2px !important; background: var(--pt-text) !important; }
+.ant-tabs-tab { letter-spacing: 0.01em; }
+.ant-tabs-top > .ant-tabs-nav::before {
+  border-bottom: 1px solid var(--pt-border-subtle) !important;
+}
+
+/* Badge 标记色 —— 默认用黑 */
+.ant-badge-count { font-weight: 500; letter-spacing: 0; }
+
+/* ReactFlow 右下角 attribution 淡出 */
+.react-flow__attribution {
+  background: transparent !important;
+  font-size: 10px;
+}
+.react-flow__attribution a {
+  color: rgba(0, 0, 0, 0.2) !important;
+  letter-spacing: 0.02em;
+}
+
+/* ReactFlow controls 按钮 —— 暖白 + 极淡边 */
+.react-flow__controls {
+  box-shadow: var(--pt-shadow-card);
+  border-radius: var(--pt-r-md);
+  overflow: hidden;
+  background: #ffffff;
+}
+.react-flow__controls-button {
+  background: #ffffff !important;
+  border: none !important;
+  border-bottom: 1px solid var(--pt-border-subtle) !important;
+  color: var(--pt-text-secondary) !important;
+}
+.react-flow__controls-button:hover {
+  background: var(--pt-bg-warm-soft) !important;
+}
+.react-flow__controls-button svg { fill: var(--pt-text-secondary); }
+
+/* ReactFlow edge label 默认 */
+.react-flow__edge-text { font-family: var(--pt-font); }
+
+/* Drawer header 字重 */
+.ant-drawer-header-title .ant-drawer-title {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.ant-drawer-header { border-bottom: 1px solid var(--pt-border-subtle); }
+
+/* Modal title 字重 */
+.ant-modal-title { font-weight: 500; letter-spacing: 0.01em; }
+
+/* Pagination 当前页指示 */
+.ant-pagination .ant-pagination-item-active {
+  border-color: var(--pt-text);
+  background: var(--pt-text);
+}
+.ant-pagination .ant-pagination-item-active a { color: var(--pt-text-on-dark) !important; }
+
+/* Select 下拉 hover */
+.ant-select-dropdown .ant-select-item-option-active:not(.ant-select-item-option-disabled) {
+  background: var(--pt-bg-warm-soft);
+}
+.ant-select-dropdown .ant-select-item-option-selected {
+  background: var(--pt-bg-warm) !important;
+  color: var(--pt-text) !important;
+  font-weight: 500;
+}
+
+/* message / notification 圆角统一 */
+.ant-message-notice-content { border-radius: var(--pt-r-md) !important; }
