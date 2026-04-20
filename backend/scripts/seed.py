@@ -979,7 +979,7 @@ async def seed():
                 # 应收款生成凭证 → 自动创建 voucher + 分录（借银行存款，贷应收账款）
                 ("ACCOUNTS_RECEIVABLE", "COLLECTING", "VOUCHER_PROCESSED"): [
                     "fy = lookup('fiscal_year', company_id=doc.company_id, status='OPEN')\n"
-                    "period = lookup('accounting_period', fiscal_year_id=fy.id, status='OPEN')\n"
+                    "period = lookup('accounting_period', fiscal_year_id=fy.id, period_number=today().month, status='OPEN')\n"
                     "bank_acct = lookup('account', code='1002', company_id=doc.company_id)\n"
                     "ar_acct = lookup('account', code='1122', company_id=doc.company_id)\n"
                     "v = insert('voucher', {\n"

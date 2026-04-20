@@ -190,28 +190,21 @@ async def list_periods(
     db: AsyncSession = Depends(get_db),
     user: m.UserAccount = Depends(get_current_user),
 ):
-    """返回用户可见的会计期间列表（供前端报表选期间用）"""
-    company_ids = _company_filter(user)
+    """返回用户可见的会计期间列表（供前端报表选期间用）
 
+    按 user.company_id 过滤（BOSS/FINANCE 也只看自己主公司），
+    避免多公司场景下 (year, period_number) 去重选中错误 period_id。
+    """
     stmt = (
         select(m.AccountingPeriod, m.FiscalYear)
         .join(m.FiscalYear, m.AccountingPeriod.fiscal_year_id == m.FiscalYear.id)
+        .where(m.FiscalYear.company_id == user.company_id)
+        .order_by(m.FiscalYear.year.desc(), m.AccountingPeriod.period_number)
     )
-    if company_ids:
-        stmt = stmt.where(m.FiscalYear.company_id.in_(company_ids))
-    stmt = stmt.order_by(m.FiscalYear.year.desc(), m.AccountingPeriod.period_number)
 
     result = await db.execute(stmt)
-    rows = result.all()
-
-    seen = {}
-    data = []
-    for period, fy in rows:
-        key = (fy.year, period.period_number)
-        if key in seen:
-            continue
-        seen[key] = True
-        data.append({
+    data = [
+        {
             "id": period.id,
             "year": fy.year,
             "period_number": period.period_number,
@@ -219,6 +212,8 @@ async def list_periods(
             "end_date": period.end_date.isoformat(),
             "status": period.status,
             "label": f"{fy.year}年第{period.period_number}期",
-        })
+        }
+        for period, fy in result.all()
+    ]
 
     return {"periods": data}

@@ -98,6 +98,8 @@ ROLE_ALLOWED_TABLES = {
         "goods_receipt", "goods_receipt_line",
         "inventory", "warehouse", "warehouse_location",
         "label_template",
+        "sales_order", "sales_order_line", "customer",
+        "purchase_order", "purchase_order_line", "supplier",
     },
 }
 
