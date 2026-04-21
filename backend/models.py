@@ -200,7 +200,6 @@ class SalesOrder(AuditMixin, Base):
     payment_terms_days = Column(Integer, default=30)
     shipping_method = Column(String(10), default="FOB")
     status = Column(String(30), default="DRAFT")
-    order_date = Column(Date, nullable=True)
     notes = Column(Text, default="")
 
     customer = relationship("Customer")
@@ -242,7 +241,6 @@ class PurchaseOrder(AuditMixin, Base):
     expected_delivery_date = Column(Date, nullable=True)
     actual_delivery_date = Column(Date, nullable=True)
     status = Column(String(30), default="DRAFT")
-    order_date = Column(Date, nullable=True)
     notes = Column(Text, default="")
 
     supplier = relationship("Supplier")

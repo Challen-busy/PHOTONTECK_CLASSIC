@@ -98,7 +98,7 @@ function getStatusBadge(wf) {
   if (wf.is_active)     return <Pill bg="#ebf5ee" color="#1f8f3a">上线</Pill>;
   return <Pill bg="#f5f2ef" color="#4e4e4e">停用</Pill>;
 }
-function isLocked(wf, dangerMode) { return !!wf.is_published && !dangerMode; }
+function isLocked(wf, dangerMode) { return !!wf?.is_published && !dangerMode; }
 
 export default function FlowEditor() {
   const [workflows, setWorkflows] = useState([]);
@@ -620,6 +620,7 @@ export default function FlowEditor() {
               children: !selectedNode ? (
                 <Empty description="点画布上的节点编辑" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ paddingTop: 60 }} />
               ) : (
+                <div style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto', paddingRight: 4 }}>
                 <Card
                   size="small"
                   style={{ borderRadius: 12, boxShadow: CARD_SHADOW, border: 'none' }}
@@ -797,6 +798,7 @@ export default function FlowEditor() {
                     </Space>
                   )}
                 </Card>
+                </div>
               ),
             },
             {

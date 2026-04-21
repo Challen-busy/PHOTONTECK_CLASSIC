@@ -63,7 +63,6 @@ GLOBAL_LABELS = {
     "start_date": "开始日期",
     "end_date": "结束日期",
     "effective_date": "生效日期",
-    "order_date": "下单日期",
     "received_date": "收货日期",
     "shipped_date": "发货日期",
     "paid_date": "收/付款日期",

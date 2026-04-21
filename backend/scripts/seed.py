@@ -160,14 +160,14 @@ async def seed():
             order_number="SO-2025-0001", customer_id=customers["INTEL"].id,
             sales_engineer_id=users["se_wang"].id, sales_assistant_id=users["sa_li"].id,
             currency="USD", total_amount=Decimal("185000"), payment_terms_days=60,
-            status="APPROVED", order_date=today - timedelta(days=10),
+            status="APPROVED",
             company_id=hk.id, created_by_id=users["sa_li"].id,
         )
         so2 = m.SalesOrder(
             order_number="SO-2025-0002", customer_id=customers["TENCENT"].id,
             sales_engineer_id=users["se_wang"].id, sales_assistant_id=users["sa_li"].id,
             currency="CNY", total_amount=Decimal("580000"), payment_terms_days=30,
-            status="DRAFT", order_date=today - timedelta(days=5),
+            status="DRAFT",
             company_id=hk.id, created_by_id=users["sa_li"].id,
         )
         db.add_all([so1, so2])
@@ -192,7 +192,6 @@ async def seed():
             purchase_assistant_id=users["pa_chen"].id, related_sales_order_id=so1.id,
             currency="USD", total_amount=Decimal("75000"),
             expected_delivery_date=today + timedelta(days=25), status="ORDERED",
-            order_date=today - timedelta(days=8),
             company_id=hk.id, created_by_id=users["pa_chen"].id,
         )
         db.add(po1)

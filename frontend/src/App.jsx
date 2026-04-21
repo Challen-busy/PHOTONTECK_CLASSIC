@@ -12,6 +12,7 @@ import Admin from './pages/Admin';
 import FlowEditor from './pages/FlowEditor';
 import NodeView from './pages/NodeView';
 import MyTodos from './pages/MyTodos';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -35,7 +36,7 @@ function AppRoutes() {
         <Route path="history/:docType/:docId" element={<DocHistory />} />
         <Route path="node/:workflowId/:stateCode" element={<NodeView />} />
         <Route path="admin" element={<Admin />} />
-        <Route path="flow-editor" element={<FlowEditor />} />
+        <Route path="flow-editor" element={<ErrorBoundary><FlowEditor /></ErrorBoundary>} />
       </Route>
     </Routes>
   );
