@@ -190,15 +190,40 @@ class SalesOrder(AuditMixin, Base):
     __doc_types__ = ("SALES_ORDER",)
     id = Column(Integer, primary_key=True)
     order_number = Column(String(30), unique=True, index=True, nullable=False)
+    customer_po_number = Column(String(50), index=True, default="")
+    customer_po_date = Column(Date, nullable=True)
+    customer_vendor_no = Column(String(50), default="")
+    quotation_reference = Column(String(100), default="")
     customer_id = Column(Integer, ForeignKey("customer.id"))
+    inquiry_id = Column(Integer, ForeignKey("sales_inquiry.id"), nullable=True)
+    quotation_id = Column(Integer, ForeignKey("quotation.id"), nullable=True)
     framework_contract_id = Column(Integer, ForeignKey("framework_contract.id"), nullable=True)
     sales_engineer_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
     sales_assistant_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    sales_assistant_names = Column(Text, default="")
+    product_manager_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    customer_region = Column(String(50), default="")
     order_type = Column(String(20), default="STANDARD")  # STANDARD / TRADE(背靠背贸易)
     currency = Column(String(3), default="USD")
+    exchange_rate = Column(Numeric(12, 6), default=1)
     total_amount = Column(Numeric(16, 2), default=0)
     payment_terms_days = Column(Integer, default=30)
+    payment_terms_text = Column(String(100), default="")
     shipping_method = Column(String(10), default="FOB")
+    shipment_terms = Column(String(100), default="")
+    requires_advance_receipt = Column(Boolean, default=False)
+    advance_receipt_amount = Column(Numeric(16, 2), default=0)
+    delivery_address = Column(Text, default="")
+    bill_to_name = Column(String(200), default="")
+    bill_to_address = Column(Text, default="")
+    bill_to_contact = Column(String(100), default="")
+    bill_to_phone = Column(String(50), default="")
+    ship_to_name = Column(String(200), default="")
+    ship_to_address = Column(Text, default="")
+    ship_to_contact = Column(String(100), default="")
+    ship_to_phone = Column(String(50), default="")
+    packaging_requirements = Column(Text, default="")
+    barcode_requirements = Column(Text, default="")
     status = Column(String(30), default="DRAFT")
     notes = Column(Text, default="")
 
@@ -211,14 +236,108 @@ class SalesOrderLine(Base):
     id = Column(Integer, primary_key=True)
     sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=False)
     line_number = Column(SmallInteger, nullable=False)
+    customer_line_number = Column(String(30), default="")
+    customer_pr_number = Column(String(50), default="")
+    customer_part_number = Column(String(100), default="")
+    part_revision = Column(String(30), default="")
     material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
+    product_description = Column(Text, default="")
     quantity = Column(Numeric(12, 2), nullable=False)
+    uom = Column(String(20), default="")
     unit_price = Column(Numeric(12, 4), nullable=False)
     total_price = Column(Numeric(16, 2), nullable=False)
+    tax_rate = Column(Numeric(5, 2), default=0)
     requested_delivery_date = Column(Date, nullable=True)
     shipped_quantity = Column(Numeric(12, 2), default=0)
     status = Column(String(30), default="PENDING")
     __table_args__ = (UniqueConstraint("sales_order_id", "line_number"),)
+
+    material = relationship("Material")
+
+
+class SalesInquiry(AuditMixin, Base):
+    """CRM: 客户询价需求，后续可转报价单。"""
+    __tablename__ = "sales_inquiry"
+    __doc_types__ = ("SALES_INQUIRY",)
+    id = Column(Integer, primary_key=True)
+    inquiry_number = Column(String(30), index=True, nullable=False)
+    customer_id = Column(Integer, ForeignKey("customer.id"))
+    sales_assistant_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    product_manager_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    source = Column(String(30), default="")
+    target_price = Column(Numeric(16, 2), nullable=True)
+    currency = Column(String(3), default="USD")
+    required_delivery_date = Column(Date, nullable=True)
+    delivery_address = Column(Text, default="")
+    packaging_requirements = Column(Text, default="")
+    barcode_requirements = Column(Text, default="")
+    payment_requirement = Column(String(100), default="")
+    status = Column(String(30), default="DRAFT")
+    notes = Column(Text, default="")
+
+    customer = relationship("Customer")
+    __table_args__ = (UniqueConstraint("company_id", "inquiry_number"),)
+
+
+class SalesInquiryLine(Base):
+    __tablename__ = "sales_inquiry_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    inquiry_id = Column(Integer, ForeignKey("sales_inquiry.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=True)
+    product_description = Column(Text, default="")
+    quantity = Column(Numeric(12, 2), nullable=False)
+    target_unit_price = Column(Numeric(12, 4), nullable=True)
+    requested_delivery_date = Column(Date, nullable=True)
+    notes = Column(Text, default="")
+    __table_args__ = (UniqueConstraint("inquiry_id", "line_number"),)
+
+    material = relationship("Material")
+
+
+class Quotation(AuditMixin, Base):
+    """CRM/ERP: 报价单，客户确认后转销售订单。"""
+    __tablename__ = "quotation"
+    __doc_types__ = ("QUOTATION",)
+    id = Column(Integer, primary_key=True)
+    quotation_number = Column(String(30), index=True, nullable=False)
+    inquiry_id = Column(Integer, ForeignKey("sales_inquiry.id"), nullable=True)
+    customer_id = Column(Integer, ForeignKey("customer.id"))
+    sales_assistant_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    product_manager_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    currency = Column(String(3), default="USD")
+    total_amount = Column(Numeric(16, 2), default=0)
+    tax_rate = Column(Numeric(5, 2), default=0)
+    payment_terms_days = Column(Integer, default=30)
+    shipping_method = Column(String(10), default="FOB")
+    valid_until = Column(Date, nullable=True)
+    delivery_address = Column(Text, default="")
+    packaging_requirements = Column(Text, default="")
+    barcode_requirements = Column(Text, default="")
+    status = Column(String(30), default="DRAFT")
+    notes = Column(Text, default="")
+
+    customer = relationship("Customer")
+    __table_args__ = (UniqueConstraint("company_id", "quotation_number"),)
+
+
+class QuotationLine(Base):
+    __tablename__ = "quotation_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    quotation_id = Column(Integer, ForeignKey("quotation.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=True)
+    product_description = Column(Text, default="")
+    quantity = Column(Numeric(12, 2), nullable=False)
+    unit_price = Column(Numeric(12, 4), nullable=False)
+    total_price = Column(Numeric(16, 2), nullable=False)
+    tax_rate = Column(Numeric(5, 2), default=0)
+    delivery_days = Column(Integer, nullable=True)
+    packaging_requirements = Column(Text, default="")
+    barcode_requirements = Column(Text, default="")
+    __table_args__ = (UniqueConstraint("quotation_id", "line_number"),)
 
     material = relationship("Material")
 
@@ -232,14 +351,33 @@ class PurchaseOrder(AuditMixin, Base):
     __doc_types__ = ("PURCHASE_ORDER",)
     id = Column(Integer, primary_key=True)
     order_number = Column(String(30), unique=True, index=True, nullable=False)
+    po_date = Column(Date, nullable=True)
     supplier_id = Column(Integer, ForeignKey("supplier.id"))
     purchase_assistant_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
     related_sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=True)
+    purchase_notice_id = Column(Integer, ForeignKey("purchase_notice.id"), nullable=True)
     is_stock_order = Column(Boolean, default=False)
     currency = Column(String(3), default="USD")
     total_amount = Column(Numeric(16, 2), default=0)
     expected_delivery_date = Column(Date, nullable=True)
     actual_delivery_date = Column(Date, nullable=True)
+    shipment_terms = Column(String(100), default="")
+    payment_terms_text = Column(String(100), default="")
+    ship_to_name = Column(String(200), default="")
+    ship_to_address = Column(Text, default="")
+    ship_to_contact = Column(String(100), default="")
+    ship_to_phone = Column(String(50), default="")
+    bill_to_name = Column(String(200), default="")
+    bill_to_address = Column(Text, default="")
+    bill_to_contact = Column(String(100), default="")
+    bill_to_phone = Column(String(50), default="")
+    end_user = Column(String(100), default="")
+    vendor_code = Column(String(50), default="")
+    ship_via = Column(String(100), default="")
+    supplier_contact = Column(String(100), default="")
+    buyer_name = Column(String(100), default="")
+    requires_advance_payment = Column(Boolean, default=False)
+    advance_payment_amount = Column(Numeric(16, 2), default=0)
     status = Column(String(30), default="DRAFT")
     notes = Column(Text, default="")
 
@@ -253,12 +391,51 @@ class PurchaseOrderLine(Base):
     purchase_order_id = Column(Integer, ForeignKey("purchase_order.id"), nullable=False)
     line_number = Column(SmallInteger, nullable=False)
     material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
+    supplier_part_number = Column(String(100), default="")
+    product_description = Column(Text, default="")
     quantity = Column(Numeric(12, 2), nullable=False)
+    uom = Column(String(20), default="")
     unit_price = Column(Numeric(12, 4), nullable=False)
     total_price = Column(Numeric(16, 2), nullable=False)
+    delivery_date = Column(Date, nullable=True)
     sales_order_line_id = Column(Integer, ForeignKey("sales_order_line.id"), nullable=True)
     received_quantity = Column(Numeric(12, 2), default=0)
     __table_args__ = (UniqueConstraint("purchase_order_id", "line_number"),)
+
+    material = relationship("Material")
+
+
+class PurchaseNotice(AuditMixin, Base):
+    """销售订单审核后给采购侧的采购通知。"""
+    __tablename__ = "purchase_notice"
+    __doc_types__ = ("PURCHASE_NOTICE",)
+    id = Column(Integer, primary_key=True)
+    notice_number = Column(String(30), index=True, nullable=False)
+    sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=True)
+    requested_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    purchase_assistant_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    required_delivery_date = Column(Date, nullable=True)
+    status = Column(String(30), default="DRAFT")
+    notes = Column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("company_id", "notice_number"),)
+
+
+class PurchaseNoticeLine(Base):
+    __tablename__ = "purchase_notice_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    purchase_notice_id = Column(Integer, ForeignKey("purchase_notice.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    sales_order_line_id = Column(Integer, ForeignKey("sales_order_line.id"), nullable=True)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
+    quantity = Column(Numeric(12, 2), nullable=False)
+    preferred_supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)
+    required_delivery_date = Column(Date, nullable=True)
+    packaging_requirements = Column(Text, default="")
+    barcode_requirements = Column(Text, default="")
+    notes = Column(Text, default="")
+    __table_args__ = (UniqueConstraint("purchase_notice_id", "line_number"),)
 
     material = relationship("Material")
 
@@ -301,6 +478,20 @@ class Inventory(AuditMixin, Base):
     warehouse_id = Column(Integer, ForeignKey("warehouse.id"))
     location_id = Column(Integer, ForeignKey("warehouse_location.id"), nullable=True)
     batch_number = Column(String(50), index=True, nullable=False)
+    inbound_number = Column(String(50), index=True, default="")
+    source_doc_number = Column(String(50), default="")
+    serial_lot_number = Column(String(100), index=True, default="")
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)
+    goods_nature = Column(String(30), default="")
+    uom = Column(String(20), default="")
+    tracking_number = Column(String(100), default="")
+    delivery_method = Column(String(50), default="")
+    carton_number = Column(String(50), default="")
+    origin_country = Column(String(50), default="")
+    hs_code = Column(String(50), default="")
+    location_code = Column(String(50), default="")
+    date_code = Column(String(50), default="")
+    production_date = Column(Date, nullable=True)
     quantity = Column(Numeric(12, 2), nullable=False)
     reserved_quantity = Column(Numeric(12, 2), default=0)
     received_date = Column(Date, index=True)
@@ -309,6 +500,7 @@ class Inventory(AuditMixin, Base):
 
     material = relationship("Material")
     warehouse = relationship("Warehouse")
+    supplier = relationship("Supplier")
 
     __table_args__ = (Index("ix_inventory_fifo", "material_id", "warehouse_id", "received_date"),)
 
@@ -338,6 +530,20 @@ class GoodsReceiptLine(Base):
     quality_status = Column(String(10), default="OK")
     discrepancy_note = Column(Text, default="")
     batch_number = Column(String(50), default="")
+    inbound_number = Column(String(50), default="")
+    serial_lot_number = Column(String(100), default="")
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)
+    goods_nature = Column(String(30), default="")
+    uom = Column(String(20), default="")
+    tracking_number = Column(String(100), default="")
+    delivery_method = Column(String(50), default="")
+    source_doc_number = Column(String(50), default="")
+    carton_number = Column(String(50), default="")
+    origin_country = Column(String(50), default="")
+    hs_code = Column(String(50), default="")
+    location_code = Column(String(50), default="")
+    date_code = Column(String(50), default="")
+    production_date = Column(Date, nullable=True)
 
 
 class ShipmentRequest(AuditMixin, Base):
@@ -351,6 +557,15 @@ class ShipmentRequest(AuditMixin, Base):
     warehouse_id = Column(Integer, ForeignKey("warehouse.id"), nullable=True)
     shipping_method = Column(String(10), default="")
     tracking_number = Column(String(100), default="")
+    source_purchase_order_number = Column(String(50), default="")
+    product_line = Column(String(50), default="")
+    payment_terms_text = Column(String(100), default="")
+    document_status = Column(String(50), default="")
+    packaging_requirements = Column(Text, default="")
+    barcode_requirements = Column(Text, default="")
+    delivery_requirements = Column(Text, default="")
+    label_status = Column(String(20), default="PENDING")
+    inspection_status = Column(String(20), default="PENDING")
     status = Column(String(20), default="DRAFT")
     shipped_date = Column(Date, nullable=True)
     notes = Column(Text, default="")
@@ -364,6 +579,51 @@ class ShipmentLine(Base):
     sales_order_line_id = Column(Integer, ForeignKey("sales_order_line.id"), nullable=False)
     inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=False)
     quantity = Column(Numeric(12, 2), nullable=False)
+    uom = Column(String(20), default="")
+    inbound_number = Column(String(50), default="")
+    serial_lot_number = Column(String(100), default="")
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)
+    goods_nature = Column(String(30), default="")
+    tracking_number = Column(String(100), default="")
+    delivery_method = Column(String(50), default="")
+    invoice_number = Column(String(50), default="")
+    carton_number = Column(String(50), default="")
+    origin_country = Column(String(50), default="")
+    hs_code = Column(String(50), default="")
+
+
+class SalesReturn(AuditMixin, Base):
+    """WMS/ERP: 客户退货通知和退货入库源单。"""
+    __tablename__ = "sales_return"
+    __doc_types__ = ("SALES_RETURN",)
+    id = Column(Integer, primary_key=True)
+    return_number = Column(String(30), index=True, nullable=False)
+    sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=True)
+    shipment_id = Column(Integer, ForeignKey("shipment_request.id"), nullable=True)
+    customer_id = Column(Integer, ForeignKey("customer.id"))
+    warehouse_id = Column(Integer, ForeignKey("warehouse.id"), nullable=True)
+    return_reason = Column(Text, default="")
+    logistics_tracking_number = Column(String(100), default="")
+    status = Column(String(30), default="DRAFT")
+    notes = Column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("company_id", "return_number"),)
+
+
+class SalesReturnLine(Base):
+    __tablename__ = "sales_return_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    sales_return_id = Column(Integer, ForeignKey("sales_return.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    sales_order_line_id = Column(Integer, ForeignKey("sales_order_line.id"), nullable=True)
+    shipment_line_id = Column(Integer, ForeignKey("shipment_line.id"), nullable=True)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
+    quantity = Column(Numeric(12, 2), nullable=False)
+    quality_status = Column(String(10), default="PENDING")
+    return_action = Column(String(20), default="RESTOCK")
+    notes = Column(Text, default="")
+    __table_args__ = (UniqueConstraint("sales_return_id", "line_number"),)
 
 
 class PickingList(Base):
@@ -616,6 +876,119 @@ class ARSettlement(AuditMixin, Base):
     settle_amount = Column(Numeric(16, 2), nullable=False)
     settle_date = Column(Date)
     remark = Column(Text, default="")
+
+
+class AdvanceReceipt(AuditMixin, Base):
+    """销售侧预收款：客户未发货前付款，关联销售订单。"""
+    __tablename__ = "advance_receipt"
+    __doc_types__ = ("ADVANCE_RECEIPT",)
+    id = Column(Integer, primary_key=True)
+    receipt_number = Column(String(50), index=True, nullable=False)
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)
+    sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=True)
+    bank_account = Column(String(50), default="")
+    payer_name = Column(String(100), default="")
+    amount = Column(Numeric(16, 2), nullable=False)
+    currency = Column(String(3), default="CNY")
+    receipt_date = Column(Date, nullable=True)
+    status = Column(String(30), default="DRAFT")
+    notes = Column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("company_id", "receipt_number"),)
+
+
+class AdvancePayment(AuditMixin, Base):
+    """采购侧预付款：公司未收货前付款给供应商，关联采购订单。"""
+    __tablename__ = "advance_payment"
+    __doc_types__ = ("ADVANCE_PAYMENT",)
+    id = Column(Integer, primary_key=True)
+    payment_number = Column(String(50), index=True, nullable=False)
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)
+    purchase_order_id = Column(Integer, ForeignKey("purchase_order.id"), nullable=True)
+    requested_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    approved_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    bank_account = Column(String(50), default="")
+    payee_name = Column(String(100), default="")
+    amount = Column(Numeric(16, 2), nullable=False)
+    currency = Column(String(3), default="CNY")
+    payment_date = Column(Date, nullable=True)
+    status = Column(String(30), default="DRAFT")
+    notes = Column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("company_id", "payment_number"),)
+
+
+class PurchaseInvoice(AuditMixin, Base):
+    """采购发票：与外购入库单勾稽后形成采购核算。"""
+    __tablename__ = "purchase_invoice"
+    __doc_types__ = ("PURCHASE_INVOICE",)
+    id = Column(Integer, primary_key=True)
+    invoice_number = Column(String(50), index=True, nullable=False)
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)
+    purchase_order_id = Column(Integer, ForeignKey("purchase_order.id"), nullable=True)
+    goods_receipt_id = Column(Integer, ForeignKey("goods_receipt.id"), nullable=True)
+    amount = Column(Numeric(16, 2), nullable=False)
+    currency = Column(String(3), default="CNY")
+    tax_rate = Column(Numeric(5, 2), default=0)
+    invoice_date = Column(Date, nullable=True)
+    matched_at = Column(DateTime, nullable=True)
+    status = Column(String(30), default="DRAFT")
+    notes = Column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("company_id", "invoice_number"),)
+
+
+class PurchaseInvoiceLine(Base):
+    __tablename__ = "purchase_invoice_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    purchase_invoice_id = Column(Integer, ForeignKey("purchase_invoice.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    purchase_order_line_id = Column(Integer, ForeignKey("purchase_order_line.id"), nullable=True)
+    goods_receipt_line_id = Column(Integer, ForeignKey("goods_receipt_line.id"), nullable=True)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
+    quantity = Column(Numeric(12, 2), nullable=False)
+    unit_price = Column(Numeric(12, 4), nullable=False)
+    total_price = Column(Numeric(16, 2), nullable=False)
+    tax_rate = Column(Numeric(5, 2), default=0)
+    __table_args__ = (UniqueConstraint("purchase_invoice_id", "line_number"),)
+
+
+class SalesInvoice(AuditMixin, Base):
+    """销售发票：与销售出库勾稽后形成收入和销售成本核算。"""
+    __tablename__ = "sales_invoice"
+    __doc_types__ = ("SALES_INVOICE",)
+    id = Column(Integer, primary_key=True)
+    invoice_number = Column(String(50), index=True, nullable=False)
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)
+    sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=True)
+    shipment_id = Column(Integer, ForeignKey("shipment_request.id"), nullable=True)
+    amount = Column(Numeric(16, 2), nullable=False)
+    currency = Column(String(3), default="CNY")
+    tax_rate = Column(Numeric(5, 2), default=0)
+    invoice_date = Column(Date, nullable=True)
+    matched_at = Column(DateTime, nullable=True)
+    status = Column(String(30), default="DRAFT")
+    notes = Column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("company_id", "invoice_number"),)
+
+
+class SalesInvoiceLine(Base):
+    __tablename__ = "sales_invoice_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    sales_invoice_id = Column(Integer, ForeignKey("sales_invoice.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    sales_order_line_id = Column(Integer, ForeignKey("sales_order_line.id"), nullable=True)
+    shipment_line_id = Column(Integer, ForeignKey("shipment_line.id"), nullable=True)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
+    quantity = Column(Numeric(12, 2), nullable=False)
+    unit_price = Column(Numeric(12, 4), nullable=False)
+    total_price = Column(Numeric(16, 2), nullable=False)
+    tax_rate = Column(Numeric(5, 2), default=0)
+    cost_amount = Column(Numeric(16, 2), default=0)
+    __table_args__ = (UniqueConstraint("sales_invoice_id", "line_number"),)
 
 
 class InventoryValuation(AuditMixin, Base):

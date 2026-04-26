@@ -29,16 +29,30 @@ const TABLE_META = {
   purchase_order:     { cn: '采购订单',     desc: '向供应商采购的主单据',         icon: <ShoppingOutlined />,    cat: 'txn' },
   purchase_order_line:{ cn: '采购订单行',   desc: '采购订单的物料明细',           icon: <FileTextOutlined />,    cat: 'txn' },
   framework_contract: { cn: '框架合同',     desc: '与客户的长期框架协议',         icon: <FileDoneOutlined />,    cat: 'txn' },
+  sales_inquiry:      { cn: '客户询价',     desc: '客户需求、目标价、交期与包装要求', icon: <TeamOutlined />,        cat: 'crm' },
+  sales_inquiry_line: { cn: '询价明细',     desc: '询价单的产品和数量明细',       icon: <FileTextOutlined />,    cat: 'crm' },
+  quotation:          { cn: '报价单',       desc: 'PM 授权后的正式客户报价',     icon: <FileDoneOutlined />,    cat: 'crm' },
+  quotation_line:     { cn: '报价明细',     desc: '报价单产品、价格和税率明细',   icon: <FileTextOutlined />,    cat: 'crm' },
+  purchase_notice:    { cn: '采购通知',     desc: '销售订单传递给采购侧的需求',   icon: <ShoppingOutlined />,    cat: 'txn' },
+  purchase_notice_line:{ cn: '采购通知行',  desc: '采购通知的物料需求明细',       icon: <FileTextOutlined />,    cat: 'txn' },
   // 仓储
   inventory:          { cn: '库存批次',     desc: '按批次记录的现货库存',         icon: <GoldOutlined />,        cat: 'wms' },
   shipment_request:   { cn: '发货单',       desc: '出库发货指令',                 icon: <TruckOutlined />,       cat: 'wms' },
   goods_receipt:      { cn: '入库单',       desc: '到货收货登记',                 icon: <ContainerOutlined />,   cat: 'wms' },
+  sales_return:       { cn: '销售退货',     desc: '客户退货通知和退货入库源单',   icon: <TruckOutlined />,       cat: 'wms' },
+  sales_return_line:  { cn: '销售退货行',   desc: '退货物料和处理方式',           icon: <FileTextOutlined />,    cat: 'wms' },
   // 财务
   voucher:            { cn: '凭证',         desc: '记账凭证主表',                 icon: <AuditOutlined />,       cat: 'fin' },
   voucher_entry:      { cn: '凭证分录',     desc: '凭证的借贷明细',               icon: <FileTextOutlined />,    cat: 'fin' },
   account:            { cn: '会计科目',     desc: '会计科目主数据',               icon: <BankOutlined />,        cat: 'fin' },
   accounts_receivable:{ cn: '应收账款',     desc: '客户欠款台账',                 icon: <DollarOutlined />,      cat: 'fin' },
   accounts_payable:   { cn: '应付账款',     desc: '应付供应商账款',               icon: <DollarOutlined />,      cat: 'fin' },
+  advance_receipt:    { cn: '预收单',       desc: '客户未发货前付款登记',         icon: <DollarOutlined />,      cat: 'fin' },
+  advance_payment:    { cn: '预付单',       desc: '向供应商提前付款登记',         icon: <DollarOutlined />,      cat: 'fin' },
+  purchase_invoice:   { cn: '采购发票',     desc: '采购发票与入库勾稽',           icon: <FileDoneOutlined />,    cat: 'fin' },
+  purchase_invoice_line:{ cn: '采购发票行', desc: '采购发票物料明细',             icon: <FileTextOutlined />,    cat: 'fin' },
+  sales_invoice:      { cn: '销售发票',     desc: '销售发票与出库勾稽',           icon: <FileDoneOutlined />,    cat: 'fin' },
+  sales_invoice_line: { cn: '销售发票行',   desc: '销售发票物料和成本明细',       icon: <FileTextOutlined />,    cat: 'fin' },
   customer_credit:    { cn: '客户信用',     desc: '给客户的信用额度',             icon: <DollarOutlined />,      cat: 'fin' },
   supplier_credit:    { cn: '供应商信用',   desc: '供应商授予的信用额度',         icon: <DollarOutlined />,      cat: 'fin' },
   exchange_rate:      { cn: '汇率',         desc: '多币种兑换汇率',               icon: <SwapOutlined />,        cat: 'fin' },
@@ -105,12 +119,18 @@ function StatusPill({ value }) {
 }
 
 const DOC_TYPE_MAP = {
-  sales_order: 'SALES_ORDER', purchase_order: 'PURCHASE_ORDER',
+  sales_inquiry: 'SALES_INQUIRY', quotation: 'QUOTATION',
+  sales_order: 'SALES_ORDER', purchase_notice: 'PURCHASE_NOTICE',
+  purchase_order: 'PURCHASE_ORDER',
   shipment_request: 'SHIPMENT', voucher: 'VOUCHER',
-  goods_receipt: 'GOODS_RECEIPT', project: 'PROJECT',
+  goods_receipt: 'GOODS_RECEIPT', sales_return: 'SALES_RETURN', project: 'PROJECT',
   framework_contract: 'FRAMEWORK_CONTRACT',
   accounts_receivable: 'ACCOUNTS_RECEIVABLE',
   accounts_payable: 'ACCOUNTS_PAYABLE',
+  advance_receipt: 'ADVANCE_RECEIPT',
+  advance_payment: 'ADVANCE_PAYMENT',
+  purchase_invoice: 'PURCHASE_INVOICE',
+  sales_invoice: 'SALES_INVOICE',
 };
 
 const CARD_SHADOW =

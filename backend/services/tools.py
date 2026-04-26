@@ -43,8 +43,16 @@ BUY_PRICE_FIELDS = {"unit_price", "total_price", "total_amount", "current_unit_c
 SELL_PRICE_FIELDS = {"unit_price", "total_price", "total_amount"}
 
 # 买价相关的表
-BUY_TABLES = {"purchase_order", "purchase_order_line", "accounts_payable", "supplier_credit", "inventory_valuation", "inventory_transaction"}
-SELL_TABLES = {"sales_order", "sales_order_line", "accounts_receivable", "customer_credit"}
+BUY_TABLES = {
+    "purchase_order", "purchase_order_line", "purchase_notice", "purchase_notice_line",
+    "purchase_invoice", "purchase_invoice_line", "advance_payment",
+    "accounts_payable", "supplier_credit", "inventory_valuation", "inventory_transaction",
+}
+SELL_TABLES = {
+    "sales_order", "sales_order_line", "sales_inquiry", "sales_inquiry_line",
+    "quotation", "quotation_line", "sales_invoice", "sales_invoice_line",
+    "advance_receipt", "accounts_receivable", "customer_credit",
+}
 
 # user_account 里的敏感字段:对任何人屏蔽 password_hash,对非 ADMIN/BOSS 屏蔽 is_admin
 USER_ACCOUNT_ALWAYS_HIDDEN = {"password_hash"}
@@ -68,26 +76,39 @@ _COMMON_TABLES = {
 ROLE_ALLOWED_TABLES = {
     "SALES_ASSISTANT": _COMMON_TABLES | {
         "customer", "framework_contract",
+        "sales_inquiry", "sales_inquiry_line",
+        "quotation", "quotation_line",
         "sales_order", "sales_order_line",
+        "purchase_notice", "purchase_notice_line",
         "shipment_request", "shipment_line",
-        "accounts_receivable",
+        "sales_return", "sales_return_line",
+        "advance_receipt", "accounts_receivable", "sales_invoice", "sales_invoice_line",
         "inventory",  # 承诺发货前查库存
     },
     "SALES_ENGINEER": _COMMON_TABLES | {
         "customer", "framework_contract",
+        "sales_inquiry", "sales_inquiry_line",
+        "quotation", "quotation_line",
         "sales_order", "sales_order_line",
         "project", "project_material", "project_activity",
         "inventory",
     },
     "PRODUCT_ASSISTANT": _COMMON_TABLES | {
         "supplier",
+        "purchase_notice", "purchase_notice_line",
         "purchase_order", "purchase_order_line",
+        "sales_order", "sales_order_line",
+        "purchase_invoice", "purchase_invoice_line",
+        "advance_payment",
         "goods_receipt", "goods_receipt_line",
         "accounts_payable",
         "inventory", "warehouse", "warehouse_location",
     },
     "PRODUCT_MANAGER": _COMMON_TABLES | {
         "supplier", "customer",
+        "sales_inquiry", "sales_inquiry_line",
+        "quotation", "quotation_line",
+        "purchase_notice", "purchase_notice_line",
         "project", "project_material", "project_activity",
         "purchase_order", "sales_order",
         "inventory",
@@ -96,6 +117,7 @@ ROLE_ALLOWED_TABLES = {
         "shipment_request", "shipment_line",
         "picking_list", "picking_list_line",
         "goods_receipt", "goods_receipt_line",
+        "sales_return", "sales_return_line",
         "inventory", "warehouse", "warehouse_location",
         "label_template",
         "sales_order", "sales_order_line", "customer",

@@ -141,6 +141,9 @@ start_backend() {
     fi
   fi
 
+  color "补种第一期 CRM/WMS/ERP 流程"
+  python -m scripts.seed_phase1 || warn "第一期流程补种失败，稍后可手动执行 python -m scripts.seed_phase1"
+
   color "启动后端 uvicorn :8000"
   nohup uvicorn main:app --host 0.0.0.0 --port 8000 --reload \
     > "$LOG_BACK" 2>&1 &

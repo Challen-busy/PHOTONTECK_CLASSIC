@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.auth import hash_password
 from core.database import Base, get_async_engine, get_session_factory
+from services.phase1_workflows import phase1_workflow_definitions
 import models as m
 
 
@@ -1155,6 +1156,14 @@ async def seed():
                 node_positions=INITIAL_POSITIONS.get(doc_type, {}),
             )
             db.add(wf)
+
+        # === 第一期 CRM/WMS/ERP 打通流程 ===
+        existing_workflow_doc_types = {doc_type for doc_type, *_ in workflows}
+        for wf_def in phase1_workflow_definitions(users["admin"].id):
+            # SALES_ORDER / PURCHASE_ORDER 等旧流程已经在上面创建，启动脚本会再运行
+            # scripts.seed_phase1 做幂等更新，避免这里触发 (doc_type, version) 唯一冲突。
+            if wf_def["doc_type"] not in existing_workflow_doc_types:
+                db.add(m.WorkflowDefinition(**wf_def))
 
         # === 知识库 ===
         knowledge = [

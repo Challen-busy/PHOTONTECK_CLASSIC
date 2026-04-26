@@ -25,11 +25,15 @@ function Pill({ bg, color, children }) {
 }
 
 const tableMap = {
-  SALES_ORDER: 'sales_order', PURCHASE_ORDER: 'purchase_order',
+  SALES_INQUIRY: 'sales_inquiry', QUOTATION: 'quotation',
+  SALES_ORDER: 'sales_order', PURCHASE_NOTICE: 'purchase_notice',
+  PURCHASE_ORDER: 'purchase_order',
   SHIPMENT: 'shipment_request', VOUCHER: 'voucher', VOUCHER_ADJUSTMENT: 'voucher',
-  GOODS_RECEIPT: 'goods_receipt', PROJECT: 'project',
+  GOODS_RECEIPT: 'goods_receipt', SALES_RETURN: 'sales_return', PROJECT: 'project',
   FRAMEWORK_CONTRACT: 'framework_contract',
   ACCOUNTS_RECEIVABLE: 'accounts_receivable', ACCOUNTS_PAYABLE: 'accounts_payable',
+  ADVANCE_RECEIPT: 'advance_receipt', ADVANCE_PAYMENT: 'advance_payment',
+  PURCHASE_INVOICE: 'purchase_invoice', SALES_INVOICE: 'sales_invoice',
   INVENTORY: 'inventory', INVENTORY_VIRTUAL: 'inventory', INVENTORY_COUNT: 'inventory',
   INVENTORY_COSTING: 'inventory_transaction',
 };
@@ -209,7 +213,8 @@ export default function NodeView() {
             <div style={{ maxHeight: 600, overflow: 'auto' }}>
               {docs.map(d => {
                 const selected = selectedDocId === d.id;
-                const label = d.order_number || d.voucher_number || d.shipment_number
+                const label = d.order_number || d.inquiry_number || d.quotation_number || d.notice_number
+                           || d.voucher_number || d.shipment_number || d.return_number || d.payment_number
                            || d.receipt_number || d.contract_number || d.invoice_number || d.name;
                 return (
                   <div

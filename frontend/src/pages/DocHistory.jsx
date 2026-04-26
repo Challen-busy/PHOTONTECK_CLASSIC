@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Timeline, Button, Empty, Spin, Descriptions } from 'antd';
-import { ArrowLeftOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, UserOutlined } from '@ant-design/icons';
 import { getHistory } from '../api';
 
 const CARD_SHADOW =
@@ -15,6 +15,13 @@ function Pill({ bg, color, children }) {
       fontFamily: 'ui-monospace, monospace',
     }}>{children}</span>
   );
+}
+
+function operatorLabel(log) {
+  const operator = log.triggered_by;
+  if (!operator) return log.triggered_by_id ? `用户 #${log.triggered_by_id}` : '未知操作人';
+  const name = operator.full_name || operator.username || `用户 #${operator.id}`;
+  return operator.role ? `${name} · ${operator.role}` : name;
 }
 
 export default function DocHistory() {
@@ -79,6 +86,13 @@ export default function DocHistory() {
                     }}>
                       {l.timestamp?.replace('T', ' ').slice(0, 19)}
                     </span>
+                  </div>
+                  <div style={{
+                    color: '#777169', fontSize: 12, marginTop: 6,
+                    display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+                  }}>
+                    <UserOutlined style={{ color: '#9b958d' }} />
+                    <span>操作人：{operatorLabel(l)}</span>
                   </div>
                   {l.comment && (
                     <div style={{

@@ -26,3 +26,4 @@ export const commitTransition = (card, comment = '') => api.post('/transition/co
 export const getWorkflows = () => api.get('/workflows');
 export const getKnowledge = () => api.get('/knowledge');
 export const getMyTodos = () => api.get('/my-todos');
+export const getOrderChains = (params = {}) => api.get('/order-chains', { params });

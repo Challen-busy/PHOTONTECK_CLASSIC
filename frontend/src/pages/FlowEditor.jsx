@@ -22,9 +22,11 @@ import {
 } from '@ant-design/icons';
 import api from '../api';
 import { layoutGraph } from '../utils/layout';
+import WorkflowEdge, { decorateWorkflowEdges } from '../components/WorkflowEdge';
 
 const CARD_SHADOW =
   'rgba(0,0,0,0.06) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 1px 2px, rgba(0,0,0,0.04) 0px 2px 4px';
+const edgeTypes = { workflow: WorkflowEdge };
 
 function Pill({ bg, color, children }) {
   return (
@@ -170,7 +172,7 @@ export default function FlowEditor() {
     }));
 
     const codeSet = new Set(states.map(s => s.code));
-    const newEdges = states.flatMap(s =>
+    const newEdges = decorateWorkflowEdges(states.flatMap(s =>
       (s.next || [])
         .filter(n => codeSet.has(n.to))
         .map((n, i) => {
@@ -179,16 +181,13 @@ export default function FlowEditor() {
             id: `e-${s.code}-${n.to}-${i}`,
             source: s.code, target: n.to,
             label: isPolicy ? '' : n.label,
-            labelStyle: { fontSize: 10, fill: '#4e4e4e', letterSpacing: '0.02em' },
-            labelBgStyle: { fill: '#fff', fillOpacity: 0.95 },
             markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: '#bfbbb5' },
             style: isPolicy
               ? { strokeWidth: 1.5, stroke: '#b8860b', strokeDasharray: '6 3' }
               : { strokeWidth: 1.5, stroke: '#bfbbb5' },
-            type: 'smoothstep',
           };
         })
-    );
+    ));
 
     if (!hasSaved && newNodes.length > 0) {
       newNodes = layoutGraph(newNodes, newEdges, 'TB');
@@ -585,8 +584,10 @@ export default function FlowEditor() {
               ) : (
                 <ReactFlow
                   nodes={nodes} edges={edges}
+                  edgeTypes={edgeTypes}
                   onNodesChange={handleNodesChange} onEdgesChange={onEdgesChange}
                   onNodeClick={onNodeClick} fitView
+                  defaultEdgeOptions={{ type: 'workflow' }}
                   nodesDraggable={true}
                 >
                   <Background gap={24} size={1} color="rgba(0,0,0,0.06)" />

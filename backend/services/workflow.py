@@ -692,10 +692,10 @@ async def list_user_todos(db: AsyncSession, user: m.UserAccount) -> list[dict]:
     """当前用户的待办：遍历所有流程 × 角色可操作节点 × 该节点下的单据。
 
     多租户：只看 user.company_id。
-    ADMIN / is_admin：系统管理员，豁免角色过滤，看所有非终态单据（便于全局调度）。
-    其他角色（含 BOSS）：严格按 allowed_roles 匹配；allowed_roles 为空的节点视为"无限制"对所有人可见。
+    ADMIN / BOSS / is_admin：管理角色，豁免角色过滤，看所有非终态单据（便于全局调度）。
+    其他角色：严格按 allowed_roles 匹配；allowed_roles 为空的节点视为"无限制"对所有人可见。
     """
-    is_admin = bool(getattr(user, "is_admin", False)) or user.role == "ADMIN"
+    is_admin = bool(getattr(user, "is_admin", False)) or user.role in ("ADMIN", "BOSS")
     todos = []
     for doc_type, model in doc_model_map().items():
         wf = await get_active_workflow(db, doc_type)

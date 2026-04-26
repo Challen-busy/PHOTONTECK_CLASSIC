@@ -81,11 +81,23 @@ async def history(doc_type: str, doc_id: int, db: AsyncSession = Depends(get_db)
     ).order_by(m.WorkflowLog.timestamp)
     result = await db.execute(stmt)
     logs = result.scalars().all()
+    user_ids = {l.triggered_by_id for l in logs if l.triggered_by_id}
+    operators = {}
+    if user_ids:
+        user_result = await db.execute(select(m.UserAccount).where(m.UserAccount.id.in_(user_ids)))
+        operators = {u.id: u for u in user_result.scalars().all()}
+
     return [
         {
             "id": l.id, "transition": l.transition_name,
             "from_state": l.from_state, "to_state": l.to_state,
             "triggered_by_id": l.triggered_by_id,
+            "triggered_by": {
+                "id": operators[l.triggered_by_id].id,
+                "username": operators[l.triggered_by_id].username,
+                "full_name": operators[l.triggered_by_id].full_name,
+                "role": operators[l.triggered_by_id].role,
+            } if l.triggered_by_id in operators else None,
             "timestamp": l.timestamp.isoformat() if l.timestamp else None,
             "changed_fields": l.changed_fields,
             "comment": l.comment,

@@ -36,6 +36,13 @@ function Pill({ bg, color, children, style }) {
   );
 }
 
+function operatorLabel(log) {
+  const operator = log.triggered_by;
+  if (!operator) return log.triggered_by_id ? `用户 #${log.triggered_by_id}` : '未知操作人';
+  const name = operator.full_name || operator.username || `用户 #${operator.id}`;
+  return operator.role ? `${name} · ${operator.role}` : name;
+}
+
 // ===== 枚举值中文 =====
 const VALUE_LABELS = {
   voucher_type: { GENERAL: "记账凭证", CASH: "收款凭证", PAYMENT: "付款凭证", TRANSFER: "转账凭证" },
@@ -63,18 +70,25 @@ function formatValue(fieldName, value) {
 }
 
 const TABLE_MAP = {
-  SALES_ORDER: 'sales_order', PURCHASE_ORDER: 'purchase_order',
+  SALES_INQUIRY: 'sales_inquiry', QUOTATION: 'quotation',
+  SALES_ORDER: 'sales_order', PURCHASE_NOTICE: 'purchase_notice',
+  PURCHASE_ORDER: 'purchase_order',
   SHIPMENT: 'shipment_request', VOUCHER: 'voucher', VOUCHER_ADJUSTMENT: 'voucher',
-  GOODS_RECEIPT: 'goods_receipt', PROJECT: 'project',
+  GOODS_RECEIPT: 'goods_receipt', SALES_RETURN: 'sales_return', PROJECT: 'project',
   FRAMEWORK_CONTRACT: 'framework_contract',
   ACCOUNTS_RECEIVABLE: 'accounts_receivable', ACCOUNTS_PAYABLE: 'accounts_payable',
+  ADVANCE_RECEIPT: 'advance_receipt', ADVANCE_PAYMENT: 'advance_payment',
+  PURCHASE_INVOICE: 'purchase_invoice', SALES_INVOICE: 'sales_invoice',
   INVENTORY: 'inventory', INVENTORY_VIRTUAL: 'inventory', INVENTORY_COUNT: 'inventory',
   INVENTORY_COSTING: 'inventory_transaction',
 };
 
 // ===== FK 行的"标识符"提取 =====
 const ID_FIELDS = ['name', 'full_name', 'short_name', 'code', 'sku', 'order_number', 'voucher_number',
-  'shipment_number', 'receipt_number', 'invoice_number', 'contract_number', 'username', 'batch_number'];
+  'inquiry_number', 'quotation_number', 'notice_number', 'shipment_number', 'receipt_number',
+  'return_number', 'payment_number', 'invoice_number', 'contract_number', 'customer_po_number',
+  'supplier_part_number', 'customer_part_number', 'inbound_number', 'serial_lot_number',
+  'username', 'batch_number'];
 function rowLabel(row) {
   if (!row) return '';
   for (const f of ID_FIELDS) if (row[f]) return row[f];
@@ -828,6 +842,9 @@ export default function DocEditor({ docType, docId, currentState, actions = [], 
                           fontFamily: 'ui-monospace, monospace',
                         }}>
                           {l.timestamp?.replace('T', ' ').slice(0, 19)}
+                        </div>
+                        <div style={{ color: '#777169', fontSize: 12, marginTop: 2 }}>
+                          操作人：{operatorLabel(l)}
                         </div>
                       </div>
                     ),

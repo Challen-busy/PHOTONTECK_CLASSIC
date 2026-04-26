@@ -5,7 +5,7 @@ import {
   DashboardOutlined, TableOutlined, ThunderboltOutlined,
   RobotOutlined, LogoutOutlined, UserOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, SettingOutlined, ApartmentOutlined,
-  CheckSquareOutlined,
+  CheckSquareOutlined, TeamOutlined, BankOutlined, InboxOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '../auth';
 import { getMyTodos } from '../api';
@@ -14,6 +14,10 @@ const { Header, Sider, Content } = AntLayout;
 
 const buildMenuItems = (todoCount) => [
   { key: '/', icon: <DashboardOutlined />, label: '看板' },
+  { key: '/crm', icon: <TeamOutlined />, label: 'CRM' },
+  { key: '/erp', icon: <BankOutlined />, label: 'ERP' },
+  { key: '/wms', icon: <InboxOutlined />, label: 'WMS' },
+  { key: '/order-chain', icon: <ApartmentOutlined />, label: '链路' },
   {
     key: '/todos',
     icon: <CheckSquareOutlined />,
@@ -122,7 +126,7 @@ export default function Layout() {
           selectedKeys={[location.pathname]}
           items={buildMenuItems(todoCount)
             .filter(i => !i.adminOnly || user?.is_admin)
-            .map(({ adminOnly, ...item }) => item)}
+            .map(i => ({ key: i.key, icon: i.icon, label: i.label }))}
           onClick={({ key }) => navigate(key)}
           style={{
             background: 'transparent',

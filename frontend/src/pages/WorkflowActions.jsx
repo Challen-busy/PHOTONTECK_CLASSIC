@@ -11,9 +11,11 @@ import { layoutGraph } from '../utils/layout';
 import { query } from '../api';
 import api from '../api';
 import ReportDrawer from '../components/ReportDrawer';
+import WorkflowEdge, { decorateWorkflowEdges } from '../components/WorkflowEdge';
 
 const CARD_SHADOW =
   'rgba(0,0,0,0.06) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 1px 2px, rgba(0,0,0,0.04) 0px 2px 4px';
+const edgeTypes = { workflow: WorkflowEdge };
 
 function Pill({ bg, color, children }) {
   return (
@@ -86,11 +88,15 @@ const stateColors = {
 };
 
 const tableMap = {
-  SALES_ORDER: 'sales_order', PURCHASE_ORDER: 'purchase_order',
+  SALES_INQUIRY: 'sales_inquiry', QUOTATION: 'quotation',
+  SALES_ORDER: 'sales_order', PURCHASE_NOTICE: 'purchase_notice',
+  PURCHASE_ORDER: 'purchase_order',
   SHIPMENT: 'shipment_request', VOUCHER: 'voucher',
-  GOODS_RECEIPT: 'goods_receipt', PROJECT: 'project',
+  GOODS_RECEIPT: 'goods_receipt', SALES_RETURN: 'sales_return', PROJECT: 'project',
   FRAMEWORK_CONTRACT: 'framework_contract',
   ACCOUNTS_RECEIVABLE: 'accounts_receivable', ACCOUNTS_PAYABLE: 'accounts_payable',
+  ADVANCE_RECEIPT: 'advance_receipt', ADVANCE_PAYMENT: 'advance_payment',
+  PURCHASE_INVOICE: 'purchase_invoice', SALES_INVOICE: 'sales_invoice',
   ACCOUNTING_PERIOD: 'accounting_period',
 };
 
@@ -219,22 +225,19 @@ export default function WorkflowActions() {
     });
 
     const stateCodeSet = new Set(states.map(s => s.code));
-    const newEdges = transitions
+    const newEdges = decorateWorkflowEdges(transitions
       .filter(t => t.from_state && t.from_state !== t.to_state && stateCodeSet.has(t.from_state) && stateCodeSet.has(t.to_state))
       .map((t, i) => {
         const isPolicy = nodeTypeMap[t.from_state] === 'policy';
         return {
           id: `e-${i}`, source: t.from_state, target: t.to_state,
           label: isPolicy ? '' : t.name,
-          labelStyle: { fontSize: 10, fill: '#4e4e4e', letterSpacing: '0.02em' },
-          labelBgStyle: { fill: '#fff', fillOpacity: 0.95 },
           markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: '#bfbbb5' },
           style: isPolicy
             ? { strokeWidth: 1.5, stroke: '#b8860b', strokeDasharray: '6 3' }
             : { strokeWidth: 1.5, stroke: '#bfbbb5' },
-          type: 'smoothstep',
         };
-      });
+      }));
 
     if (!hasSaved) newNodes = layoutGraph(newNodes, newEdges, 'TB');
     setNodes(newNodes);
@@ -389,9 +392,10 @@ export default function WorkflowActions() {
         >
           <ReactFlow
             nodes={nodes} edges={edges}
+            edgeTypes={edgeTypes}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
             onNodeClick={onNodeClick} fitView
-            defaultEdgeOptions={{ type: 'smoothstep' }}
+            defaultEdgeOptions={{ type: 'workflow' }}
           >
             <Background gap={24} size={1} color="rgba(0,0,0,0.06)" />
             <Controls />

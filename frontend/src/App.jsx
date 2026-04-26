@@ -12,6 +12,8 @@ import Admin from './pages/Admin';
 import FlowEditor from './pages/FlowEditor';
 import NodeView from './pages/NodeView';
 import MyTodos from './pages/MyTodos';
+import BusinessPortal from './pages/BusinessPortal';
+import OrderChainMonitor from './pages/OrderChainMonitor';
 import ErrorBoundary from './components/ErrorBoundary';
 
 function Protected({ children }) {
@@ -27,6 +29,10 @@ function AppRoutes() {
       <Route path="/login" element={<Login />} />
       <Route path="/" element={<Protected><Layout /></Protected>}>
         <Route index element={<Dashboard />} />
+        <Route path="crm" element={<BusinessPortal type="crm" />} />
+        <Route path="erp" element={<BusinessPortal type="erp" />} />
+        <Route path="wms" element={<BusinessPortal type="wms" />} />
+        <Route path="order-chain" element={<OrderChainMonitor />} />
         <Route path="todos" element={<MyTodos />} />
         <Route path="data" element={<DataExplorer />} />
         <Route path="data/:table" element={<DataExplorer />} />
