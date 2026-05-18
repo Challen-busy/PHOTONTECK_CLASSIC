@@ -14,6 +14,8 @@ import NodeView from './pages/NodeView';
 import MyTodos from './pages/MyTodos';
 import BusinessPortal from './pages/BusinessPortal';
 import OrderChainMonitor from './pages/OrderChainMonitor';
+import WmsWorkbench from './pages/WmsWorkbench';
+import CommandCenter from './pages/CommandCenter';
 import ErrorBoundary from './components/ErrorBoundary';
 
 function Protected({ children }) {
@@ -32,6 +34,8 @@ function AppRoutes() {
         <Route path="crm" element={<BusinessPortal type="crm" />} />
         <Route path="erp" element={<BusinessPortal type="erp" />} />
         <Route path="wms" element={<BusinessPortal type="wms" />} />
+        <Route path="wms-workbench" element={<WmsWorkbench />} />
+        <Route path="commands" element={<CommandCenter />} />
         <Route path="order-chain" element={<OrderChainMonitor />} />
         <Route path="todos" element={<MyTodos />} />
         <Route path="data" element={<DataExplorer />} />

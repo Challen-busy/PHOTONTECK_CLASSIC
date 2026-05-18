@@ -16,9 +16,7 @@
 """
 
 import ast
-import os
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
 
 
 # ============================================================
@@ -67,36 +65,39 @@ def validate_rule(rule_str: str) -> tuple[bool, str]:
     return True, ""
 
 
-# ============================================================
-# 同步 session（rule eval 期间用）
-# ============================================================
-
-_sync_engine = None
-def _get_sync_engine():
-    global _sync_engine
-    if _sync_engine is None:
-        url = os.environ.get(
-            "DATABASE_URL",
-            "postgresql+asyncpg://photonteck:photonteck@localhost:5432/photonteck",
-        ).replace("+asyncpg", "")
-        _sync_engine = create_engine(url)
-    return _sync_engine
-
-
-def _make_helpers():
-    """跨表查询助手"""
+def _make_helpers(sync_session):
+    """跨表查询助手，使用当前 AsyncSession 的底层同步 session。"""
     from core.registry import table_map
 
     def _query_internal(table_name, **filters):
         m = table_map().get(table_name)
         if not m:
             return []
-        with Session(_get_sync_engine()) as s:
-            stmt = select(m)
-            for k, v in filters.items():
-                if hasattr(m, k):
-                    stmt = stmt.where(getattr(m, k) == v)
-            return list(s.execute(stmt).scalars().all())
+        stmt = select(m)
+        for k, v in filters.items():
+            if hasattr(m, k):
+                stmt = stmt.where(getattr(m, k) == v)
+        return list(sync_session.execute(stmt).scalars().all())
+
+    def _count_internal(table_name, **filters):
+        m = table_map().get(table_name)
+        if not m:
+            return 0
+        stmt = select(func.count()).select_from(m)
+        for k, v in filters.items():
+            if hasattr(m, k):
+                stmt = stmt.where(getattr(m, k) == v)
+        return sync_session.execute(stmt).scalar() or 0
+
+    def _sum_internal(table_name, field_name, **filters):
+        m = table_map().get(table_name)
+        if not m or not hasattr(m, field_name):
+            return 0
+        stmt = select(func.coalesce(func.sum(getattr(m, field_name)), 0))
+        for k, v in filters.items():
+            if hasattr(m, k):
+                stmt = stmt.where(getattr(m, k) == v)
+        return sync_session.execute(stmt).scalar() or 0
 
     def lookup(table_name, **filters):
         rows = _query_internal(table_name, **filters)
@@ -106,16 +107,10 @@ def _make_helpers():
         return _query_internal(table_name, **filters)
 
     def count(table_name, **filters):
-        return len(_query_internal(table_name, **filters))
+        return _count_internal(table_name, **filters)
 
     def sum_field(table_name, field_name, **filters):
-        rows = _query_internal(table_name, **filters)
-        total = 0
-        for r in rows:
-            v = getattr(r, field_name, None)
-            if v is not None:
-                total += float(v)
-        return total
+        return _sum_internal(table_name, field_name, **filters)
 
     return {"lookup": lookup, "query": query, "count": count, "sum_field": sum_field}
 
@@ -124,7 +119,7 @@ def _make_helpers():
 # 子表加载
 # ============================================================
 
-async def _build_subtables_context(db, doc) -> dict:
+def _build_subtables_context_sync(sync_session, doc) -> dict:
     """加载 doc 的子表（_line / _entry）"""
     from core.registry import table_map
     parent_table = doc.__table__.name
@@ -137,7 +132,7 @@ async def _build_subtables_context(db, doc) -> dict:
                 fk = list(col.foreign_keys)[0]
                 if fk.column.table.name == parent_table:
                     if any(x in sub_name for x in ["_line", "_entry"]):
-                        r = await db.execute(select(sub_model).where(getattr(sub_model, col.name) == doc.id))
+                        r = sync_session.execute(select(sub_model).where(getattr(sub_model, col.name) == doc.id))
                         rows = list(r.scalars().all())
                         ctx[sub_name] = rows
                         if "entry" in sub_name:
@@ -156,19 +151,13 @@ SAFE_BUILTINS = {
     "sum": sum, "len": len, "min": min, "max": max,
     "all": all, "any": any, "abs": abs,
     "True": True, "False": False, "None": None,
+    "str": str, "int": int, "float": float, "bool": bool,
 }
 
 
-async def evaluate_rules(db, doc, rules: list[str]) -> tuple[bool, list[str]]:
-    """
-    评估一组规则。返回 (all_pass, failure_messages)
-    失败格式: "✗ <规则原文>" 或 "✗ <规则原文> (报错: ...)"
-    """
-    if not rules:
-        return True, []
-
-    subtables = await _build_subtables_context(db, doc)
-    helpers = _make_helpers()
+def _evaluate_rules_sync(sync_session, doc, rules: list[str]) -> tuple[bool, list[str]]:
+    subtables = _build_subtables_context_sync(sync_session, doc)
+    helpers = _make_helpers(sync_session)
     context = {**helpers, **subtables, "doc": doc}
 
     failures = []
@@ -183,10 +172,22 @@ async def evaluate_rules(db, doc, rules: list[str]) -> tuple[bool, list[str]]:
         try:
             tree = ast.parse(rule, mode="eval")
             code = compile(tree, "<rule>", "eval")
-            result = eval(code, {"__builtins__": SAFE_BUILTINS}, context)
+            eval_context = {"__builtins__": SAFE_BUILTINS, **context}
+            result = eval(code, eval_context, eval_context)
             if not result:
                 failures.append(f"✗ {rule}")
         except Exception as e:
             failures.append(f"✗ {rule}    (报错: {type(e).__name__}: {e})")
 
     return len(failures) == 0, failures
+
+
+async def evaluate_rules(db, doc, rules: list[str]) -> tuple[bool, list[str]]:
+    """
+    评估一组规则。返回 (all_pass, failure_messages)
+    失败格式: "✗ <规则原文>" 或 "✗ <规则原文> (报错: ...)"
+    """
+    if not rules:
+        return True, []
+
+    return await db.run_sync(lambda sync_session: _evaluate_rules_sync(sync_session, doc, rules))

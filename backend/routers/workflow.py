@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import models as m
 from core.auth import get_current_user
 from core.database import get_db
+from services.commands import execute_command
 from services import workflow
 
 router = APIRouter()
@@ -36,14 +37,42 @@ class TransitionCommitRequest(BaseModel):
     comment: str = ""
 
 
+def _workflow_command_response(result: dict) -> dict:
+    if result.get("success"):
+        return result
+    details = result.get("details")
+    if isinstance(details, dict) and details.get("success") is False:
+        return details
+    return result
+
+
 @router.post("/api/transition")
 async def transition(req: TransitionRequest, request: Request, db: AsyncSession = Depends(get_db), user: m.UserAccount = Depends(get_current_user)):
-    return await workflow.execute_transition(
-        db=db, doc_type=req.doc_type, doc_id=req.doc_id,
-        to_state=req.to_state, action_label=req.action_label, user=user,
-        field_updates=req.field_updates, sub_updates=req.sub_updates, comment=req.comment,
-        ip_address=request.client.host if request.client else None,
+    result = await execute_command(
+        db,
+        user,
+        "workflow_transition",
+        {
+            "doc_type": req.doc_type,
+            "doc_id": req.doc_id,
+            "to_state": req.to_state,
+            "action_label": req.action_label,
+            "field_updates": req.field_updates,
+            "sub_updates": req.sub_updates,
+            "comment": req.comment,
+            "ip_address": request.client.host if request.client else None,
+        },
+        log_payload={
+            "doc_type": req.doc_type,
+            "doc_id": req.doc_id,
+            "to_state": req.to_state,
+            "action_label": req.action_label,
+            "field_update_fields": sorted((req.field_updates or {}).keys()),
+            "sub_update_count": len(req.sub_updates or []),
+            "comment": req.comment,
+        },
     )
+    return _workflow_command_response(result)
 
 
 @router.post("/api/transition/preview")
@@ -57,10 +86,26 @@ async def transition_preview(req: TransitionPreviewRequest, db: AsyncSession = D
 
 @router.post("/api/transition/commit")
 async def transition_commit(req: TransitionCommitRequest, request: Request, db: AsyncSession = Depends(get_db), user: m.UserAccount = Depends(get_current_user)):
-    return await workflow.commit_card(
-        db=db, card=req.card, user=user, comment=req.comment,
-        ip_address=request.client.host if request.client else None,
+    result = await execute_command(
+        db,
+        user,
+        "workflow_commit_card",
+        {
+            "card": req.card,
+            "comment": req.comment,
+            "ip_address": request.client.host if request.client else None,
+        },
+        log_payload={
+            "doc_type": (req.card or {}).get("doc_type"),
+            "doc_id": (req.card or {}).get("doc_id"),
+            "from_state": (req.card or {}).get("from_state"),
+            "to_state": (req.card or {}).get("to_state"),
+            "action_label": (req.card or {}).get("action_label"),
+            "change_count": len((req.card or {}).get("changes") or []),
+            "comment": req.comment,
+        },
     )
+    return _workflow_command_response(result)
 
 
 @router.get("/api/transitions")

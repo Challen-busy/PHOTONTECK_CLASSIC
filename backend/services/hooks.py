@@ -1,16 +1,17 @@
 """
-钩子 DSL — 读写脚本，副作用只能通过白名单写函数发生
+钩子 DSL — 默认只读脚本，业务副作用应迁移到 workflow effect / command
 
 与 rules.py 对称：
   硬规则 = 表达式（单行、返回 bool、只读）
-  钩  子 = 脚本（多行、带副作用、可 insert/update 其他表）
+  钩  子 = 脚本（多行、默认只读）
 
 语法（Python ast 子集 + exec 模式）：
   读:        doc.field, lookup/query/count/sum_field
   赋值:      local_var = expr          只允许赋给局部变量名
   循环:      for x in seq: ...
   条件:      if cond: ... else: ...
-  写:        insert("table", {fields}) → 返回新对象（有 id）
+  写:        默认禁止。仅在 ALLOW_LEGACY_WORKFLOW_WRITE_HOOKS=1 时兼容旧流程：
+             insert("table", {fields}) → 返回新对象（有 id）
              update("table", {where}, {fields}) → 返回更新行数
 
 禁止：import/def/class/lambda/while/try/with/return/yield/raise/delete
@@ -21,6 +22,7 @@
 """
 
 import ast
+import os
 from datetime import date, datetime
 
 from sqlalchemy import select, update as sql_update
@@ -44,17 +46,20 @@ _ALLOWED_NODE_NAMES = [
 ]
 ALLOWED_NODES = {getattr(ast, n) for n in _ALLOWED_NODE_NAMES if hasattr(ast, n)}
 
+ALLOW_WRITE_HOOKS = os.environ.get("ALLOW_LEGACY_WORKFLOW_WRITE_HOOKS") == "1"
+
+
 ALLOWED_FUNCS = {
     # 读
     "sum", "len", "min", "max", "all", "any", "abs",
     "lookup", "query", "count", "sum_field",
-    # 写
-    "insert", "update",
     # 日期
     "today", "now",
     # 类型转换（拼字符串、算数用）
     "str", "int", "float", "bool", "list", "dict", "range", "enumerate",
 }
+if ALLOW_WRITE_HOOKS:
+    ALLOWED_FUNCS.update({"insert", "update"})
 
 
 def validate_hook(script: str) -> tuple[bool, str]:
@@ -204,6 +209,8 @@ def execute_hooks_sync(sync_session, doc, scripts: list[str]) -> list[str]:
         tree = ast.parse(s, mode="exec")
         code = compile(tree, "<hook>", "exec")
         ctx, log = _build_context(sync_session, doc)
-        exec(code, {}, ctx)  # 空 globals → Python 用默认 __builtins__
+        # 生成式会从 globals 解析 lookup/sum 等名字；globals/locals 都传 ctx，
+        # 避免 hooks 中的 sum(... lookup(...) ...) 在运行时找不到白名单函数。
+        exec(code, ctx, ctx)
         all_log.extend(log)
     return all_log

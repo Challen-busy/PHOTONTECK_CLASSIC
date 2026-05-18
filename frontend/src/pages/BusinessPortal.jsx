@@ -63,8 +63,13 @@ const DOMAIN = {
     ],
     data: [
       { table: 'inventory', title: '库存批次', icon: <InboxOutlined /> },
+      { table: 'inventory_reservation', title: '库存预留', icon: <InboxOutlined /> },
+      { table: 'inventory_policy', title: '库存策略', icon: <CheckSquareOutlined /> },
+      { table: 'inventory_count', title: '盘点任务', icon: <CheckSquareOutlined /> },
       { table: 'warehouse', title: '仓库', icon: <InboxOutlined /> },
       { table: 'warehouse_location', title: '库位', icon: <InboxOutlined /> },
+      { table: 'supplier_sn_rule', title: 'SN/LOT 规则', icon: <FileTextOutlined /> },
+      { table: 'wms_attachment', title: 'WMS 附件', icon: <FileTextOutlined /> },
       { table: 'label_template', title: '标签模板', icon: <FileTextOutlined /> },
     ],
   },
@@ -138,6 +143,16 @@ export default function BusinessPortal({ type }) {
         }}>
           {cfg.subtitle}
         </h2>
+        {type === 'wms' && (
+          <Button
+            type="primary"
+            icon={<InboxOutlined />}
+            onClick={() => navigate('/wms-workbench')}
+            style={{ marginTop: 14 }}
+          >
+            进入 WMS 一期工作台
+          </Button>
+        )}
       </div>
 
       <div style={{ marginBottom: 26 }}>

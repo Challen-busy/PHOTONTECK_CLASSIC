@@ -23,6 +23,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -494,6 +495,8 @@ class Inventory(AuditMixin, Base):
     production_date = Column(Date, nullable=True)
     quantity = Column(Numeric(12, 2), nullable=False)
     reserved_quantity = Column(Numeric(12, 2), default=0)
+    unit_cost = Column(Numeric(16, 4), default=0)
+    total_cost = Column(Numeric(16, 2), default=0)
     received_date = Column(Date, index=True)
     purchase_order_line_id = Column(Integer, ForeignKey("purchase_order_line.id"), nullable=True)
     status = Column(String(15), default="AVAILABLE")
@@ -503,6 +506,145 @@ class Inventory(AuditMixin, Base):
     supplier = relationship("Supplier")
 
     __table_args__ = (Index("ix_inventory_fifo", "material_id", "warehouse_id", "received_date"),)
+
+
+class InventoryReservation(AuditMixin, Base):
+    """WMS: 锁定某个包装级库存给客户/销售订单。"""
+    __tablename__ = "inventory_reservation"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    reservation_number = Column(String(40), nullable=False, index=True)
+    inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=False)
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=False)
+    sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=True)
+    shipment_id = Column(Integer, ForeignKey("shipment_request.id"), nullable=True)
+    quantity = Column(Numeric(12, 2), nullable=False)
+    reserved_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    reserved_at = Column(DateTime, server_default=func.now())
+    released_at = Column(DateTime, nullable=True)
+    status = Column(String(15), default="ACTIVE")
+    notes = Column(Text, default="")
+
+    inventory = relationship("Inventory")
+    customer = relationship("Customer")
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "reservation_number"),
+        Index("ix_inventory_reservation_active", "inventory_id", "status"),
+    )
+
+
+class InventoryPolicy(AuditMixin, Base):
+    """WMS: 物料/仓库库存策略，用于预警和补货判断。"""
+    __tablename__ = "inventory_policy"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
+    warehouse_id = Column(Integer, ForeignKey("warehouse.id"), nullable=True)
+    safety_stock = Column(Numeric(12, 2), default=0)
+    reorder_point = Column(Numeric(12, 2), default=0)
+    max_stock = Column(Numeric(12, 2), default=0)
+    lead_time_days = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    notes = Column(Text, default="")
+
+    material = relationship("Material")
+    warehouse = relationship("Warehouse")
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "material_id", "warehouse_id"),
+        Index("ix_inventory_policy_material_warehouse", "material_id", "warehouse_id"),
+    )
+
+
+class InventoryCount(AuditMixin, Base):
+    """WMS: 库存盘点任务。"""
+    __tablename__ = "inventory_count"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    count_number = Column(String(40), nullable=False, index=True)
+    warehouse_id = Column(Integer, ForeignKey("warehouse.id"), nullable=True)
+    planned_date = Column(Date, nullable=True)
+    counted_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    submitted_at = Column(DateTime, nullable=True)
+    adjusted_at = Column(DateTime, nullable=True)
+    adjusted_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    status = Column(String(20), default="DRAFT")
+    notes = Column(Text, default="")
+
+    warehouse = relationship("Warehouse")
+
+    __table_args__ = (UniqueConstraint("company_id", "count_number"),)
+
+
+class InventoryCountLine(Base):
+    """WMS: 盘点明细，保留盘点时的系统库存快照。"""
+    __tablename__ = "inventory_count_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    inventory_count_id = Column(Integer, ForeignKey("inventory_count.id"), nullable=False)
+    inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=False)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
+    warehouse_id = Column(Integer, ForeignKey("warehouse.id"), nullable=True)
+    location_code = Column(String(50), default="")
+    batch_number = Column(String(50), default="")
+    inbound_number = Column(String(50), default="")
+    serial_lot_number = Column(String(100), default="")
+    system_quantity = Column(Numeric(12, 2), nullable=False)
+    counted_quantity = Column(Numeric(12, 2), nullable=True)
+    difference_quantity = Column(Numeric(12, 2), default=0)
+    status = Column(String(20), default="PENDING")
+    notes = Column(Text, default="")
+
+    inventory = relationship("Inventory")
+    material = relationship("Material")
+    warehouse = relationship("Warehouse")
+
+    __table_args__ = (
+        UniqueConstraint("inventory_count_id", "inventory_id"),
+        Index("ix_inventory_count_line_count", "inventory_count_id"),
+    )
+
+
+class SupplierSnRule(AuditMixin, Base):
+    """WMS: 按供应商/物料配置 SN/LOT 校验规则。"""
+    __tablename__ = "supplier_sn_rule"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=False)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=True)
+    rule_name = Column(String(100), default="")
+    exact_length = Column(SmallInteger, nullable=True)
+    min_length = Column(SmallInteger, nullable=True)
+    max_length = Column(SmallInteger, nullable=True)
+    pattern = Column(String(200), default="")
+    allow_duplicate = Column(Boolean, default=True)
+    unique_scope = Column(String(30), default="SUPPLIER_MATERIAL")
+    is_active = Column(Boolean, default=True)
+    notes = Column(Text, default="")
+
+    supplier = relationship("Supplier")
+    material = relationship("Material")
+
+
+class WmsAttachment(AuditMixin, Base):
+    """WMS: 入库照片、标签照片和单据附件的元数据。"""
+    __tablename__ = "wms_attachment"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    doc_type = Column(String(30), default="", index=True)
+    doc_id = Column(BigInteger, nullable=True, index=True)
+    goods_receipt_id = Column(Integer, ForeignKey("goods_receipt.id"), nullable=True)
+    goods_receipt_line_id = Column(Integer, ForeignKey("goods_receipt_line.id"), nullable=True)
+    inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=True)
+    attachment_type = Column(String(30), default="PHOTO")
+    file_name = Column(String(200), nullable=False)
+    content_type = Column(String(100), default="")
+    file_size = Column(Integer, default=0)
+    storage_path = Column(Text, nullable=False)
+    uploaded_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    uploaded_at = Column(DateTime, server_default=func.now())
+    notes = Column(Text, default="")
 
 
 class GoodsReceipt(AuditMixin, Base):
@@ -1024,6 +1166,59 @@ class InventoryTransaction(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (Index("ix_inv_txn_material_date", "company_id", "material_id", "transaction_date"),)
+
+
+class CommandLog(Base):
+    """统一命令执行日志：所有跨模块写操作先落这里。"""
+    __tablename__ = "command_log"
+    id = Column(Integer, primary_key=True)
+    command_name = Column(String(80), nullable=False, index=True)
+    idempotency_key = Column(String(160), nullable=True)
+    actor_id = Column(Integer, ForeignKey("user_account.id"), nullable=False, index=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=True, index=True)
+    status = Column(String(20), default="RUNNING", index=True)
+    request_payload = Column(JSONB, default=dict)
+    result_payload = Column(JSONB, default=dict)
+    error_message = Column(Text, default="")
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ux_command_log_name_key_active",
+            "command_name",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL AND status IN ('RUNNING', 'SUCCESS')"),
+        ),
+        Index("ix_command_log_name_created", "command_name", "created_at"),
+    )
+
+
+class InventoryMovement(Base):
+    """库存事实流水：记录库存/预留变化，inventory 当前值只是投影。"""
+    __tablename__ = "inventory_movement"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False, index=True)
+    command_log_id = Column(Integer, ForeignKey("command_log.id"), nullable=True, index=True)
+    movement_type = Column(String(30), nullable=False, index=True)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=False, index=True)
+    warehouse_id = Column(Integer, ForeignKey("warehouse.id"), nullable=True, index=True)
+    inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=True, index=True)
+    quantity_delta = Column(Numeric(16, 2), default=0)
+    reserved_delta = Column(Numeric(16, 2), default=0)
+    unit_cost = Column(Numeric(16, 4), default=0)
+    source_doc_type = Column(String(30), default="", index=True)
+    source_doc_id = Column(BigInteger, nullable=True, index=True)
+    notes = Column(Text, default="")
+    created_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("ix_inventory_movement_material_created", "company_id", "material_id", "created_at"),
+        Index("ix_inventory_movement_source", "source_doc_type", "source_doc_id"),
+    )
 
 
 # ============================================================

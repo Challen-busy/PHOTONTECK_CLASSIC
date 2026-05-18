@@ -11,7 +11,7 @@ import {
   ShoppingCartOutlined, ShoppingOutlined, FileTextOutlined,
   DollarOutlined, BankOutlined, AuditOutlined, SwapOutlined,
   ProjectOutlined, HistoryOutlined as LogOutlined, ContainerOutlined,
-  TruckOutlined, GoldOutlined, FileDoneOutlined,
+  TruckOutlined, GoldOutlined, FileDoneOutlined, LockOutlined,
 } from '@ant-design/icons';
 import { query, aggregate } from '../api';
 import { useAuth } from '../auth';
@@ -37,8 +37,14 @@ const TABLE_META = {
   purchase_notice_line:{ cn: '采购通知行',  desc: '采购通知的物料需求明细',       icon: <FileTextOutlined />,    cat: 'txn' },
   // 仓储
   inventory:          { cn: '库存批次',     desc: '按批次记录的现货库存',         icon: <GoldOutlined />,        cat: 'wms' },
+  inventory_reservation:{ cn: '库存预留',   desc: '客户或销售订单锁定的包装库存', icon: <LockOutlined />,        cat: 'wms' },
+  inventory_policy:   { cn: '库存策略',     desc: '安全库存、补货点和库存预警规则', icon: <SettingOutlined />,     cat: 'wms' },
+  inventory_count:    { cn: '盘点任务',     desc: '库存盘点任务和调整状态',       icon: <AuditOutlined />,       cat: 'wms' },
+  inventory_count_line:{ cn: '盘点明细',    desc: '盘点快照、实盘数和差异',       icon: <FileTextOutlined />,    cat: 'wms' },
   shipment_request:   { cn: '发货单',       desc: '出库发货指令',                 icon: <TruckOutlined />,       cat: 'wms' },
   goods_receipt:      { cn: '入库单',       desc: '到货收货登记',                 icon: <ContainerOutlined />,   cat: 'wms' },
+  supplier_sn_rule:   { cn: 'SN/LOT规则',   desc: '按供应商配置序列号校验规则',   icon: <AuditOutlined />,       cat: 'wms' },
+  wms_attachment:     { cn: 'WMS附件',      desc: '入库照片、标签照片和附件',     icon: <FileTextOutlined />,    cat: 'wms' },
   sales_return:       { cn: '销售退货',     desc: '客户退货通知和退货入库源单',   icon: <TruckOutlined />,       cat: 'wms' },
   sales_return_line:  { cn: '销售退货行',   desc: '退货物料和处理方式',           icon: <FileTextOutlined />,    cat: 'wms' },
   // 财务
@@ -359,7 +365,7 @@ function DataTableView({ table, onBack }) {
     const cols = allCols.filter(c => !hiddenCols.includes(c.key));
     // 操作列
     const docType = DOC_TYPE_MAP[table] || table.toUpperCase();
-    const hasStatus = data[0]?.hasOwnProperty('status');
+    const hasStatus = Object.prototype.hasOwnProperty.call(data[0] || {}, 'status');
     if (hasStatus) {
       cols.push({
         title: '操作', key: '_action', width: 80, fixed: 'right',

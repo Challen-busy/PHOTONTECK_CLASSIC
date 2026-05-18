@@ -47,6 +47,7 @@ BUY_TABLES = {
     "purchase_order", "purchase_order_line", "purchase_notice", "purchase_notice_line",
     "purchase_invoice", "purchase_invoice_line", "advance_payment",
     "accounts_payable", "supplier_credit", "inventory_valuation", "inventory_transaction",
+    "inventory", "inventory_movement",
 }
 SELL_TABLES = {
     "sales_order", "sales_order_line", "sales_inquiry", "sales_inquiry_line",
@@ -83,7 +84,7 @@ ROLE_ALLOWED_TABLES = {
         "shipment_request", "shipment_line",
         "sales_return", "sales_return_line",
         "advance_receipt", "accounts_receivable", "sales_invoice", "sales_invoice_line",
-        "inventory",  # 承诺发货前查库存
+        "inventory", "inventory_reservation",  # 承诺发货前查库存/预留
     },
     "SALES_ENGINEER": _COMMON_TABLES | {
         "customer", "framework_contract",
@@ -91,7 +92,7 @@ ROLE_ALLOWED_TABLES = {
         "quotation", "quotation_line",
         "sales_order", "sales_order_line",
         "project", "project_material", "project_activity",
-        "inventory",
+        "inventory", "inventory_reservation",
     },
     "PRODUCT_ASSISTANT": _COMMON_TABLES | {
         "supplier",
@@ -102,7 +103,9 @@ ROLE_ALLOWED_TABLES = {
         "advance_payment",
         "goods_receipt", "goods_receipt_line",
         "accounts_payable",
-        "inventory", "warehouse", "warehouse_location",
+        "inventory", "inventory_reservation", "inventory_policy", "inventory_count", "inventory_count_line",
+        "supplier_sn_rule", "wms_attachment", "inventory_valuation", "inventory_transaction", "inventory_movement",
+        "warehouse", "warehouse_location",
     },
     "PRODUCT_MANAGER": _COMMON_TABLES | {
         "supplier", "customer",
@@ -111,14 +114,16 @@ ROLE_ALLOWED_TABLES = {
         "purchase_notice", "purchase_notice_line",
         "project", "project_material", "project_activity",
         "purchase_order", "sales_order",
-        "inventory",
+        "inventory", "inventory_reservation", "inventory_policy", "supplier_sn_rule", "inventory_movement",
     },
     "LOGISTICS": _COMMON_TABLES | {
         "shipment_request", "shipment_line",
         "picking_list", "picking_list_line",
         "goods_receipt", "goods_receipt_line",
         "sales_return", "sales_return_line",
-        "inventory", "warehouse", "warehouse_location",
+        "inventory", "inventory_reservation", "inventory_policy", "inventory_count", "inventory_count_line",
+        "supplier_sn_rule", "wms_attachment", "inventory_valuation", "inventory_transaction", "inventory_movement",
+        "warehouse", "warehouse_location",
         "label_template",
         "sales_order", "sales_order_line", "customer",
         "purchase_order", "purchase_order_line", "supplier",
@@ -192,8 +197,16 @@ async def query_data(db: AsyncSession, user: m.UserAccount, params: dict) -> dic
     # 模糊搜索
     search = params.get("search", "")
     if search:
-        search_fields = ["name", "code", "sku", "order_number", "description", "short_name",
-                        "receipt_number", "shipment_number", "voucher_number", "invoice_number"]
+        search_fields = {
+            "name", "code", "sku", "description", "short_name",
+            "order_number", "receipt_number", "shipment_number", "voucher_number", "invoice_number",
+            "customer_po_number", "inquiry_number", "quotation_number", "notice_number",
+            "batch_number", "inbound_number", "serial_lot_number", "source_doc_number",
+            "tracking_number", "customer_part_number", "customer_pr_number", "supplier_part_number",
+        }
+        for col in model.__table__.columns:
+            if col.name.endswith("_number"):
+                search_fields.add(col.name)
         conditions = [getattr(model, f).ilike(f"%{search}%") for f in search_fields if hasattr(model, f)]
         if conditions:
             where_clauses.append(or_(*conditions))

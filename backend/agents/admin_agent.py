@@ -253,9 +253,9 @@ async def admin_chat(db: AsyncSession, user_query: str, user: m.UserAccount) -> 
 
 # 架构（极简）
 - 流程定义只有一张表 WorkflowDefinition，全部内容在 states JSONB
-- 每个节点（state）含: code, name, is_initial?, is_terminal?, allowed_roles, description (给Agent), custom_html, hard_rules, hooks, next
-- 每条 next 含: to, label, editable_fields, roles?, hard_rules?, hooks?
-- next: [{{to: "下个状态码", label: "动作名", roles?: [...], hard_rules?: [...], hooks?: [...]}}]
+- 每个节点（state）含: code, name, is_initial?, is_terminal?, allowed_roles, description (给Agent), custom_html, hard_rules, hooks, effects, next
+- 每条 next 含: to, label, editable_fields, roles?, hard_rules?, hooks?, effects?
+- next: [{{to: "下个状态码", label: "动作名", roles?: [...], hard_rules?: [...], effects?: [...]}}]
 - 改业务逻辑 = 改 state.description 中文
 - 改流程结构 = update_workflow_states 整体替换 states 数组
 
@@ -282,15 +282,13 @@ async def admin_chat(db: AsyncSession, user_query: str, user: m.UserAccount) -> 
   - 信用额度：     (lookup("customer_credit", customer_id=doc.customer_id) is None) or (lookup("customer_credit", customer_id=doc.customer_id).credit_limit - lookup("customer_credit", customer_id=doc.customer_id).used_amount >= doc.total_amount)
   - 库存够：       all(sum_field("inventory", "quantity", material_id=line.material_id) >= line.quantity for line in lines)
 
-# 钩子 hooks（副作用脚本 DSL）
+# 钩子 hooks（只读脚本 DSL）
 挂在 state 或 next 项上。commit 前执行，失败则整个事务回滚，状态不改。
-与硬规则对称，但**可以写**其他表（insert / update），用来做"跨表联动"。
+默认只读，用于复杂的只读校验或日志性计算；业务写入必须使用已注册的 effects / command，不能用 hooks 写表。
 
 每条 = 一段多行 Python 脚本。可用：
   语法：    for / if / local_var = expr  （**禁止** obj.attr = val、d[k] = val、while、try、import）
   读：      doc.字段 / entries[i] / lines[i] / lookup/query/count/sum_field
-  写：      insert("表名", {{字段: 值}}) → 返回新对象（可取 .id）
-           update("表名", {{where过滤}}, {{字段: 新值}}) → 返回更新行数
   日期：    today() / now()
 
 钩子运行时机：
@@ -298,15 +296,16 @@ async def admin_chat(db: AsyncSession, user_query: str, user: m.UserAccount) -> 
   2. 如果是 state.hooks（当前状态）→ 同上
   3. 如果进入新状态，新状态的 state.hooks 也会执行一次
 
-示例：
-  - 采购入库生成库存：  for line in lines: insert("inventory", {{"material_id": line.material_id, "warehouse_id": 1, "batch_number": "PO"+str(doc.id)+"-L"+str(line.line_number), "quantity": line.quantity, "received_date": today(), "purchase_order_line_id": line.id, "company_id": doc.company_id, "status": "AVAILABLE"}})
-  - 销售开票生成AR：    insert("accounts_receivable", {{"customer_id": doc.customer_id, "sales_order_id": doc.id, "amount": doc.total_amount, "currency": doc.currency, "due_date": today(), "status": "PENDING", "company_id": doc.company_id}})
-  - 凭证过账累科目额：  for e in entries: update("account_balance", {{"account_id": e.account_id, "period_id": doc.period_id}}, {{"period_debit": float(lookup("account_balance", account_id=e.account_id, period_id=doc.period_id).period_debit) + float(e.debit)}})
+# effects（注册式业务副作用）
+业务写入使用 effects 字段引用后端已注册 effect 名称，例如：
+  - "effects": ["crm.create_quotation_from_inquiry"]
+  - "effects": ["wms.stock_goods_receipt", "erp.complete_purchase_receipt_followup"]
+不要在流程 JSON 里写 insert/update 脚本。
 
 **硬规则 vs 钩子选择**：
   - 只是"不满足就禁止" → 硬规则
-  - "满足后自动在别的表记录" → 钩子
-  - 两者都要：硬规则先过，过了再跑钩子
+  - "满足后自动在别的表记录" → effects / command
+  - 两者都要：硬规则先过，过了再跑 effects
 
 # 工具
 1. list_tables — 查表结构

@@ -105,6 +105,17 @@ def _initial_states(workflow: m.WorkflowDefinition) -> list[dict]:
     return [s for s in (workflow.states or []) if s.get("is_initial")]
 
 
+def _collect_effect_names(*containers: dict | None) -> list[str]:
+    effect_names: list[str] = []
+    for container in containers:
+        if not container:
+            continue
+        for name in container.get("effects") or []:
+            if name and name not in effect_names:
+                effect_names.append(name)
+    return effect_names
+
+
 async def get_user_actions_at_state(
     db: AsyncSession, doc_type: str, current_state: str, user_role: str
 ) -> list[dict]:
@@ -207,6 +218,8 @@ async def execute_transition(
     sub_updates: list | None = None,
     comment: str = "",
     ip_address: str | None = None,
+    manage_transaction: bool = True,
+    command_log_id: int | None = None,
 ) -> dict:
     """
     唯一写入点。
@@ -231,6 +244,7 @@ async def execute_transition(
         return await _create_blank(
             db, model, workflow, doc_type, user, comment, ip_address,
             field_updates=field_updates, sub_updates=sub_updates,
+            manage_transaction=manage_transaction,
         )
 
     # ========== 加载已有单据 ==========
@@ -297,6 +311,25 @@ async def execute_transition(
     sub_results = await _apply_sub_updates(db, sub_updates, doc_id)
     await db.flush()  # 让子表新增/修改对规则查询可见
 
+    # 领域扩展校验：WMS/ERP/CRM 等专项规则通过注册器接入。
+    if next_entry:
+        from services.workflow_extensions import run_transition_validators
+        extension_failures = await run_transition_validators(
+            db,
+            doc_type,
+            doc,
+            to_state=new_status,
+            user=user,
+        )
+        if extension_failures:
+            if manage_transaction:
+                await db.rollback()
+            return {
+                "success": False,
+                "error": "领域校验未通过",
+                "rule_failures": extension_failures,
+            }
+
     # 硬规则校验：state.hard_rules + 当前 next_entry.hard_rules
     rules_to_check = list(current_state.get("hard_rules") or [])
     if next_entry:
@@ -305,7 +338,8 @@ async def execute_transition(
         from services.rules import evaluate_rules
         passed, failures = await evaluate_rules(db, doc, rules_to_check)
         if not passed:
-            await db.rollback()
+            if manage_transaction:
+                await db.rollback()
             return {
                 "success": False,
                 "error": "自动校验未通过",
@@ -329,6 +363,8 @@ async def execute_transition(
         entered_state = _find_state(workflow, new_status)
         if entered_state:
             hooks_to_run.extend(entered_state.get("hooks") or [])
+    else:
+        entered_state = None
     hook_log: list[str] = []
     if hooks_to_run:
         from services.hooks import execute_hooks_sync
@@ -336,8 +372,28 @@ async def execute_transition(
             await db.flush()
             hook_log = await db.run_sync(lambda s: execute_hooks_sync(s, doc, hooks_to_run))
         except Exception as e:
-            await db.rollback()
+            if manage_transaction:
+                await db.rollback()
             return {"success": False, "error": f"钩子执行失败: {e}"}
+
+    # 领域扩展副作用：库存成本、财务凭证等专项写入通过注册器接入。
+    if next_entry:
+        from services.workflow_extensions import run_transition_effects
+        effect_names = _collect_effect_names(current_state, next_entry, entered_state)
+        try:
+            hook_log.extend(await run_transition_effects(
+                db,
+                doc_type,
+                doc,
+                to_state=new_status,
+                user=user,
+                command_log_id=command_log_id,
+                effect_names=effect_names,
+            ))
+        except Exception as e:
+            if manage_transaction:
+                await db.rollback()
+            return {"success": False, "error": f"领域副作用执行失败: {e}"}
 
     log = m.WorkflowLog(
         doc_type=doc_type, doc_id=doc_id,
@@ -353,7 +409,10 @@ async def execute_transition(
         ip_address=ip_address,
     )
     db.add(log)
-    await db.commit()
+    if manage_transaction:
+        await db.commit()
+    else:
+        await db.flush()
 
     return {
         "success": True,
@@ -370,6 +429,7 @@ async def execute_transition(
 async def _create_blank(
     db, model, workflow, doc_type, user, comment, ip_address,
     field_updates: dict | None = None, sub_updates: list | None = None,
+    manage_transaction: bool = True,
 ) -> dict:
     """
     B 模型创建路径：入 START 态。
@@ -421,6 +481,23 @@ async def _create_blank(
         if hooks_to_run:
             from services.hooks import execute_hooks_sync
             hook_log = await db.run_sync(lambda s: execute_hooks_sync(s, doc, hooks_to_run))
+        effect_names = _collect_effect_names(target_state)
+        if effect_names:
+            from services.workflow_extensions import run_transition_effects
+            try:
+                hook_log.extend(await run_transition_effects(
+                    db,
+                    doc_type,
+                    doc,
+                    to_state=target_state["code"],
+                    user=user,
+                    command_log_id=None,
+                    effect_names=effect_names,
+                ))
+            except Exception as e:
+                if manage_transaction:
+                    await db.rollback()
+                return {"success": False, "error": f"领域副作用执行失败: {e}"}
 
         changed_fields = {k: {"old": "", "new": str(v)} for k, v in fields.items()}
         log = m.WorkflowLog(
@@ -437,8 +514,11 @@ async def _create_blank(
             ip_address=ip_address,
         )
         db.add(log)
-        await db.commit()
-        await db.refresh(doc)
+        if manage_transaction:
+            await db.commit()
+            await db.refresh(doc)
+        else:
+            await db.flush()
 
         return {
             "success": True, "doc_type": doc_type, "doc_id": doc.id,
@@ -449,7 +529,8 @@ async def _create_blank(
             "log_id": log.id,
         }
     except Exception as e:
-        await db.rollback()
+        if manage_transaction:
+            await db.rollback()
         return {"success": False, "error": f"创建失败: {e}"}
 
 
@@ -615,6 +696,8 @@ async def commit_card(
     user: m.UserAccount,
     comment: str = "",
     ip_address: str | None = None,
+    manage_transaction: bool = True,
+    command_log_id: int | None = None,
 ) -> dict:
     """执行用户已批准的卡片 — 把 changes 拆回 field_updates 后调 execute_transition。"""
     field_updates = {}
@@ -632,6 +715,8 @@ async def commit_card(
         field_updates=field_updates,
         comment=comment,
         ip_address=ip_address,
+        manage_transaction=manage_transaction,
+        command_log_id=command_log_id,
     )
 
 

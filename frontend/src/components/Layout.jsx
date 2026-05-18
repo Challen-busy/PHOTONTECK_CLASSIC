@@ -5,7 +5,7 @@ import {
   DashboardOutlined, TableOutlined, ThunderboltOutlined,
   RobotOutlined, LogoutOutlined, UserOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, SettingOutlined, ApartmentOutlined,
-  CheckSquareOutlined, TeamOutlined, BankOutlined, InboxOutlined,
+  CheckSquareOutlined, TeamOutlined, BankOutlined, InboxOutlined, AuditOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '../auth';
 import { getMyTodos } from '../api';
@@ -17,6 +17,7 @@ const buildMenuItems = (todoCount) => [
   { key: '/crm', icon: <TeamOutlined />, label: 'CRM' },
   { key: '/erp', icon: <BankOutlined />, label: 'ERP' },
   { key: '/wms', icon: <InboxOutlined />, label: 'WMS' },
+  { key: '/commands', icon: <AuditOutlined />, label: '命令' },
   { key: '/order-chain', icon: <ApartmentOutlined />, label: '链路' },
   {
     key: '/todos',
