@@ -5,10 +5,8 @@
 """
 
 import asyncio
-import calendar
 import sys
-from datetime import date, timedelta
-from decimal import Decimal
+from datetime import date
 from pathlib import Path
 
 from sqlalchemy import select
@@ -27,43 +25,54 @@ async def seed():
 
     async with factory() as db:
         # 检查是否已有数据
-        result = await db.execute(select(m.Company))
-        if result.scalar_one_or_none():
+        result = await db.execute(select(m.Company).limit(1))
+        if result.scalars().first():
             print("数据已存在，跳过。如需重新灌入请清空数据库。")
             return
 
-        # === 公司 ===
+        today = date.today()
+
+        # === 6 公司 / 6 租户（段0a，PRD 01 页面1）===
+        # 香港 3（PTK/ADS/FTK，HKD 本位、USD 并用）+ 内地 3（RJ/XGTC/TR，RMB/CNY）。
+        # 全称 / 发票抬头 / 金蝶组织码均为占位，待甲方逐家签字（GAP-07）。
         companies = {}
-        for code, name, short, currency, tax, country in [
-            ("HK_MAIN", "PHOTONTECK (HK) Limited", "香港主体", "USD", "NONE", "香港"),
-            ("HK_02", "PHOTONTECK Trading (HK) Ltd", "香港二号", "USD", "NONE", "香港"),
-            ("SZ_CN", "深圳光子科技有限公司", "深圳公司", "CNY", "VAT", "中国"),
-            ("WH_CN", "武汉光子科技有限公司", "武汉公司", "CNY", "VAT", "中国"),
-            ("SG_01", "PHOTONTECK (SG) Pte Ltd", "新加坡公司", "SGD", "NONE", "新加坡"),
-            ("BVI_01", "PHOTONTECK Global Ltd", "BVI公司", "USD", "NONE", "BVI"),
+        for code, name, short, region, currency, tax, country, inv_title, prefix, kingdee in [
+            ("PTK",  "Photonteck (HK) Limited（占位）", "PTK",  "HK", "HKD", "NONE", "香港", "Photonteck (HK) Limited（占位）", "PTK",  "KD-ORG-PTK"),
+            ("ADS",  "Andesec (HK) Limited（占位）",    "ADS",  "HK", "HKD", "NONE", "香港", "Andesec (HK) Limited（占位）",    "ADS",  "KD-ORG-ADS"),
+            ("FTK",  "FTK (HK) Limited（占位）",         "FTK",  "HK", "HKD", "NONE", "香港", "FTK (HK) Limited（占位）",         "FTK",  "KD-ORG-FTK"),
+            ("RJ",   "内地·瑞××（占位，RJ 抬头）",       "RJ",   "CN", "CNY", "VAT",  "中国", "RJ 内地公司抬头（占位）",          "RJ",   "KD-ORG-RJ"),
+            ("XGTC", "内地·旭光腾创（占位，XGTC 抬头）",  "XGTC", "CN", "CNY", "VAT",  "中国", "XGTC 内地公司抬头（占位）",        "XGTC", "KD-ORG-XGTC"),
+            ("TR",   "内地·特锐（占位，TR 抬头）",        "TR",   "CN", "CNY", "VAT",  "中国", "TR 内地公司抬头（占位）",          "TR",   "KD-ORG-TR"),
         ]:
-            c = m.Company(code=code, name=name, short_name=short, currency=currency, tax_type=tax, country=country)
+            c = m.Company(
+                code=code, name=name, short_name=short, region=region,
+                currency=currency, tax_type=tax, country=country,
+                invoice_title=inv_title, numbering_prefix=prefix, kingdee_org_code=kingdee,
+            )
             db.add(c)
             companies[code] = c
         await db.flush()
 
-        hk = companies["HK_MAIN"]
+        ptk = companies["PTK"]  # 默认演示主体（香港）
 
-        # === 用户 ===
+        # === 用户：admin + 各角色 demo（决策A 含 FINANCE_DIRECTOR）===
+        # 密码：admin/admin1234，其余 demo 用户 /demo1234。
         pwd = hash_password("demo1234")
         admin_pwd = hash_password("admin1234")
 
         users = {}
         for uname, full, role, comp, is_admin in [
-            ("admin", "系统管理员", "ADMIN", hk, True),
-            ("jerry", "Jerry毛总", "BOSS", hk, False),
-            ("peyton", "Peyton", "OPERATIONS", hk, False),
-            ("cathy", "Cathy", "FINANCE", hk, False),
-            ("se_wang", "王工(销售)", "SALES_ENGINEER", hk, False),
-            ("sa_li", "李助理(SA)", "SALES_ASSISTANT", hk, False),
-            ("pm_zhang", "张经理(产品)", "PRODUCT_MANAGER", hk, False),
-            ("pa_chen", "陈助理(PA)", "PRODUCT_ASSISTANT", hk, False),
-            ("wh_liu", "刘师傅(物流)", "LOGISTICS", hk, False),
+            ("admin",     "系统管理员",        "ADMIN",            ptk, True),
+            ("boss",      "毛总（管理层）",     "BOSS",             ptk, False),
+            ("fin_dir",   "财务总监",          "FINANCE_DIRECTOR", ptk, False),
+            ("finance",   "财务（本公司账套）", "FINANCE",          ptk, False),
+            ("ops",       "运营",              "OPERATIONS",       ptk, False),
+            ("sales",     "销售",              "SALES",            ptk, False),
+            ("sa",        "销售助理(SA)",      "SALES_ASSISTANT",  ptk, False),
+            ("se",        "销售工程师(SE)",    "SALES_ENGINEER",   ptk, False),
+            ("pm",        "产品经理(PM)",      "PRODUCT_MANAGER",  ptk, False),
+            ("pa",        "产品助理(PA)",      "PRODUCT_ASSISTANT", ptk, False),
+            ("logistics", "物流/仓管",         "LOGISTICS",        ptk, False),
         ]:
             u = m.UserAccount(
                 username=uname, password_hash=admin_pwd if uname == "admin" else pwd,
@@ -73,232 +82,71 @@ async def seed():
             users[uname] = u
         await db.flush()
 
-        # Jerry和Cathy可看所有公司
-        for comp in companies.values():
-            for uname in ["jerry", "cathy"]:
-                db.add(m.UserCompanyAccess(user_id=users[uname].id, company_id=comp.id))
+        # === 用户×公司授权（决策B：一人多公司、各家角色相同）===
+        # 每个用户对主属公司有一条 is_primary 授权行（_company_filter 读授权集 ∩ active）。
+        for u in users.values():
+            db.add(m.UserCompanyAccess(user_id=u.id, company_id=u.company_id, is_primary=True))
+        # 跨公司只读 privileged（BOSS / 财务总监）：开通全部 6 公司，演示公司切换器。
+        for uname in ("boss", "fin_dir", "admin"):
+            for comp in companies.values():
+                if comp.id != users[uname].company_id:
+                    db.add(m.UserCompanyAccess(user_id=users[uname].id, company_id=comp.id, is_primary=False))
+        # 演示「一人多公司」：销售助理 SA 额外开通 ADS（同角色 SALES_ASSISTANT）。
+        db.add(m.UserCompanyAccess(user_id=users["sa"].id, company_id=companies["ADS"].id, is_primary=False))
+        await db.flush()
 
-        # === 物料分类 ===
+        # === 基础主数据骨架（少量，供流程演示有锚点）===
         cats = {}
         for code, name in [
-            ("LASER", "光源/激光器"), ("DETECTOR", "探测器"), ("MODULATOR", "光调制器"),
-            ("FIBER", "光纤/跳线"), ("CAMERA", "相机"), ("OPTICS", "光学无源器件"),
-            ("ELECTRONICS", "电子控制"), ("OPTCOMM", "光通信器件"),
+            ("LASER", "光源/激光器"), ("DETECTOR", "探测器"),
+            ("OPTCOMM", "光通信器件"), ("ELECTRONICS", "电子控制"),
         ]:
             c = m.MaterialCategory(code=code, name=name)
             db.add(c)
             cats[code] = c
         await db.flush()
 
-        # === 供应商 ===
         suppliers = {}
         for code, name, country in [
-            ("TOPTICA", "TOPTICA Photonics", "德国"), ("THORLABS", "Thorlabs", "美国"),
-            ("HAMAMATSU", "Hamamatsu (滨松)", "日本"), ("NKT", "NKT Photonics", "丹麦"),
-            ("IDQUAN", "ID Quantique", "瑞士"), ("ROHM", "ROHM (罗姆)", "日本"),
-            ("MARUWA", "Maruwa (王和)", "日本"), ("XINDA", "信达贸易", "中国"),
-            ("CONNET", "康耐特光电(国产)", "中国"), ("LUMENTUM", "Lumentum", "美国"),
+            ("TOPTICA", "TOPTICA Photonics", "德国"),
+            ("THORLABS", "Thorlabs", "美国"),
+            ("CONNET", "康耐特光电(国产)", "中国"),
         ]:
-            s = m.Supplier(code=code, name=name, country=country, company_id=hk.id, created_by_id=users["admin"].id)
+            s = m.Supplier(code=code, name=name, country=country, company_id=ptk.id, created_by_id=users["admin"].id)
             db.add(s)
             suppliers[code] = s
         await db.flush()
 
-        # === 物料 ===
         materials = {}
-        for sku, name, sup, cat, domestic, specs in [
-            ("TOP-DLC-PRO", "TOPTICA DL pro 可调谐二极管激光器", "TOPTICA", "LASER", False,
-             {"wavelength_nm": "370-1770", "linewidth_khz": "<100", "power_mw": "50-120"}),
-            ("HAM-C14900", "Hamamatsu sCMOS相机 C14900", "HAMAMATSU", "CAMERA", False,
-             {"resolution": "2048x2048", "frame_rate_fps": 100}),
-            ("NKT-SC480", "NKT SuperK EXTREME超连续谱光源", "NKT", "LASER", False,
-             {"wavelength_nm": "400-2400", "power_w": 8}),
-            ("IDQ-ID281", "ID Quantique ID281 超导单光子探测器", "IDQUAN", "DETECTOR", False,
-             {"wavelength_nm": "900-1600", "efficiency_pct": ">90"}),
-            ("TL-PM100D", "Thorlabs PM100D 光功率计", "THORLABS", "ELECTRONICS", False,
-             {"wavelength_nm": "400-1100"}),
-            ("CON-SOA1550", "康耐特 SOA 1550nm光放大器", "CONNET", "OPTCOMM", True,
-             {"wavelength_nm": 1550, "gain_db": 25}),
-            ("LUM-ITLA100", "Lumentum ITLA 可调谐激光器模块", "LUMENTUM", "OPTCOMM", False,
-             {"wavelength_nm": "1527-1567", "power_dbm": 16}),
-            ("ROHM-LD650", "ROHM 650nm半导体激光器", "ROHM", "LASER", False,
-             {"wavelength_nm": 650, "power_mw": 10}),
+        for sku, name, sup, cat, domestic in [
+            ("TOP-DLC-PRO", "TOPTICA DL pro 可调谐二极管激光器", "TOPTICA", "LASER", False),
+            ("TL-PM100D", "Thorlabs PM100D 光功率计", "THORLABS", "ELECTRONICS", False),
+            ("CON-SOA1550", "康耐特 SOA 1550nm光放大器", "CONNET", "OPTCOMM", True),
         ]:
-            mat = m.Material(sku=sku, name=name, supplier_id=suppliers[sup].id, category_id=cats[cat].id,
-                           is_domestic=domestic, technical_specs=specs)
+            mat = m.Material(sku=sku, name=name, supplier_id=suppliers[sup].id,
+                             category_id=cats[cat].id, is_domestic=domestic, technical_specs={})
             db.add(mat)
             materials[sku] = mat
         await db.flush()
 
-        # === 客户 ===
         customers = {}
         for code, name, currency, terms, shipping in [
             ("INTEL", "Intel Corporation", "USD", 60, "FOB"),
-            ("TENCENT", "腾讯科技", "CNY", 30, "DAP"),
-            ("HUAWEI", "华为技术有限公司", "CNY", 45, "DAP"),
             ("USTC", "中国科学技术大学", "CNY", 30, "DAP"),
-            ("NTU_SG", "南洋理工大学", "SGD", 30, "CIF"),
         ]:
             c = m.Customer(code=code, name=name, default_currency=currency, payment_terms_days=terms,
-                          default_shipping_method=shipping, company_id=hk.id, created_by_id=users["admin"].id)
+                           default_shipping_method=shipping, company_id=ptk.id, created_by_id=users["admin"].id)
             db.add(c)
             customers[code] = c
         await db.flush()
 
-        # === 仓库 ===
-        wh_hk = m.Warehouse(code="WH-HK", name="香港主仓", warehouse_type="MAIN", city="香港",
-                           company_id=hk.id, created_by_id=users["admin"].id)
-        wh_wh = m.Warehouse(code="WH-WH", name="武汉保税区仓", warehouse_type="BONDED", city="武汉",
-                           company_id=companies["WH_CN"].id, created_by_id=users["admin"].id)
-        wh_sz = m.Warehouse(code="WH-SZ", name="深圳仓", warehouse_type="BRANCH", city="深圳",
-                           company_id=companies["SZ_CN"].id, created_by_id=users["admin"].id)
-        db.add_all([wh_hk, wh_wh, wh_sz])
-        await db.flush()
-
-        # === 销售订单 ===
-        today = date.today()
-        so1 = m.SalesOrder(
-            order_number="SO-2025-0001", customer_id=customers["INTEL"].id,
-            sales_engineer_id=users["se_wang"].id, sales_assistant_id=users["sa_li"].id,
-            currency="USD", total_amount=Decimal("185000"), payment_terms_days=60,
-            status="APPROVED",
-            company_id=hk.id, created_by_id=users["sa_li"].id,
-        )
-        so2 = m.SalesOrder(
-            order_number="SO-2025-0002", customer_id=customers["TENCENT"].id,
-            sales_engineer_id=users["se_wang"].id, sales_assistant_id=users["sa_li"].id,
-            currency="CNY", total_amount=Decimal("580000"), payment_terms_days=30,
-            status="DRAFT",
-            company_id=hk.id, created_by_id=users["sa_li"].id,
-        )
-        db.add_all([so1, so2])
-        await db.flush()
-
-        db.add_all([
-            m.SalesOrderLine(sales_order_id=so1.id, line_number=1, material_id=materials["TOP-DLC-PRO"].id,
-                           quantity=5, unit_price=Decimal("25000"), total_price=Decimal("125000"),
-                           requested_delivery_date=today + timedelta(days=30)),
-            m.SalesOrderLine(sales_order_id=so1.id, line_number=2, material_id=materials["TL-PM100D"].id,
-                           quantity=20, unit_price=Decimal("3000"), total_price=Decimal("60000"),
-                           requested_delivery_date=today + timedelta(days=20)),
-            m.SalesOrderLine(sales_order_id=so2.id, line_number=1, material_id=materials["LUM-ITLA100"].id,
-                           quantity=10, unit_price=Decimal("38000"), total_price=Decimal("380000")),
-            m.SalesOrderLine(sales_order_id=so2.id, line_number=2, material_id=materials["CON-SOA1550"].id,
-                           quantity=40, unit_price=Decimal("5000"), total_price=Decimal("200000")),
-        ])
-
-        # === 采购订单 ===
-        po1 = m.PurchaseOrder(
-            order_number="PO-2025-0001", supplier_id=suppliers["TOPTICA"].id,
-            purchase_assistant_id=users["pa_chen"].id, related_sales_order_id=so1.id,
-            currency="USD", total_amount=Decimal("75000"),
-            expected_delivery_date=today + timedelta(days=25), status="ORDERED",
-            company_id=hk.id, created_by_id=users["pa_chen"].id,
-        )
-        db.add(po1)
-        await db.flush()
-
-        db.add(m.PurchaseOrderLine(
-            purchase_order_id=po1.id, line_number=1, material_id=materials["TOP-DLC-PRO"].id,
-            quantity=5, unit_price=Decimal("15000"), total_price=Decimal("75000"),
-        ))
-
-        # === 库存 ===
-        for sku, wh, batch, qty, recv in [
-            ("TL-PM100D", wh_hk, "B-20250301-001", 50, today - timedelta(days=30)),
-            ("TL-PM100D", wh_hk, "B-20250315-002", 30, today - timedelta(days=15)),
-            ("ROHM-LD650", wh_hk, "B-20250201-001", 200, today - timedelta(days=60)),
-            ("CON-SOA1550", wh_sz, "B-20250310-001", 25, today - timedelta(days=20)),
-            ("HAM-C14900", wh_hk, "B-20250220-001", 8, today - timedelta(days=45)),
-            ("IDQ-ID281", wh_hk, "B-20250305-001", 3, today - timedelta(days=25)),
-        ]:
-            db.add(m.Inventory(
-                material_id=materials[sku].id, warehouse_id=wh.id, batch_number=batch,
-                quantity=qty, received_date=recv, company_id=wh.company_id,
-                created_by_id=users["admin"].id,
+        # 每家公司一个主仓骨架
+        for comp in companies.values():
+            db.add(m.Warehouse(
+                code=f"WH-{comp.code}", name=f"{comp.short_name}主仓", warehouse_type="MAIN",
+                city=comp.country, company_id=comp.id, created_by_id=users["admin"].id,
             ))
-
-        # === 应收应付 ===
-        db.add(m.AccountsReceivable(
-            customer_id=customers["INTEL"].id, sales_order_id=so1.id,
-            invoice_number="INV-2025-0001", amount=Decimal("185000"), currency="USD",
-            due_date=today + timedelta(days=50), company_id=hk.id, created_by_id=users["cathy"].id,
-        ))
-        db.add(m.AccountsPayable(
-            supplier_id=suppliers["TOPTICA"].id, purchase_order_id=po1.id,
-            invoice_number="TOPTICA-INV-88123", amount=Decimal("75000"), currency="USD",
-            due_date=today + timedelta(days=30), company_id=hk.id, created_by_id=users["cathy"].id,
-        ))
-
-        # === 信用额度 ===
-        db.add(m.SupplierCredit(supplier_id=suppliers["TOPTICA"].id, credit_limit=Decimal("500000"),
-                               used_amount=Decimal("320000"), currency="USD", company_id=hk.id, created_by_id=users["admin"].id))
-        db.add(m.CustomerCredit(customer_id=customers["INTEL"].id, credit_limit=Decimal("2000000"),
-                               used_amount=Decimal("850000"), currency="USD", company_id=hk.id, created_by_id=users["admin"].id))
-
-        # === 会计科目表 ===
-        ACCOUNTS = [
-            ("1", "资产", "ASSET", "DEBIT", None, False),
-            ("1001", "库存现金", "ASSET", "DEBIT", "1", True),
-            ("1002", "银行存款", "ASSET", "DEBIT", "1", True),
-            ("1012", "其他货币资金", "ASSET", "DEBIT", "1", True),
-            ("1122", "应收账款", "ASSET", "DEBIT", "1", True),
-            ("1123", "预付账款", "ASSET", "DEBIT", "1", True),
-            ("1221", "其他应收款", "ASSET", "DEBIT", "1", True),
-            ("1405", "库存商品", "ASSET", "DEBIT", "1", True),
-            ("1601", "固定资产", "ASSET", "DEBIT", "1", True),
-            ("1602", "累计折旧", "ASSET", "CREDIT", "1", True),
-            ("2", "负债", "LIABILITY", "CREDIT", None, False),
-            ("2202", "应付账款", "LIABILITY", "CREDIT", "2", True),
-            ("2203", "预收账款", "LIABILITY", "CREDIT", "2", True),
-            ("2211", "应付职工薪酬", "LIABILITY", "CREDIT", "2", True),
-            ("2221", "应交税费", "LIABILITY", "CREDIT", "2", True),
-            ("2241", "其他应付款", "LIABILITY", "CREDIT", "2", True),
-            ("3", "所有者权益", "EQUITY", "CREDIT", None, False),
-            ("4001", "实收资本", "EQUITY", "CREDIT", "3", True),
-            ("4103", "盈余公积", "EQUITY", "CREDIT", "3", True),
-            ("4104", "本年利润", "EQUITY", "CREDIT", "3", True),
-            ("4105", "利润分配", "EQUITY", "CREDIT", "3", True),
-            ("5", "收入", "REVENUE", "CREDIT", None, False),
-            ("6001", "主营业务收入", "REVENUE", "CREDIT", "5", True),
-            ("6051", "其他业务收入", "REVENUE", "CREDIT", "5", True),
-            ("6301", "营业外收入", "REVENUE", "CREDIT", "5", True),
-            ("6", "成本费用", "EXPENSE", "DEBIT", None, False),
-            ("6401", "主营业务成本", "COGS", "DEBIT", "6", True),
-            ("6402", "其他业务成本", "COGS", "DEBIT", "6", True),
-            ("6601", "销售费用", "EXPENSE", "DEBIT", "6", True),
-            ("6602", "管理费用", "EXPENSE", "DEBIT", "6", True),
-            ("6603", "财务费用", "EXPENSE", "DEBIT", "6", True),
-            ("6801", "所得税费用", "EXPENSE", "DEBIT", "6", True),
-        ]
-        for comp in companies.values():
-            parent_map = {}
-            for code, name, atype, direction, parent_code, is_leaf in ACCOUNTS:
-                parent_id = parent_map.get(parent_code)
-                level = 1 if parent_code is None else 2
-                acc = m.Account(company_id=comp.id, code=code, name=name, account_type=atype,
-                              balance_direction=direction, parent_id=parent_id, level=level,
-                              is_leaf=is_leaf, currency=comp.currency)
-                db.add(acc)
-                await db.flush()
-                parent_map[code] = acc.id
-
-        # === 汇率 ===
-        for frm, to, rate in [("USD", "CNY", "7.2450"), ("USD", "HKD", "7.8100"), ("USD", "SGD", "1.3400")]:
-            db.add(m.ExchangeRate(from_currency=frm, to_currency=to, rate=Decimal(rate), effective_date=today))
-
-        # === 会计期间 ===
-        year = today.year
-        for comp in companies.values():
-            fy = m.FiscalYear(company_id=comp.id, year=year, start_date=date(year, 1, 1), end_date=date(year, 12, 31))
-            db.add(fy)
-            await db.flush()
-            for month in range(1, 13):
-                last_day = calendar.monthrange(year, month)[1]
-                db.add(m.AccountingPeriod(
-                    fiscal_year_id=fy.id, period_number=month,
-                    start_date=date(year, month, 1), end_date=date(year, month, last_day),
-                ))
+        await db.flush()
 
         # === 流程定义（基于K3截图+需求文档的真实流程）===
         # 格式: (doc_type, name, description, states, transitions)
@@ -1200,17 +1048,16 @@ async def seed():
 
         # 统计
         tables = [
-            ("公司", m.Company), ("用户", m.UserAccount), ("供应商", m.Supplier),
-            ("物料", m.Material), ("客户", m.Customer), ("仓库", m.Warehouse),
-            ("销售订单", m.SalesOrder), ("采购订单", m.PurchaseOrder),
-            ("库存批次", m.Inventory), ("流程定义", m.WorkflowDefinition),
-            ("知识库条目", m.KnowledgeEntry),
+            ("公司", m.Company), ("用户", m.UserAccount), ("用户×公司授权", m.UserCompanyAccess),
+            ("供应商", m.Supplier), ("物料", m.Material), ("客户", m.Customer), ("仓库", m.Warehouse),
+            ("流程定义", m.WorkflowDefinition), ("知识库条目", m.KnowledgeEntry),
         ]
         print("种子数据生成完成:")
         for label, model in tables:
             count = (await db.execute(select(func.count()).select_from(model))).scalar()
             print(f"  {label}: {count}")
-        print(f"\n登录账号: jerry/demo1234  sa_li/demo1234  pa_chen/demo1234  admin/admin1234")
+        print("\n登录账号(密码 admin1234 / 其余 demo1234):")
+        print("  admin  boss  fin_dir  finance  ops  sales  sa  se  pm  pa  logistics")
 
 
 if __name__ == "__main__":

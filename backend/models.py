@@ -60,6 +60,11 @@ class Company(Base):
     country = Column(String(50), default="香港")
     city = Column(String(50), default="")
     address = Column(Text, default="")
+    # 区域配置（EXT-01-D）：HK/内地二分 + 抬头/编号前缀/金蝶组织映射
+    region = Column(String(10), default="HK")  # HK / CN
+    invoice_title = Column(Text, default="")  # 发票抬头（占位待甲方签字）
+    numbering_prefix = Column(String(20), default="")  # 单据编号前缀
+    kingdee_org_code = Column(String(40), default="")  # 金蝶组织映射码（占位）
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
 
@@ -77,17 +82,25 @@ class UserAccount(Base):
     phone = Column(String(30), default="")
     is_admin = Column(Boolean, default=False)  # 超级管理员（不参与业务流程）
     is_active = Column(Boolean, default=True)
+    # 服务端会话吊销（D-05f 升级）：强制下线/封号时 +1，鉴权校验会话里的 session_version
+    session_version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, server_default=func.now())
 
     company = relationship("Company")
 
 
 class UserCompanyAccess(Base):
-    """用户可访问的额外公司（老板/财务看多公司）"""
+    """用户×公司授权（决策B）：一人多公司、各家角色相同（角色取 UserAccount.role）。
+
+    _company_filter 读「已开通公司集 ∩ active_company_id」；is_primary=默认登录公司；
+    valid_until=临时代管软到期（EXT-01-C，空=永久）。
+    """
     __tablename__ = "user_company_access"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("user_account.id"), nullable=False)
     company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
+    is_primary = Column(Boolean, nullable=False, default=False, server_default="false")
+    valid_until = Column(Date, nullable=True)  # 空=永久授权
     __table_args__ = (UniqueConstraint("user_id", "company_id"),)
 
 

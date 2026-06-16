@@ -21,6 +21,13 @@ def require_admin(user: m.UserAccount = Depends(get_current_user)):
     return user
 
 
+def require_admin_or_boss(user: m.UserAccount = Depends(get_current_user)):
+    """强制下线/封号闸：ADMIN（is_admin）或 BOSS 角色。"""
+    if not (user.is_admin or user.role == "BOSS"):
+        raise HTTPException(status_code=403, detail="需要管理员或管理层权限")
+    return user
+
+
 # ============================================================
 # 管理员 Agent
 # ============================================================
@@ -86,6 +93,41 @@ async def admin_create_user(req: CreateUserRequest, db: AsyncSession = Depends(g
     db.add(u)
     await db.commit()
     return {"id": u.id, "username": u.username}
+
+
+@router.post("/api/admin/users/{user_id}/revoke-sessions")
+async def admin_revoke_sessions(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    actor: m.UserAccount = Depends(require_admin_or_boss),
+):
+    """服务端会话吊销（强制下线/封号，D-05f 升级）：递增目标用户 session_version，
+    使其所有已签发会话立即失效（下次请求鉴权 session_version 不匹配 → 401）。
+    """
+    result = await db.execute(select(m.UserAccount).where(m.UserAccount.id == user_id))
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    target.session_version = (target.session_version or 0) + 1
+    await db.commit()
+    return {"ok": True, "user_id": target.id, "session_version": target.session_version}
+
+
+@router.post("/api/admin/users/{user_id}/disable")
+async def admin_disable_user(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    actor: m.UserAccount = Depends(require_admin_or_boss),
+):
+    """封号：停用账号 + 吊销会话（即时下线，惰性吊销不够时用此）。"""
+    result = await db.execute(select(m.UserAccount).where(m.UserAccount.id == user_id))
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    target.is_active = False
+    target.session_version = (target.session_version or 0) + 1
+    await db.commit()
+    return {"ok": True, "user_id": target.id, "is_active": target.is_active}
 
 
 # ============================================================

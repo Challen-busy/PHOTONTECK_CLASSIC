@@ -2,50 +2,204 @@ import { useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout as AntLayout, Menu, Avatar, Dropdown, Tag, Badge } from 'antd';
 import {
-  DashboardOutlined, TableOutlined, ThunderboltOutlined,
-  RobotOutlined, LogoutOutlined, UserOutlined,
+  LogoutOutlined, UserOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, SettingOutlined, ApartmentOutlined,
-  CheckSquareOutlined, TeamOutlined, BankOutlined, InboxOutlined, AuditOutlined,
+  CheckSquareOutlined, TeamOutlined, ShoppingOutlined, InboxOutlined,
+  FileProtectOutlined, AccountBookOutlined, BarChartOutlined,
+  DatabaseOutlined, ProfileOutlined, BankOutlined, TableOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '../auth';
 import { getMyTodos } from '../api';
+import CompanySwitcher from './CompanySwitcher';
 
 const { Header, Sider, Content } = AntLayout;
 
-const buildMenuItems = (todoCount) => [
-  { key: '/', icon: <DashboardOutlined />, label: '看板' },
-  { key: '/crm', icon: <TeamOutlined />, label: 'CRM' },
-  { key: '/erp', icon: <BankOutlined />, label: 'ERP' },
-  { key: '/wms', icon: <InboxOutlined />, label: 'WMS' },
-  { key: '/commands', icon: <AuditOutlined />, label: '命令' },
-  { key: '/order-chain', icon: <ApartmentOutlined />, label: '链路' },
-  {
-    key: '/todos',
-    icon: <CheckSquareOutlined />,
-    label: (
-      <span>
-        待办{' '}
-        {todoCount > 0 && (
-          <Badge count={todoCount} size="small" offset={[6, -2]}
-            style={{ backgroundColor: '#b8860b' }} />
-        )}
-      </span>
-    ),
-  },
-  { key: '/data',        icon: <TableOutlined />,     label: '数据' },
-  { key: '/actions',     icon: <ThunderboltOutlined />, label: '流程' },
-  { key: '/agent',       icon: <RobotOutlined />,     label: 'Agent' },
-  { key: '/flow-editor', icon: <ApartmentOutlined />, label: '流程管理', adminOnly: true },
-  { key: '/admin',       icon: <SettingOutlined />,   label: '管理',     adminOnly: true },
-];
+/**
+ * 业务导向导航树（落 PRD 00 §2 IA：10 个业务域 0~9）。
+ * 旧引擎导航（看板/CRM/ERP/WMS/命令/链路/数据/流程/Agent/流程管理/管理）已移除。
+ * 引擎壳页（数据浏览 DataExplorer / 流程管理 FlowEditor）降为 admin 专属、收进域 9。
+ * Agent 入口不挂（本项目不做 AI，00b 明确隐藏）。
+ */
+const buildMenuItems = (todoCount, isAdmin) => {
+  const items = [
+    {
+      key: 'g0',
+      icon: <CheckSquareOutlined />,
+      label: '工作台',
+      children: [
+        {
+          key: '/',
+          label: (
+            <span>
+              我的工作台{' '}
+              {todoCount > 0 && (
+                <Badge count={todoCount} size="small" offset={[6, -2]}
+                  style={{ backgroundColor: '#b8860b' }} />
+              )}
+            </span>
+          ),
+        },
+        { key: '/notifications', label: '通知中心' },
+        { key: '/approvals', label: '我的审批 / 审批中心' },
+      ],
+    },
+    {
+      key: 'g1',
+      icon: <TeamOutlined />,
+      label: '客户 / 销售',
+      children: [
+        { key: '/sales/customers', label: '客户 / 联系人' },
+        { key: '/sales/leads', label: '线索 / 商机 / 跟进' },
+        { key: '/sales/quotations', label: '报价单' },
+        { key: '/sales/orders', label: '销售订单 SO' },
+        { key: '/sales/shipments', label: '发货申请 / 通知' },
+        { key: '/sales/invoices', label: '销项发票' },
+        { key: '/sales/tickets', label: '售后技术工单' },
+        { key: '/sales/qualification', label: '客户认证 / 标书' },
+        { key: '/sales/forecast', label: 'Forecast 接单' },
+      ],
+    },
+    {
+      key: 'g2',
+      icon: <ShoppingOutlined />,
+      label: '采购 / 供应链',
+      children: [
+        { key: '/purchase/inquiries', label: '询价' },
+        { key: '/purchase/orders', label: 'PO 总表 / 采购订单' },
+        { key: '/purchase/stockup', label: '备货申请' },
+        { key: '/purchase/samples', label: '样品 SDN' },
+        { key: '/purchase/rma', label: 'RMA 退货' },
+        { key: '/purchase/invoices', label: '进项发票' },
+        { key: '/purchase/intransit', label: '采购在途' },
+        { key: '/purchase/payments', label: '付款申请' },
+      ],
+    },
+    {
+      key: 'g3',
+      icon: <InboxOutlined />,
+      label: '仓储 WMS',
+      children: [
+        { key: '/wms/inbound', label: '入库收货' },
+        { key: '/wms/inventory', label: '库存' },
+        { key: '/wms/transactions', label: '库存流水 / 事务台账' },
+        { key: '/wms/outbound', label: '出库发货' },
+        { key: '/wms/subcontract', label: '委外加工' },
+        { key: '/wms/transfer', label: '调拨' },
+        { key: '/wms/count', label: '盘点 / 库存调整' },
+        { key: '/wms/locations', label: '库位管理' },
+        { key: '/wms/labels', label: '标签打印' },
+      ],
+    },
+    {
+      key: 'g4',
+      icon: <FileProtectOutlined />,
+      label: '报关',
+      children: [
+        { key: '/customs/declarations', label: '报关单' },
+        { key: '/customs/return-monitor', label: '退运监控（180天）' },
+        { key: '/customs/fees', label: '报关费 / 进出口证' },
+        { key: '/customs/logistics', label: '物流 API 货物进度' },
+      ],
+    },
+    {
+      key: 'g5',
+      icon: <AccountBookOutlined />,
+      label: '财务视图 / 单据中心',
+      children: [
+        { key: '/finance/ar', label: '应收视图' },
+        { key: '/finance/ap', label: '应付视图' },
+        { key: '/finance/advance', label: '预收 / 预付到账确认' },
+        { key: '/finance/credit-note', label: 'Credit Note' },
+        { key: '/finance/kingdee-outbox', label: '单据推送中心（金蝶）' },
+        { key: '/finance/chain', label: '单据链路追踪' },
+        { key: '/finance/reconcile', label: '对账' },
+      ],
+    },
+    {
+      key: 'g6',
+      icon: <BarChartOutlined />,
+      label: '报表 / 看板',
+      children: [
+        { key: '/reports/kpi', label: '经营 KPI' },
+        { key: '/reports/opportunity-board', label: '商机看板' },
+        { key: '/reports/ar-board', label: '应收看板' },
+        { key: '/reports/target', label: '业绩目标 vs 实际' },
+        { key: '/reports/commission', label: '提成' },
+        { key: '/reports/cross-company', label: '跨公司只读汇总' },
+      ],
+    },
+    {
+      key: 'g7',
+      icon: <DatabaseOutlined />,
+      label: '主数据',
+      children: [
+        { key: '/master/customers', label: '客户' },
+        { key: '/master/suppliers', label: '供应商 / 原厂' },
+        { key: '/master/products', label: '产品 / 型号' },
+        { key: '/master/product-codes', label: '产品代码' },
+        { key: '/master/product-lines', label: '产线' },
+        { key: '/master/locations', label: '库位' },
+        { key: '/master/hscode', label: 'HS 编码' },
+        { key: '/master/uom', label: '计量单位' },
+      ],
+    },
+    {
+      key: 'g8',
+      icon: <ProfileOutlined />,
+      label: '配置 / 模板',
+      children: [
+        { key: '/config/label-templates', label: '标签模板' },
+        { key: '/config/doc-templates', label: '单据模板' },
+        { key: '/config/numbering', label: '编号规则' },
+        { key: '/config/approval-flow', label: '审批流配置' },
+        { key: '/config/commission', label: '提成规则配置' },
+      ],
+    },
+  ];
+
+  if (isAdmin) {
+    items.push({
+      key: 'g9',
+      icon: <BankOutlined />,
+      label: '企业 / 账号管理',
+      children: [
+        { key: '/org/companies', label: '公司 / 租户' },
+        { key: '/org/users', label: '用户' },
+        { key: '/org/roles', label: '角色与权限' },
+        { key: '/org/audit', label: '操作日志审计' },
+        { type: 'divider' },
+        { key: '/data', icon: <TableOutlined />, label: '数据浏览（引擎）' },
+        { key: '/flow-editor', icon: <ApartmentOutlined />, label: '流程管理（引擎）' },
+      ],
+    });
+  }
+
+  return items;
+};
 
 // 克制的语义色 —— 用于角色徽章（降饱和版）
 const roleColors = {
   BOSS: '#b42318', OPERATIONS: '#6b46c1', FINANCE: '#b8860b',
-  SALES_ENGINEER: '#1f5aa8', SALES_ASSISTANT: '#0e7490',
+  FINANCE_DIRECTOR: '#9a6a00',
+  SALES: '#1f5aa8', SA: '#0e7490', SALES_ENGINEER: '#1f5aa8', SALES_ASSISTANT: '#0e7490',
+  PM: '#1f8f3a', FAE: '#15803d', PA: '#4d7c0f',
   PRODUCT_MANAGER: '#1f8f3a', PRODUCT_ASSISTANT: '#4d7c0f',
-  LOGISTICS: '#c2410c', ADMIN: '#4e4e4e',
+  LOGISTICS: '#c2410c', LOGISTICS_LEAD: '#9a3412', ADMIN: '#4e4e4e',
 };
+
+// 顶层分组 key（用于 openKeys 默认展开当前所在域）
+const GROUP_PREFIX = {
+  '/': 'g0', '/notifications': 'g0', '/approvals': 'g0',
+  '/sales': 'g1', '/purchase': 'g2', '/wms': 'g3', '/customs': 'g4',
+  '/finance': 'g5', '/reports': 'g6', '/master': 'g7', '/config': 'g8',
+  '/org': 'g9', '/data': 'g9', '/flow-editor': 'g9',
+};
+
+function activeGroup(pathname) {
+  if (pathname === '/') return 'g0';
+  const seg = '/' + pathname.split('/')[1];
+  return GROUP_PREFIX[seg] || GROUP_PREFIX[pathname] || 'g0';
+}
 
 export default function Layout() {
   const [collapsed, setCollapsed] = useState(false);
@@ -53,6 +207,14 @@ export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  const [openKeys, setOpenKeys] = useState([activeGroup(location.pathname)]);
+
+  useEffect(() => {
+    setOpenKeys((prev) => {
+      const g = activeGroup(location.pathname);
+      return prev.includes(g) ? prev : [...prev, g];
+    });
+  }, [location.pathname]);
 
   useEffect(() => {
     let alive = true;
@@ -83,7 +245,7 @@ export default function Layout() {
     onClick: ({ key }) => { if (key === 'logout') { logout(); navigate('/login'); } },
   };
 
-  const siderWidth = collapsed ? 80 : 220;
+  const siderWidth = collapsed ? 80 : 240;
 
   return (
     <AntLayout style={{ minHeight: '100vh', background: '#ffffff' }}>
@@ -92,7 +254,7 @@ export default function Layout() {
         trigger={null}
         collapsible
         theme="light"
-        width={220}
+        width={240}
         style={{
           background: '#ffffff',
           position: 'fixed',
@@ -125,10 +287,10 @@ export default function Layout() {
           theme="light"
           mode="inline"
           selectedKeys={[location.pathname]}
-          items={buildMenuItems(todoCount)
-            .filter(i => !i.adminOnly || user?.is_admin)
-            .map(i => ({ key: i.key, icon: i.icon, label: i.label }))}
-          onClick={({ key }) => navigate(key)}
+          openKeys={collapsed ? undefined : openKeys}
+          onOpenChange={setOpenKeys}
+          items={buildMenuItems(todoCount, user?.is_admin)}
+          onClick={({ key }) => { if (key.startsWith('/')) navigate(key); }}
           style={{
             background: 'transparent',
             border: 'none',
@@ -167,25 +329,28 @@ export default function Layout() {
           >
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           </div>
-          <Dropdown menu={userMenu} placement="bottomRight">
-            <div style={{
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '6px 12px 6px 6px',
-              borderRadius: 9999,
-              transition: 'background 0.15s',
-            }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#f5f2ef')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-            >
-              <Avatar size={28} style={{ background: '#000000' }} icon={<UserOutlined />} />
-              <span style={{ fontWeight: 500, fontSize: 14 }}>
-                {user?.full_name || user?.username}
-              </span>
-            </div>
-          </Dropdown>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <CompanySwitcher />
+            <Dropdown menu={userMenu} placement="bottomRight">
+              <div style={{
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '6px 12px 6px 6px',
+                borderRadius: 9999,
+                transition: 'background 0.15s',
+              }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#f5f2ef')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                <Avatar size={28} style={{ background: '#000000' }} icon={<UserOutlined />} />
+                <span style={{ fontWeight: 500, fontSize: 14 }}>
+                  {user?.full_name || user?.username}
+                </span>
+              </div>
+            </Dropdown>
+          </div>
         </Header>
         <Content style={{ margin: 24, background: 'transparent' }}>
           <Outlet />

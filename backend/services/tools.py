@@ -20,19 +20,40 @@ from core.registry import table_map
 # 权限辅助
 # ============================================================
 
+# 行级只读 privileged 集（决策A，EXT-01-J）：跨公司只读汇总。
+# 注意：这与「表级全权」FULL_ACCESS_ROLES 是两个不同集合（D-05g），勿假设一致。
+# 普通 FINANCE 已移出 → 严格本公司账套；新增 FINANCE_DIRECTOR 财务总监。
+ROW_PRIVILEGED_ROLES = {"BOSS", "FINANCE_DIRECTOR"}
+
+
 def _company_filter(user: m.UserAccount):
-    """返回用户可访问的company_id列表"""
-    if user.role in ("BOSS", "FINANCE"):
-        return None  # 不过滤，看全部
-    return [user.company_id]  # 普通用户只看自己公司
+    """返回用户可访问的 company_id 列表（None=不过滤，看全部只读）。
+
+    决策B：普通用户限「已开通公司集 ∩ active_company_id」（由 get_current_user 解析后挂在
+    user._active_company_id / user._authorized_company_ids 上）。无上下文时回落主属公司。
+    """
+    if user.role in ROW_PRIVILEGED_ROLES:
+        return None  # 行级只读 privileged：看全部
+    active = getattr(user, "_active_company_id", None)
+    if active is None:
+        return [user.company_id]
+    allowed = getattr(user, "_authorized_company_ids", None) or [user.company_id]
+    return [active] if active in allowed else [user.company_id]
 
 
 def _can_view_buy_price(user: m.UserAccount) -> bool:
-    return user.role in ("BOSS", "OPERATIONS", "FINANCE", "PRODUCT_ASSISTANT", "PRODUCT_MANAGER")
+    # Q18：采购侧进价/成本对销售端（SALES/SA）隐藏 → 集合不含 SALES_*。
+    return user.role in (
+        "BOSS", "FINANCE_DIRECTOR", "OPERATIONS", "FINANCE",
+        "PRODUCT_ASSISTANT", "PRODUCT_MANAGER",
+    )
 
 
 def _can_view_sell_price(user: m.UserAccount) -> bool:
-    return user.role in ("BOSS", "OPERATIONS", "FINANCE", "SALES_ENGINEER", "SALES_ASSISTANT")
+    return user.role in (
+        "BOSS", "FINANCE_DIRECTOR", "OPERATIONS", "FINANCE",
+        "SALES_ENGINEER", "SALES_ASSISTANT", "SALES",
+    )
 
 
 # 表名→模型 映射:统一在 core.registry.table_map() 中从 __queryable__/__doc_types__ 自动生成。
@@ -66,7 +87,9 @@ USER_ACCOUNT_ADMIN_ONLY = {"is_admin"}
 # 没列在 ROLE_ALLOWED_TABLES 里的角色 → 用 _DEFAULT_ALLOWED_TABLES(最小可用集)。
 # FULL_ACCESS_ROLES 不做表级限制(仍受公司过滤和字段防火墙约束)。
 
-FULL_ACCESS_ROLES = {"BOSS", "FINANCE", "OPERATIONS", "ADMIN"}
+# 表级全权（仅影响只读 query_data/aggregate 的可见表集；写仍走命令、各自 role 校验）。
+# FINANCE_DIRECTOR 入此集 = 跨公司只读复核需要看全部表（与 BOSS 同为只读 privileged）。
+FULL_ACCESS_ROLES = {"BOSS", "FINANCE_DIRECTOR", "FINANCE", "OPERATIONS", "ADMIN"}
 
 _COMMON_TABLES = {
     # 所有受限角色都能看的:自己经手单据的历史、同事信息、公司信息、物料/库存基础
@@ -75,6 +98,14 @@ _COMMON_TABLES = {
 }
 
 ROLE_ALLOWED_TABLES = {
+    "SALES": _COMMON_TABLES | {
+        "customer", "framework_contract",
+        "sales_inquiry", "sales_inquiry_line",
+        "quotation", "quotation_line",
+        "sales_order", "sales_order_line",
+        "project", "project_material", "project_activity",
+        "inventory", "inventory_reservation",
+    },
     "SALES_ASSISTANT": _COMMON_TABLES | {
         "customer", "framework_contract",
         "sales_inquiry", "sales_inquiry_line",
