@@ -54,6 +54,10 @@ _EFFECTS: list[_EffectRegistration] = []
 _EXTENSION_MODULES = (
     "services.phase1_effects",
     "services.wms_workflow_extensions",
+    # 段0b：会签集齐校验器 / 金蝶 outbox 适配器 / 通知派发 effect
+    "services.cosign",
+    "services.kingdee_outbox",
+    "services.notifications",
 )
 _loaded = False
 

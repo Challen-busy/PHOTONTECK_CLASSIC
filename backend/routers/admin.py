@@ -21,6 +21,47 @@ def require_admin(user: m.UserAccount = Depends(get_current_user)):
     return user
 
 
+# ============================================================
+# 配置变更审计（EXT-01-E：独立审计表 ConfigAudit，不动 WorkflowDefAuditLog）
+# 用户 / 角色 / 授权 / 防火墙配置 CRUD 在各 handler 调本助手写一行前后快照。
+# ============================================================
+
+def _config_audit(
+    db,
+    request: Request,
+    actor: m.UserAccount,
+    *,
+    object_type: str,
+    change_type: str,
+    object_id=None,
+    summary: str = "",
+    before=None,
+    after=None,
+    company_id: int | None = None,
+    comment: str = "",
+) -> None:
+    db.add(m.ConfigAudit(
+        object_type=object_type,
+        object_id=str(object_id) if object_id is not None else None,
+        change_type=change_type,
+        summary=summary,
+        before_snapshot=before,
+        after_snapshot=after,
+        company_id=company_id,
+        changed_by_id=actor.id,
+        ip_address=request.client.host if request.client else None,
+        comment=comment,
+    ))
+
+
+def _user_snapshot(u: m.UserAccount) -> dict:
+    return {
+        "id": u.id, "username": u.username, "full_name": u.full_name,
+        "role": u.role, "company_id": u.company_id,
+        "is_admin": u.is_admin, "is_active": u.is_active,
+    }
+
+
 def require_admin_or_boss(user: m.UserAccount = Depends(get_current_user)):
     """强制下线/封号闸：ADMIN（is_admin）或 BOSS 角色。"""
     if not (user.is_admin or user.role == "BOSS"):
@@ -87,17 +128,43 @@ class CreateUserRequest(BaseModel):
 
 
 @router.post("/api/admin/users")
-async def admin_create_user(req: CreateUserRequest, db: AsyncSession = Depends(get_db), admin: m.UserAccount = Depends(require_admin)):
+async def admin_create_user(req: CreateUserRequest, request: Request, db: AsyncSession = Depends(get_db), admin: m.UserAccount = Depends(require_admin)):
     u = m.UserAccount(username=req.username, password_hash=hash_password(req.password),
                       full_name=req.full_name, role=req.role, company_id=req.company_id, is_admin=req.is_admin)
     db.add(u)
+    await db.flush()
+    _config_audit(db, request, admin, object_type="USER", change_type="create",
+                  object_id=u.id, summary=f"新建用户 {u.username} ({u.role})",
+                  after=_user_snapshot(u), company_id=u.company_id)
     await db.commit()
     return {"id": u.id, "username": u.username}
+
+
+class UpdateUserRoleRequest(BaseModel):
+    role: str
+
+
+@router.patch("/api/admin/users/{user_id}/role")
+async def admin_update_user_role(user_id: int, req: UpdateUserRoleRequest, request: Request,
+                                 db: AsyncSession = Depends(get_db), admin: m.UserAccount = Depends(require_admin)):
+    """改用户角色（= 授权配置）。写 ConfigAudit 前后快照。"""
+    u = (await db.execute(select(m.UserAccount).where(m.UserAccount.id == user_id))).scalar_one_or_none()
+    if not u:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    before = _user_snapshot(u)
+    old_role = u.role
+    u.role = req.role
+    _config_audit(db, request, admin, object_type="ROLE", change_type="update",
+                  object_id=u.id, summary=f"用户 {u.username} 角色 {old_role} → {req.role}",
+                  before=before, after=_user_snapshot(u), company_id=u.company_id)
+    await db.commit()
+    return {"ok": True, "user_id": u.id, "role": u.role}
 
 
 @router.post("/api/admin/users/{user_id}/revoke-sessions")
 async def admin_revoke_sessions(
     user_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: m.UserAccount = Depends(require_admin_or_boss),
 ):
@@ -109,6 +176,9 @@ async def admin_revoke_sessions(
     if not target:
         raise HTTPException(status_code=404, detail="用户不存在")
     target.session_version = (target.session_version or 0) + 1
+    _config_audit(db, request, actor, object_type="USER", change_type="revoke",
+                  object_id=target.id, summary=f"强制下线 {target.username}",
+                  company_id=target.company_id)
     await db.commit()
     return {"ok": True, "user_id": target.id, "session_version": target.session_version}
 
@@ -116,6 +186,7 @@ async def admin_revoke_sessions(
 @router.post("/api/admin/users/{user_id}/disable")
 async def admin_disable_user(
     user_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor: m.UserAccount = Depends(require_admin_or_boss),
 ):
@@ -124,10 +195,101 @@ async def admin_disable_user(
     target = result.scalar_one_or_none()
     if not target:
         raise HTTPException(status_code=404, detail="用户不存在")
+    before = _user_snapshot(target)
     target.is_active = False
     target.session_version = (target.session_version or 0) + 1
+    _config_audit(db, request, actor, object_type="USER", change_type="disable",
+                  object_id=target.id, summary=f"封号 {target.username}",
+                  before=before, after=_user_snapshot(target), company_id=target.company_id)
     await db.commit()
     return {"ok": True, "user_id": target.id, "is_active": target.is_active}
+
+
+# ============================================================
+# 用户×公司授权（user_company_access）—— 授权配置 CRUD，写 ConfigAudit
+# ============================================================
+
+class GrantAccessRequest(BaseModel):
+    user_id: int
+    company_id: int
+    is_primary: bool = False
+    valid_until: str | None = None  # ISO date 或空（永久）
+
+
+@router.post("/api/admin/access/grant")
+async def admin_grant_access(req: GrantAccessRequest, request: Request,
+                             db: AsyncSession = Depends(get_db), admin: m.UserAccount = Depends(require_admin)):
+    """开通用户对某公司的访问（授权）。已存在则更新；写 ConfigAudit。"""
+    from datetime import date as _date
+    valid_until = None
+    if req.valid_until:
+        try:
+            valid_until = _date.fromisoformat(req.valid_until[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="valid_until 日期格式不正确")
+    access = (await db.execute(select(m.UserCompanyAccess).where(
+        m.UserCompanyAccess.user_id == req.user_id,
+        m.UserCompanyAccess.company_id == req.company_id,
+    ))).scalar_one_or_none()
+    before = None
+    if access:
+        before = {"is_primary": access.is_primary, "valid_until": access.valid_until.isoformat() if access.valid_until else None}
+        access.is_primary = req.is_primary
+        access.valid_until = valid_until
+        change_type = "update"
+    else:
+        access = m.UserCompanyAccess(user_id=req.user_id, company_id=req.company_id,
+                                     is_primary=req.is_primary, valid_until=valid_until)
+        db.add(access)
+        change_type = "grant"
+    after = {"is_primary": req.is_primary, "valid_until": valid_until.isoformat() if valid_until else None}
+    _config_audit(db, request, admin, object_type="USER_COMPANY_ACCESS", change_type=change_type,
+                  object_id=f"{req.user_id}:{req.company_id}",
+                  summary=f"授权用户#{req.user_id} → 公司#{req.company_id}",
+                  before=before, after=after, company_id=req.company_id)
+    await db.commit()
+    return {"ok": True, "user_id": req.user_id, "company_id": req.company_id}
+
+
+@router.delete("/api/admin/access/{user_id}/{company_id}")
+async def admin_revoke_access(user_id: int, company_id: int, request: Request,
+                              db: AsyncSession = Depends(get_db), admin: m.UserAccount = Depends(require_admin)):
+    """收回用户对某公司的访问授权。写 ConfigAudit。"""
+    access = (await db.execute(select(m.UserCompanyAccess).where(
+        m.UserCompanyAccess.user_id == user_id,
+        m.UserCompanyAccess.company_id == company_id,
+    ))).scalar_one_or_none()
+    if not access:
+        raise HTTPException(status_code=404, detail="授权不存在")
+    before = {"is_primary": access.is_primary, "valid_until": access.valid_until.isoformat() if access.valid_until else None}
+    await db.delete(access)
+    _config_audit(db, request, admin, object_type="USER_COMPANY_ACCESS", change_type="revoke",
+                  object_id=f"{user_id}:{company_id}",
+                  summary=f"收回用户#{user_id} → 公司#{company_id} 授权",
+                  before=before, company_id=company_id)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/api/admin/config-audit")
+async def admin_config_audit(db: AsyncSession = Depends(get_db), admin: m.UserAccount = Depends(require_admin)):
+    """配置变更审计台账（EXT-01-E）：用户/角色/授权变更史，前后快照。"""
+    r = await db.execute(select(m.ConfigAudit).order_by(m.ConfigAudit.timestamp.desc()).limit(500))
+    logs = r.scalars().all()
+    user_ids = list({l.changed_by_id for l in logs})
+    users_r = await db.execute(select(m.UserAccount).where(m.UserAccount.id.in_(user_ids))) if user_ids else None
+    users = {u.id: u.full_name for u in users_r.scalars().all()} if users_r else {}
+    return [
+        {
+            "id": l.id, "object_type": l.object_type, "object_id": l.object_id,
+            "change_type": l.change_type, "summary": l.summary,
+            "before_snapshot": l.before_snapshot, "after_snapshot": l.after_snapshot,
+            "company_id": l.company_id, "by": users.get(l.changed_by_id, f"#{l.changed_by_id}"),
+            "ip": l.ip_address, "comment": l.comment,
+            "timestamp": l.timestamp.isoformat() if l.timestamp else None,
+        }
+        for l in logs
+    ]
 
 
 # ============================================================

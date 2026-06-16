@@ -13,6 +13,10 @@ import MyTodos from './pages/MyTodos';            // 审批中心收件箱（引
 // 业务模块占位（壳就绪，待 P 段建造）
 import ModulePlaceholder from './pages/ModulePlaceholder';
 
+// 7 主数据（schema 驱动台账 + 详情抽屉；字典型为派生快照）
+import MasterDataPage from './pages/master/MasterDataPage';
+import ReferenceValuePage from './pages/master/ReferenceValuePage';
+
 // 引擎壳页（保留给 admin）
 import DataExplorer from './pages/DataExplorer';
 import WorkflowActions from './pages/WorkflowActions';
@@ -103,15 +107,59 @@ function AppRoutes() {
         <Route path="reports/commission" element={PH('提成', '报表 / 看板')} />
         <Route path="reports/cross-company" element={PH('管理层跨公司只读汇总', '报表 / 看板')} />
 
-        {/* 7 主数据 */}
-        <Route path="master/customers" element={PH('客户', '主数据')} />
-        <Route path="master/suppliers" element={PH('供应商 / 原厂', '主数据')} />
-        <Route path="master/products" element={PH('产品 / 型号', '主数据')} />
-        <Route path="master/product-codes" element={PH('产品代码（一型号多 code）', '主数据')} />
-        <Route path="master/product-lines" element={PH('产线（1线=1供应商）', '主数据')} />
-        <Route path="master/locations" element={PH('库位', '主数据')} />
-        <Route path="master/hscode" element={PH('HS 编码', '主数据')} />
-        <Route path="master/uom" element={PH('计量单位', '主数据')} />
+        {/* 7 主数据（schema 驱动台账 + 详情抽屉，严守 14 律：台账→抽屉不跳页） */}
+        <Route path="master/customers" element={
+          <MasterDataPage
+            table="customer" title="客户" docType="CUSTOMER"
+            primaryCols={['code', 'short_name', 'name']}
+            todoNote="customer 表已就绪、可查可看详情；建档/改档需后端 ➕ 主数据建档状态机（EXT-02-W）后开写。"
+          />
+        } />
+        <Route path="master/suppliers" element={
+          <MasterDataPage
+            table="supplier" title="供应商 / 原厂" docType="SUPPLIER"
+            primaryCols={['code', 'short_name', 'name']}
+            todoNote="supplier 表已就绪、可查可看详情；建档/改档需后端 ➕ 主数据建档状态机（EXT-02-W）后开写。"
+          />
+        } />
+        <Route path="master/products" element={
+          <MasterDataPage
+            table="material" title="产品 / 型号"
+            primaryCols={['sku', 'name']}
+            todoNote="material（型号）表已就绪、可查可看详情；型号本是 __queryable__ 主数据、当前无状态机，建档/改档写路径待后端开通（EXT-02-W）。PRD 02 的 SN/LOT 管控 / HS 双码 / ECCN / MOQ 等扩展字段也待后端加列。"
+          />
+        } />
+        <Route path="master/product-codes" element={
+          <ReferenceValuePage
+            title="产品代码" sourceTable="material" sourceField="sku"
+            todoNote="PRD 02 规划「一型号多 code（按供应商）」的独立 product_code 表，引擎目前未建——当前 material.sku 即型号代码。本页聚合在用 SKU 作快照；真正可维护的产品代码字典需后端 ➕ product_code 表（EXT-02-DICT）。"
+          />
+        } />
+        <Route path="master/product-lines" element={
+          <ReferenceValuePage
+            title="产线" sourceTable="material" sourceField="product_line"
+            todoNote="PRD 02 规划「1 线=1 供应商」的独立 product_line 表，引擎目前未建——产线现为 material.product_line 列。本页聚合在用产线取值作快照；可维护产线字典（绑定 PM/工程师/供应商）需后端 ➕ product_line 表（EXT-02-DICT）。"
+          />
+        } />
+        <Route path="master/locations" element={
+          <MasterDataPage
+            table="warehouse_location" title="库位"
+            primaryCols={['code', 'zone', 'shelf', 'position']}
+            todoNote="warehouse_location 表已就绪、可查可看详情；库位本是 __queryable__ 主数据、当前无状态机，建档/改档写路径待后端开通（EXT-02-W）。"
+          />
+        } />
+        <Route path="master/hscode" element={
+          <ReferenceValuePage
+            title="HS 编码" sourceTable="inventory" sourceField="hs_code"
+            todoNote="PRD 02 规划「原产 & 中国双码字典」的独立 hs_code 表，引擎目前未建——HS 现为单据/库存行上的 hs_code 列。本页聚合库存在用 HS 码作快照；双码字典需后端 ➕ hs_code 表（EXT-02-DICT）。"
+          />
+        } />
+        <Route path="master/uom" element={
+          <ReferenceValuePage
+            title="计量单位" sourceTable="material" sourceField="unit"
+            todoNote="PRD 02 规划「包/盘/PCS 字典」的独立 unit_of_measure 表，引擎目前未建——单位现为 material.unit 列。本页聚合在用单位取值作快照；可维护单位字典需后端 ➕ unit_of_measure 表（EXT-02-DICT）。"
+          />
+        } />
 
         {/* 8 配置 / 模板 */}
         <Route path="config/label-templates" element={PH('标签模板', '配置 / 模板')} />

@@ -83,6 +83,11 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "backend/services/wms.py",
             "backend/services/wms_commands.py",
             "backend/services/workflow.py",
+            # 段0b 后端基础设施：均经 Command/effect 唯一写入路径（同 finance_commands/phase1_effects 模式）
+            "backend/services/numbering.py",
+            "backend/services/cosign.py",
+            "backend/services/kingdee_outbox.py",
+            "backend/services/notifications.py",
         }
         patterns = [
             re.compile(r"\bdb\.add\("),

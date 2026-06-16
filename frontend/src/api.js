@@ -17,7 +17,10 @@ export default api;
 // 通用查询
 export const query = (table, opts = {}) => api.post('/query', { table, ...opts });
 export const aggregate = (table, field, func, opts = {}) => api.post('/aggregate', { table, field, function: func, ...opts });
+export const getSchema = (table) => api.get(`/schema/${table}`);
 export const transition = (data) => api.post('/transition', data);
+// 公司切换（后端已实现，决策B：仅在已开通公司间切换，重写会话 active_company_id）
+export const switchCompany = (companyId) => api.post('/me/switch-company', { company_id: companyId });
 export const getTransitions = () => api.get('/transitions');
 export const getHistory = (docType, docId) => api.get(`/history/${docType}/${docId}`);
 export const agentChat = (q) => api.post('/agent/chat', { query: q });

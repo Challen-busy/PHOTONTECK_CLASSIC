@@ -55,6 +55,25 @@ async def seed():
 
         ptk = companies["PTK"]  # 默认演示主体（香港）
 
+        # === 编号规则（段0b·1，总览 §7）：每公司×单据类型一条，月度重置连号 ===
+        # 取号走 allocate_document_number 命令（行锁原子自增 + 跨期重置）。
+        # 前缀/周期对齐编号规则总表：入库 PR{YYMM}-、出库 PD{YYMM}-、发票 I{YYMM}-、采购 PO{YYMM}-。
+        numbering_seed = [
+            ("PURCHASE_ORDER", "PO", "MONTH"),
+            ("GOODS_RECEIPT",  "PR", "MONTH"),
+            ("SHIPMENT",       "PD", "MONTH"),
+            ("SALES_INVOICE",  "I",  "MONTH"),
+            ("SALES_RETURN",   "RMA", "MONTH"),
+        ]
+        for comp in companies.values():
+            for doc_type, prefix, reset in numbering_seed:
+                db.add(m.NumberingRule(
+                    company_id=comp.id, doc_type=doc_type, prefix=prefix,
+                    reset_period=reset, seq_padding=3, separator="-", period_format="%y%m",
+                    current_period="", current_seq=0, is_active=True,
+                ))
+        await db.flush()
+
         # === 用户：admin + 各角色 demo（决策A 含 FINANCE_DIRECTOR）===
         # 密码：admin/admin1234，其余 demo 用户 /demo1234。
         pwd = hash_password("demo1234")
@@ -106,38 +125,119 @@ async def seed():
             cats[code] = c
         await db.flush()
 
-        suppliers = {}
-        for code, name, country in [
-            ("TOPTICA", "TOPTICA Photonics", "德国"),
-            ("THORLABS", "Thorlabs", "美国"),
-            ("CONNET", "康耐特光电(国产)", "中国"),
+        # === 计量单位字典（段0b 主数据·PRD 02 页面8）：全局共享，包/盘/PCS/K ===
+        uoms = {}
+        for code, name, is_pkg, per in [
+            ("PCS", "件", False, None),
+            ("包", "包", True, None),       # 每包实际数量可变，存批次行
+            ("盘", "盘(Reel)", True, None),
+            ("K", "千", False, 1000),       # 询价阶梯量倍率（200K=200000）
         ]:
-            s = m.Supplier(code=code, name=name, country=country, company_id=ptk.id, created_by_id=users["admin"].id)
+            u = m.UnitOfMeasure(uom_code=code, uom_name=name, is_package_unit=is_pkg, pcs_per_unit=per)
+            db.add(u)
+            uoms[code] = u
+        await db.flush()
+
+        # === HS 编码字典（段0b 主数据·PRD 02 页面7）：全局共享，原产/中国双码 ===
+        # 来源 HS CODE & DESCRIPTION.xlsx 样本（如 85414100 二极管 / 85369090 連接器）。
+        hs_codes = {}
+        for key, number, region, cn, en in [
+            ("DIODE_O", "85414100", "ORIGIN", "光敏半导体器件/二极管", "Photosensitive semiconductor / diode"),
+            ("DIODE_C", "85414020", "CN",     "光电二极管", "Photodiode"),
+            ("CONN_O",  "85369090", "ORIGIN", "連接器", "Connector"),
+            ("IC_O",    "85423900", "ORIGIN", "集成电路", "Integrated Circuit"),
+        ]:
+            h = m.HsCode(hs_number=number, region=region, description_cn=cn, description_en=en)
+            db.add(h)
+            hs_codes[key] = h
+        await db.flush()
+
+        # === 供应商（段0b 主数据·PRD 02 页面2）：含类型/负责 PA/区域（一供应商绑一 PA）===
+        suppliers = {}
+        for code, name, country, stype, region, pa in [
+            ("TOPTICA", "TOPTICA Photonics", "德国", "OEM",   "OVERSEAS", "pa"),
+            ("THORLABS", "Thorlabs", "美国", "OEM",   "OVERSEAS", "pa"),
+            ("CONNET", "康耐特光电(国产)", "中国", "AGENT", "CN",       "pa"),
+        ]:
+            s = m.Supplier(code=code, name=name, country=country, company_id=ptk.id,
+                           supplier_type=stype, region=region, responsible_pa_id=users[pa].id,
+                           payment_term="30天电汇", created_by_id=users["admin"].id)
             db.add(s)
             suppliers[code] = s
         await db.flush()
 
-        materials = {}
-        for sku, name, sup, cat, domestic in [
-            ("TOP-DLC-PRO", "TOPTICA DL pro 可调谐二极管激光器", "TOPTICA", "LASER", False),
-            ("TL-PM100D", "Thorlabs PM100D 光功率计", "THORLABS", "ELECTRONICS", False),
-            ("CON-SOA1550", "康耐特 SOA 1550nm光放大器", "CONNET", "OPTCOMM", True),
+        # === 产线（段0b 主数据·PRD 02 页面5）：1 线=1 供应商（DB 唯一约束兜底）===
+        product_lines = {}
+        for code, line_name, sup in [
+            ("PL-TOPTICA", "TOPTICA 激光产线", "TOPTICA"),
+            ("PL-THORLABS", "Thorlabs 光学产线", "THORLABS"),
+            ("PL-CONNET", "康耐特光通信产线", "CONNET"),
         ]:
-            mat = m.Material(sku=sku, name=name, supplier_id=suppliers[sup].id,
-                             category_id=cats[cat].id, is_domestic=domestic, technical_specs={})
+            pl = m.ProductLine(code=code, line_name=line_name, supplier_id=suppliers[sup].id,
+                               company_id=ptk.id, pm_id=users["pm"].id, fae_id=users["se"].id,
+                               pa_id=users["pa"].id, created_by_id=users["admin"].id)
+            db.add(pl)
+            product_lines[code] = pl
+        await db.flush()
+
+        # === 产品/型号（段0b 主数据·PRD 02 页面3 ⭐）：含 control_mode/UOM/HS 双码/MOQ 等 ===
+        materials = {}
+        for sku, name, sup, cat, domestic, cmode, uom, pline, hs_o, hs_c, moq, warranty in [
+            ("TOP-DLC-PRO", "TOPTICA DL pro 可调谐二极管激光器", "TOPTICA", "LASER", False,
+             "SN", "PCS", "PL-TOPTICA", "DIODE_O", "DIODE_C", 1, 12),
+            ("TL-PM100D", "Thorlabs PM100D 光功率计", "THORLABS", "ELECTRONICS", False,
+             "SN", "PCS", "PL-THORLABS", "CONN_O", None, 1, 24),
+            ("CON-SOA1550", "康耐特 SOA 1550nm光放大器", "CONNET", "OPTCOMM", True,
+             "LOT", "盘", "PL-CONNET", "IC_O", None, 100, 12),
+        ]:
+            mat = m.Material(
+                sku=sku, name=name, pn=sku, supplier_id=suppliers[sup].id,
+                category_id=cats[cat].id, is_domestic=domestic, technical_specs={},
+                control_mode=cmode, uom_id=uoms[uom].id, product_line_id=product_lines[pline].id,
+                hs_code_origin_id=hs_codes[hs_o].id if hs_o else None,
+                hs_code_cn_id=hs_codes[hs_c].id if hs_c else None,
+                moq=moq, warranty_months=warranty, country_of_origin="",
+            )
             db.add(mat)
             materials[sku] = mat
         await db.flush()
 
+        # === 产品代码（段0b 主数据·PRD 02 页面4 ⭐）：型号×供应商→内部 code（复合唯一）===
+        for icode, sku, sup, vendor_pn in [
+            ("PTK-30084841", "TOP-DLC-PRO", "TOPTICA", "DLC-PRO-780"),
+            ("PTK-30084842", "TL-PM100D",   "THORLABS", "PM100D"),
+            ("PTK-30084843", "CON-SOA1550", "CONNET",  "SOA-1550-CN"),
+        ]:
+            db.add(m.ProductCode(
+                internal_code=icode, product_id=materials[sku].id, supplier_id=suppliers[sup].id,
+                vendor_pn=vendor_pn, company_id=ptk.id, created_by_id=users["admin"].id,
+            ))
+        await db.flush()
+
+        # === 客户（段0b 主数据·PRD 02 页面1）：含区域/等级/负责销售 + 联系人子表 ===
         customers = {}
-        for code, name, currency, terms, shipping in [
-            ("INTEL", "Intel Corporation", "USD", 60, "FOB"),
-            ("USTC", "中国科学技术大学", "CNY", 30, "DAP"),
+        for code, name, currency, terms, shipping, region, grade, owner in [
+            ("INTEL", "Intel Corporation", "USD", 60, "FOB", "HK", "LARGE", "sales"),
+            ("USTC", "中国科学技术大学", "CNY", 30, "DAP", "CN", "SMALL", "sales"),
         ]:
             c = m.Customer(code=code, name=name, default_currency=currency, payment_terms_days=terms,
-                           default_shipping_method=shipping, company_id=ptk.id, created_by_id=users["admin"].id)
+                           default_shipping_method=shipping, region=region, grade=grade,
+                           owner_sales_id=users[owner].id, default_payment_term=f"{terms}天",
+                           company_id=ptk.id, created_by_id=users["admin"].id)
             db.add(c)
             customers[code] = c
+        await db.flush()
+
+        # 客户联系人子表（网格录入，关系等级 A/B/C/D）
+        for ccode, ln, dept, name, email, level in [
+            ("INTEL", 1, "Procurement", "John Smith", "john.smith@intel.com", "B"),
+            ("INTEL", 2, "Engineering", "Alice Wang", "alice.wang@intel.com", "C"),
+            ("USTC", 1, "采购处", "李教授", "li@ustc.edu.cn", "A"),
+        ]:
+            db.add(m.CustomerContactLine(
+                customer_id=customers[ccode].id, line_number=ln, department=dept,
+                name=name, email=email, relation_level=level,
+            ))
         await db.flush()
 
         # 每家公司一个主仓骨架
@@ -1049,8 +1149,11 @@ async def seed():
         # 统计
         tables = [
             ("公司", m.Company), ("用户", m.UserAccount), ("用户×公司授权", m.UserCompanyAccess),
-            ("供应商", m.Supplier), ("物料", m.Material), ("客户", m.Customer), ("仓库", m.Warehouse),
+            ("供应商", m.Supplier), ("物料/型号", m.Material), ("客户", m.Customer), ("仓库", m.Warehouse),
             ("流程定义", m.WorkflowDefinition), ("知识库条目", m.KnowledgeEntry),
+            ("编号规则", m.NumberingRule),
+            ("计量单位", m.UnitOfMeasure), ("HS编码", m.HsCode), ("产线", m.ProductLine),
+            ("产品代码", m.ProductCode), ("客户联系人", m.CustomerContactLine),
         ]
         print("种子数据生成完成:")
         for label, model in tables:

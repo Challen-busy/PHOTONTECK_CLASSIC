@@ -3,7 +3,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout as AntLayout, Menu, Avatar, Dropdown, Tag, Badge } from 'antd';
 import {
   LogoutOutlined, UserOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, SettingOutlined, ApartmentOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined, ApartmentOutlined,
   CheckSquareOutlined, TeamOutlined, ShoppingOutlined, InboxOutlined,
   FileProtectOutlined, AccountBookOutlined, BarChartOutlined,
   DatabaseOutlined, ProfileOutlined, BankOutlined, TableOutlined,

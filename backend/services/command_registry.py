@@ -65,6 +65,11 @@ def load_commands() -> None:
     import services.finance_commands  # noqa: F401
     import services.wms_commands  # noqa: F401
     import services.workflow_commands  # noqa: F401
+    # 段0b 后端基础设施命令
+    import services.numbering  # noqa: F401
+    import services.cosign  # noqa: F401
+    import services.kingdee_outbox  # noqa: F401
+    import services.notifications  # noqa: F401
 
     _loaded = True
 

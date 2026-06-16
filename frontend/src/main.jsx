@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, App as AntdApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import App from './App.jsx';
 import './index.css';
@@ -209,7 +209,11 @@ createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
       <ConfigProvider locale={zhCN} theme={theme}>
-        <App />
+        {/* antd v6 App 容器：提供 message/notification/Modal 的 context，
+            使 App.useApp() 可用、消除"静态方法无法消费 ConfigProvider context"告警 */}
+        <AntdApp>
+          <App />
+        </AntdApp>
       </ConfigProvider>
     </BrowserRouter>
   </React.StrictMode>

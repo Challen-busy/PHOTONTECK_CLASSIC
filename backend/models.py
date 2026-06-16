@@ -127,6 +127,17 @@ class Customer(AuditMixin, Base):
     default_shipping_method = Column(String(5), default="FOB")
     is_active = Column(Boolean, default=True)
     status = Column(String(30), default="ACTIVE")
+    # --- 段0b 主数据扩充（PRD 02 页面1）---
+    # name=全称 full_name，short_name=简称（显示名优先列）。
+    region = Column(String(10), default="")            # HK / CN（内地）（跟随当前公司）
+    business_unit = Column(String(40), default="")     # 事业部（光通信/科研/…）
+    grade = Column(String(20), default="SMALL")        # 大客户 LARGE / 小客户 SMALL
+    default_payment_term = Column(String(60), default="")  # 付款条件（财务/对账引用）
+    credit_limit = Column(Numeric(16, 2), nullable=True)   # 信用额度（仅展示不硬拦，蓝图 §3.6）
+    customer_vendor_code = Column(String(50), default="")  # 在客户系统的我方供应商码（蓝图 §3.1）
+    owner_sales_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 负责销售（行级看本人客户）
+    qualified_code = Column(String(50), default="")    # 客户认证码（VendorQualification 回填，01 模块）
+    label_template_ref = Column(Integer, ForeignKey("label_template.id"), nullable=True)  # ➕指向 08 标签模板
     __table_args__ = (UniqueConstraint("company_id", "code"),)
 
 
@@ -145,6 +156,12 @@ class Supplier(AuditMixin, Base):
     is_active = Column(Boolean, default=True)
     status = Column(String(30), default="ACTIVE")
     notes = Column(Text, default="")
+    # --- 段0b 主数据扩充（PRD 02 页面2）---
+    supplier_type = Column(String(10), default="OEM")   # 原厂 OEM / 代理 AGENT（蓝图 §3.1）
+    payment_term = Column(String(60), default="")       # 付款条件（财务/付款申请引用）
+    responsible_pa_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 负责 PA（一供应商绑一 PA，default_pa）
+    backup_pa_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)       # 备份 PA（GAP-2 *Betty/Chloe）
+    region = Column(String(10), default="")             # HK / CN / OVERSEAS（海外走 ECCN/进出口管控）
     __table_args__ = (UniqueConstraint("company_id", "code"),)
 
 
@@ -172,6 +189,30 @@ class Material(Base):
     technical_specs = Column(JSONB, default={})
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
+    # --- 段0b 主数据扩充（PRD 02 页面3 产品/型号 ⭐）---
+    # Material = 型号（P/N）。sku=型号料号，name=描述。全系统最核心主数据。
+    # 注：Material 现为全局表（无 company_id / 无 AuditMixin）；本段不改其租户语义，
+    #     新增列均 nullable，company_id 隔离留 TODO（GAP：型号是否按公司隔离待甲方确认）。
+    pn = Column(String(100), default="")               # 型号 P/N（材料 進庫詳細資料.型號），与 sku 并存
+    desc_cn = Column(String(300), default="")          # 中文描述
+    desc_en = Column(String(300), default="")          # 英文描述
+    product_name = Column(String(200), default="")     # 品名（报关用）
+    control_mode = Column(String(5), default="LOT")    # ⭐SN / LOT（决定 WMS 行为，蓝图 §5.3，无第三态）
+    uom_id = Column(Integer, ForeignKey("unit_of_measure.id"), nullable=True)  # 计量单位（包/盘/PCS）
+    min_pack_qty = Column(Numeric(12, 2), nullable=True)  # 最小包装数=存储单位
+    pack_qty_variable = Column(Boolean, default=False)    # 每包数量受良率浮动（实际数量存批次）
+    hs_code_origin_id = Column(Integer, ForeignKey("hs_code.id"), nullable=True)  # ⭐原产 HS
+    hs_code_cn_id = Column(Integer, ForeignKey("hs_code.id"), nullable=True)      # ⭐中国 HS（双码）
+    eccn = Column(String(30), default="")              # 出口管制号（海外原厂必问）
+    country_of_origin = Column(String(50), default="")  # 原产地（材料 原產地=JAPAN）
+    moq = Column(Numeric(12, 2), nullable=True)        # 最小起订量
+    mpq = Column(Numeric(12, 2), nullable=True)        # 最小包装量 MPQ/MPP
+    warranty_months = Column(Integer, nullable=True)   # 对原厂质保期（从原厂发货日起算）
+    has_battery = Column(Boolean, default=False)       # 是否含电池（物流合规）
+    date_code_rule = Column(String(100), default="")   # Date Code 规则
+    pcn_flag = Column(Boolean, default=False)          # PCN 标记（可能限定销售对象，蓝图 §5.4）
+    product_line_id = Column(Integer, ForeignKey("product_line.id"), nullable=True)  # 归属产线
+    status = Column(String(15), default="ACTIVE")
 
     supplier = relationship("Supplier")
     category = relationship("MaterialCategory")
@@ -477,10 +518,13 @@ class WarehouseLocation(Base):
     id = Column(Integer, primary_key=True)
     warehouse_id = Column(Integer, ForeignKey("warehouse.id"), nullable=False)
     code = Column(String(30), nullable=False)
-    zone = Column(String(20), default="")
-    shelf = Column(String(20), default="")
-    position = Column(String(20), default="")
+    zone = Column(String(20), default="")      # 货区（一级）
+    shelf = Column(String(20), default="")     # 货架（二级）
+    position = Column(String(20), default="")  # 货层（三级）
     is_active = Column(Boolean, default=True)
+    # --- 段0b 主数据扩充（PRD 02 页面6 库位）---
+    location_type = Column(String(15), default="NORMAL")  # 普通/流转仓/RMA/样品/待处理/NG（驱动 WMS 行为，本页只存）
+    capacity = Column(Numeric(12, 2), nullable=True)      # 容量（蓝图 §3.4）
     __table_args__ = (UniqueConstraint("warehouse_id", "code"),)
 
 
@@ -1400,3 +1444,282 @@ class WorkflowDefAuditLog(Base):
     timestamp = Column(DateTime, server_default=func.now(), index=True)
     ip_address = Column(String(45), nullable=True)
     comment = Column(Text, default="")
+
+
+# ============================================================
+# 段0b · 后端基础设施（编号规则 / 并行会签 / 金蝶 outbox / 通知 / 配置审计）
+#
+# 全部为 ➕extension（引擎当前无此能力）。均为 __queryable__ 台账/子表，
+# 不挂 __doc_types__（无独立审批状态机，避免被 WorkflowDefinition 强配）。
+# 引擎五条不破坏：唯一写入路径仍是 Command→Workflow→Domain，本段只加积木。
+# ============================================================
+
+class NumberingRule(Base):
+    """编号规则引擎（总览 §7）：公司×单据类型×前缀×重置周期×当前序号。
+
+    引擎原生 `*_number` 只给唯一前缀（_auto_fill_required_fields），不支持
+    「月度重置 + 连号」。本表 + `allocate_document_number` 命令补这层业务编号规则。
+    取号走 SELECT FOR UPDATE 行锁，原子自增 current_seq，跨期（月/年）自动重置。
+    """
+    __tablename__ = "numbering_rule"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False, index=True)
+    doc_type = Column(String(40), nullable=False, index=True)  # PO / INBOUND / OUTBOUND / INVOICE / RMA / SAMPLE ...
+    prefix = Column(String(20), nullable=False, default="")    # 抬头编码前缀（如 PO / PR / PD / I），可空
+    reset_period = Column(String(10), nullable=False, default="MONTH")  # MONTH / YEAR / NEVER
+    seq_padding = Column(Integer, nullable=False, default=3)    # 序号补零位数（PR2603-001 → 3）
+    separator = Column(String(5), nullable=False, default="-")  # 前缀/周期/序号之间的分隔符
+    period_format = Column(String(10), nullable=False, default="%y%m")  # 周期段格式（月=%y%m，年=%Y）
+    current_period = Column(String(10), nullable=False, default="")  # 当前周期标识（如 2606），跨期则重置
+    current_seq = Column(Integer, nullable=False, default=0)    # 当前已发到的序号
+    is_active = Column(Boolean, nullable=False, default=True)
+    notes = Column(Text, default="")
+    created_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    updated_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    __table_args__ = (UniqueConstraint("company_id", "doc_type", name="ux_numbering_rule_company_doctype"),)
+
+
+class CosignLine(Base):
+    """并行会签子表（标准件，05 §3）：挂在任意要会签的单据上。
+
+    提交进入会签态时按本关卡 required_roles 预生成 N 行待签；每个签票方往
+    「自己那行」填 decision（同意/驳回）。集齐校验器（cosign_collect_validator）
+    放行条件 = 所有行 decision='AGREE'；任一 'REJECT' → 打回。
+    多关卡复用：用 (doc_type, doc_id) 定位单据，cosign_group 区分同一单上的多个会签关卡。
+    """
+    __tablename__ = "cosign_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False, index=True)
+    doc_type = Column(String(40), nullable=False, index=True)  # 被会签单据的 doc_type（如 CUSTOMER / STOCK_REVIEW）
+    doc_id = Column(BigInteger, nullable=False, index=True)     # 被会签单据 id
+    cosign_group = Column(String(40), nullable=False, default="DEFAULT")  # 同一单多个会签关卡时区分
+    required_role = Column(String(30), nullable=False)         # 应签角色（PA / FINANCE / BOSS ...）
+    decision = Column(String(10), nullable=False, default="PENDING")  # PENDING / AGREE / REJECT
+    signed_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    comment = Column(Text, default="")
+    signed_at = Column(DateTime, nullable=True)
+    created_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    updated_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    __table_args__ = (
+        Index("ix_cosign_line_doc", "doc_type", "doc_id", "cosign_group"),
+        UniqueConstraint("doc_type", "doc_id", "cosign_group", "required_role", name="ux_cosign_line_one_per_role"),
+    )
+
+
+class KingdeeOutbox(Base):
+    """金蝶云星空推送 outbox（07b 页面1）：每张到触发态的业务单写一行。
+
+    业务单号=幂等键，绝不静默丢单、失败可重推。__queryable__（DataExplorer 台账），
+    不挂 __doc_types__（推送任务非审批单，状态由命令驱动而非人工流转）。
+    真实 HTTP（金蝶 OpenAPI Save→Submit→Audit）留 TODO 占位，开关默认 OFF/dry-run。
+    """
+    __tablename__ = "kingdee_outbox"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False, index=True)  # 金蝶组织（行级 _company_filter）
+    doc_type = Column(String(40), nullable=False, index=True)        # 业务单据类型（PO / GOODS_RECEIPT / SHIPMENT ...）
+    biz_no = Column(String(80), nullable=False, index=True)          # 业务单号 = 幂等键（= 命令 idempotency_key）
+    business_doc_type = Column(String(40), default="")               # 源单反链 doc_type
+    business_doc_id = Column(BigInteger, nullable=True)              # 源单反链 id
+    trigger_state = Column(String(30), default="")                   # 触发态（源单 to_state）
+    form_id = Column(String(40), default="")                         # 金蝶 formId（映射表带入，07b 页面2）
+    request_url = Column(String(120), default="")                    # 金蝶请求 URL（/v2/<域>/<formId>/<操作>）
+    kingdee_bill_no = Column(String(80), default="")                 # 金蝶单据号（成功后回填）
+    status = Column(String(20), nullable=False, default="RUNNING", index=True)  # RUNNING / SUCCESS / FAILED
+    payload = Column(JSONB, default=dict)                            # 推送请求体快照
+    receipt = Column(JSONB, default=dict)                            # 金蝶返回原文 / 错误码
+    error_message = Column(Text, default="")
+    command_log_id = Column(Integer, ForeignKey("command_log.id"), nullable=True, index=True)  # 接线 retry
+    retried_from_id = Column(Integer, ForeignKey("kingdee_outbox.id"), nullable=True)  # 重推来源行
+    retry_count = Column(Integer, nullable=False, default=0)
+    created_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    completed_at = Column(DateTime, nullable=True)
+    __table_args__ = (
+        Index("ix_kingdee_outbox_company_status", "company_id", "status"),
+        Index("ix_kingdee_outbox_biz", "doc_type", "biz_no"),
+    )
+
+
+class Notification(Base):
+    """通知子系统（总览 §2「通知中心」）：到期/超额/退运180/签收超期/盘点提醒等。
+
+    态推进 effect 派发 + 定时扫描骨架生成。__queryable__（站内未读台账）。
+    引擎无 cron → scan 留可调度入口（手动触发或外部调度调命令）。邮件适配器占位。
+    """
+    __tablename__ = "notification"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False, index=True)
+    recipient_id = Column(Integer, ForeignKey("user_account.id"), nullable=True, index=True)  # 收件人（空=按角色广播）
+    recipient_role = Column(String(30), default="", index=True)  # 角色广播（recipient_id 为空时用）
+    category = Column(String(40), nullable=False, index=True)  # DUE / OVER_LIMIT / RETURN_180 / SIGN_OVERDUE / COUNT / PUSH_FAILED ...
+    title = Column(String(200), nullable=False, default="")
+    body = Column(Text, default="")
+    severity = Column(String(10), nullable=False, default="INFO")  # INFO / WARN / CRITICAL
+    source_doc_type = Column(String(40), default="", index=True)  # 来源单据反链
+    source_doc_id = Column(BigInteger, nullable=True)
+    dedup_key = Column(String(160), nullable=True, index=True)  # 幂等去重键（定时扫描防重复生成）
+    is_read = Column(Boolean, nullable=False, default=False, index=True)
+    read_at = Column(DateTime, nullable=True)
+    email_status = Column(String(20), nullable=False, default="NONE")  # NONE / QUEUED / SENT / FAILED（邮件适配器占位）
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    __table_args__ = (
+        Index("ix_notification_recipient_unread", "recipient_id", "is_read"),
+        UniqueConstraint("dedup_key", name="ux_notification_dedup"),
+    )
+
+
+class ConfigAudit(Base):
+    """配置变更独立审计表（EXT-01-E 已定技术方案=新建独立审计表）。
+
+    用户/角色/授权/字段防火墙配置 CRUD 写本表（不动 WorkflowDefAuditLog，那张专管流程定义）。
+    含变更类型/对象/前后快照/操作者/IP/时间（技术文档 07 FR-7.5：配置变更须含前后快照）。
+    """
+    __tablename__ = "config_audit"
+    id = Column(Integer, primary_key=True)
+    object_type = Column(String(40), nullable=False, index=True)  # USER / ROLE / USER_COMPANY_ACCESS / FIELD_FIREWALL ...
+    object_id = Column(String(60), nullable=True, index=True)     # 目标对象主键（字符串容纳复合键）
+    change_type = Column(String(30), nullable=False)              # create / update / delete / grant / revoke / disable / enable
+    summary = Column(Text, default="")
+    before_snapshot = Column(JSONB, default=None, nullable=True)
+    after_snapshot = Column(JSONB, default=None, nullable=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=True, index=True)
+    changed_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=False, index=True)
+    ip_address = Column(String(45), nullable=True)
+    comment = Column(Text, default="")
+    timestamp = Column(DateTime, server_default=func.now(), index=True)
+
+
+# ============================================================
+# 段0b · 主数据扩充（PRD 02 主数据）
+#
+# 8 类主数据：客户·联系人·供应商·产品型号·产品代码·产线·库位·HS·计量单位。
+# 沿用引擎现有模型（Customer/Supplier/Material=型号/WarehouseLocation=库位），
+# 缺的实体新建为 __queryable__ 纯字典/子表（标准引擎用法 ✅），不挂 __doc_types__
+# （主数据默认纯字典 + 留痕，不设财务关卡；客户/产品如需建档审核可后续注册轻量态机）。
+# 引擎五条不破坏：本段只 append 模型 + alembic 加列/加表，不动唯一写入路径。
+#
+# 已有列扩展（在上方 Customer / Supplier / Material / WarehouseLocation 类内 append）：
+#   Customer  += region/business_unit/grade/default_payment_term/credit_limit/
+#                customer_vendor_code/owner_sales_id/qualified_code/label_template_ref
+#   Supplier  += supplier_type/payment_term/responsible_pa_id/backup_pa_id/region
+#   Material  += control_mode/uom_id/min_pack_qty/pack_qty_variable/hs_code_origin_id/
+#                hs_code_cn_id/eccn/country_of_origin/moq/mpq/warranty_months/has_battery/
+#                date_code_rule/pcn_flag/product_line_id/status（型号=Material，新增不破旧）
+#   WarehouseLocation += location_type/capacity（zone/shelf/position 已是货区/货架/货层三级）
+# ============================================================
+
+class CustomerContactLine(Base):
+    """客户联系人子表（PRD 02 页面1 子表 customer_contact_line）。
+
+    挂在客户上的多行联系人，DocEditor 里 SubTableEditor 网格录入。__queryable__ 子表。
+    relation_level=A信任/B亲切/C熟悉/D初识（蓝图 §3.1 关系等级）。
+    email 是 RMA/入库邮件搜索的锚点（访谈 08:700）。
+    """
+    __tablename__ = "customer_contact_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    department = Column(String(100), default="")
+    title = Column(String(100), default="")
+    name = Column(String(100), nullable=False)  # 显示名
+    phone = Column(String(30), default="")
+    email = Column(String(120), default="")
+    relation_level = Column(String(2), default="")  # A / B / C / D
+    background = Column(Text, default="")
+    __table_args__ = (UniqueConstraint("customer_id", "line_number"),)
+
+
+class ProductLine(AuditMixin, Base):
+    """产线（PRD 02 页面5 product_line）：1 产线 = 1 供应商。
+
+    绑定负责 PM / FAE / PA，是 KPI「产线×工程师」维度与 PA/PM/FAE「本产线」行作用域的锚点。
+    「1 线=1 供应商」唯一约束（PRD ➕extension）落 DB UniqueConstraint(company_id, supplier_id)，
+    引擎不原生强制业务唯一性 → 用 DB 约束兜底（不破坏引擎，纯主数据无态机）。
+    """
+    __tablename__ = "product_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(30), index=True, default="")
+    line_name = Column(String(100), nullable=False)  # 显示名 name
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=False, index=True)
+    pm_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)   # 负责 PM（KPI 维度）
+    fae_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 负责工程师
+    pa_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)   # 负责 PA（与供应商-PA 映射一致）
+    status = Column(String(15), default="ACTIVE")
+    is_active = Column(Boolean, default=True)
+    notes = Column(Text, default="")
+
+    supplier = relationship("Supplier")
+    __table_args__ = (
+        UniqueConstraint("company_id", "supplier_id", name="ux_product_line_one_per_supplier"),
+        UniqueConstraint("company_id", "line_name", name="ux_product_line_company_name"),
+    )
+
+
+class ProductCode(AuditMixin, Base):
+    """产品代码（PRD 02 页面4 product_code）：型号 × 供应商 → 内部 code（一型号多 code）。
+
+    解决「同一型号不同供应商」的内部区分，是 PO/入库/库存批次实际引用的最细粒度料号。
+    复合唯一 (product_id, supplier_id) 走 DB 约束（公司内）。__queryable__ 纯主数据。
+    内部 code 默认 PA 手编 + 唯一校验（GAP-4 待甲方确认是否系统生成）。
+    """
+    __tablename__ = "product_code"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    internal_code = Column(String(60), nullable=False, index=True)  # 显示名 code
+    product_id = Column(Integer, ForeignKey("material.id"), nullable=False, index=True)  # 型号=Material
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=False, index=True)
+    vendor_pn = Column(String(100), default="")            # 原厂料号/原厂型号
+    customer_material_no = Column(String(100), default="")  # 客户侧物料号（对账/标签匹配）
+    status = Column(String(15), default="ACTIVE")
+    notes = Column(Text, default="")
+
+    supplier = relationship("Supplier")
+    __table_args__ = (
+        UniqueConstraint("company_id", "internal_code", name="ux_product_code_company_code"),
+        UniqueConstraint("company_id", "product_id", "supplier_id", name="ux_product_code_product_supplier"),
+    )
+
+
+class HsCode(Base):
+    """HS 编码字典（PRD 02 页面7 hs_code）：报关用，被型号 hs_code_origin/hs_code_cn 双码引用。
+
+    默认全局字典（不带 company_id，6 公司共用同一 HS 库），按 region 区分原产码 vs 中国码。
+    退税率/关税率为占位字段（GAP-8 报关模块为主）。__queryable__ 纯字典。
+    """
+    __tablename__ = "hs_code"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    hs_number = Column(String(30), nullable=False, index=True)  # 显示名 code（如 85414100）
+    description_cn = Column(String(200), default="")           # 中文名（如「連接器」）
+    description_en = Column(String(200), default="")           # 货品名称
+    region = Column(String(10), nullable=False, default="ORIGIN")  # ORIGIN（原产国）/ CN（中国）
+    tax_rebate_rate = Column(Numeric(6, 3), nullable=True)     # 退税率（占位）
+    tariff_rate = Column(Numeric(6, 3), nullable=True)         # 关税率（占位）
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("hs_number", "region", name="ux_hs_code_number_region"),)
+
+
+class UnitOfMeasure(Base):
+    """计量单位字典（PRD 02 页面8 unit_of_measure）：包/盘/PCS，被型号 uom 引用。
+
+    决定库存最小存储单位。芯片=包/盘、器件=PCS。默认全局字典（不带 company_id）。
+    每包实际数量可变 → 实际数量在库存批次行（蓝图 §5.3），本页只定单位类型与默认换算。
+    """
+    __tablename__ = "unit_of_measure"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    uom_code = Column(String(20), nullable=False, unique=True, index=True)  # 显示名 code（PCS/包/盘/K）
+    uom_name = Column(String(50), nullable=False)
+    is_package_unit = Column(Boolean, default=False)  # 包/盘 vs 计件 PCS
+    pcs_per_unit = Column(Numeric(16, 4), nullable=True)  # 换算（如 200K=200000，显示倍率）
+    is_active = Column(Boolean, default=True)
