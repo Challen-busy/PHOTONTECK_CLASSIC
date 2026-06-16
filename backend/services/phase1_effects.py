@@ -26,6 +26,17 @@ def _actor_id(doc, user: m.UserAccount) -> int:
     return getattr(doc, "updated_by_id", None) or getattr(doc, "created_by_id", None) or user.id
 
 
+# 货物性质 → 库存初态（PRD 03a-3 §「货物状态模型」）。样品入 SAMPLE、待检/RMA 入 QUARANTINE，
+# 其余可售 AVAILABLE。值集为纯业务约定（出库占用读 inventory.status）。
+def _inventory_status_for_nature(goods_nature: str | None) -> str:
+    nature = (goods_nature or "").strip().upper()
+    if nature in ("SAMPLE", "样品"):
+        return "SAMPLE"
+    if nature in ("RMA", "翻收", "待检", "QUARANTINE", "PENDING"):
+        return "QUARANTINE"
+    return "AVAILABLE"
+
+
 async def _one(db: AsyncSession, model, *where):
     stmt = select(model)
     for clause in where:
@@ -352,6 +363,35 @@ async def create_goods_receipt_from_purchase_order(
     return [f"created goods_receipt#{receipt.id} from purchase_order#{doc.id}"]
 
 
+@register_transition_effect(
+    "wms.match_goods_receipt_reviewer",
+    doc_type="GOODS_RECEIPT",
+    to_state="PA_REVIEW",
+)
+async def match_goods_receipt_reviewer(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """审核 PA 自动匹配（PRD 03a-1 reviewer_id）：提交审核时若头部未指定审核 PA，
+    按头部供应商（或首行明细供应商）的 responsible_pa_id 自动带出（供应商-PA 对应表）。
+    """
+    if getattr(doc, "reviewer_id", None):
+        return []
+    supplier_id = getattr(doc, "supplier_id", None)
+    if not supplier_id:
+        first_line = await _one(
+            db, m.GoodsReceiptLine, m.GoodsReceiptLine.goods_receipt_id == doc.id
+        )
+        supplier_id = getattr(first_line, "supplier_id", None) if first_line else None
+    if not supplier_id:
+        return ["审核 PA 未匹配：无供应商"]
+    supplier = await _one(db, m.Supplier, m.Supplier.id == supplier_id)
+    pa_id = getattr(supplier, "responsible_pa_id", None) if supplier else None
+    if not pa_id:
+        return ["审核 PA 未匹配：供应商无 responsible_pa"]
+    doc.reviewer_id = pa_id
+    return [f"matched reviewer={pa_id} from supplier={supplier_id}"]
+
+
 @register_transition_effect("wms.stock_goods_receipt", auto=False)
 async def stock_goods_receipt(
     db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
@@ -391,9 +431,11 @@ async def stock_goods_receipt(
                 quantity=line.actual_quantity,
                 received_date=doc.received_date or date.today(),
                 purchase_order_line_id=line.purchase_order_line_id,
+                reported_customer_id=getattr(doc, "customer_id", None),
                 company_id=doc.company_id,
                 created_by_id=_actor_id(doc, user),
-                status="AVAILABLE",
+                # 入库批次初态按货物性质置：样品→SAMPLE、待检/RMA→QUARANTINE、其余→可售（PRD 03a-3）。
+                status=_inventory_status_for_nature(line.goods_nature),
             )
             db.add(inv)
             logs.append(f"created inventory from goods_receipt_line#{line.id}")

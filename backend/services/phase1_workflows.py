@@ -81,7 +81,8 @@ def phase1_workflow_definitions(created_by_id=None):
         "inspection_status", "shipped_date", "notes",
     ]
     goods_receipt_fields = [
-        "purchase_order_id", "warehouse_id", "received_by_id", "received_date", "notes",
+        "purchase_order_id", "warehouse_id", "received_by_id", "received_date",
+        "inbound_type", "supplier_id", "customer_id", "reviewer_id", "notes",
     ]
 
     inquiry_to_quote_effect = ["crm.create_quotation_from_inquiry"]
@@ -94,6 +95,8 @@ def phase1_workflow_definitions(created_by_id=None):
     purchase_order_advance_payment_effect = ["finance.create_advance_payment_from_purchase_order"]
     goods_receipt_stock_effect = ["wms.stock_goods_receipt"]
     goods_receipt_followup_effect = ["erp.complete_purchase_receipt_followup"]
+    # 入库审核通过推金蝶外购/其他入库单（07b·EXPLICIT effect，开关默认 OFF 只入 outbox）。
+    goods_receipt_kingdee_effect = ["kingdee.enqueue_push"]
     sales_order_to_shipment_effect = ["wms.create_shipment_from_sales_order"]
     shipment_stock_effect = ["wms.apply_shipment_stock_out"]
     shipment_sales_invoice_effect = ["finance.create_sales_invoice_from_shipment"]
@@ -253,7 +256,7 @@ def phase1_workflow_definitions(created_by_id=None):
                     {"to": "CANCELLED", "label": "取消入库", "editable_fields": ["notes"]},
                 ]),
                 _state("PA_REVIEW", "PA 审核入库单", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
-                    {"to": "STOCKED_IN", "label": "审核通过入库", "editable_fields": ["notes"], "effects": goods_receipt_stock_effect + goods_receipt_followup_effect},
+                    {"to": "STOCKED_IN", "label": "审核通过入库", "editable_fields": ["notes"], "effects": goods_receipt_stock_effect + goods_receipt_followup_effect + goods_receipt_kingdee_effect},
                     {"to": "PENDING", "label": "退回仓库修改", "editable_fields": ["notes"]},
                 ]),
                 _state("STOCKED_IN", "已入库", [], terminal=True),

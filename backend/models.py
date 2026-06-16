@@ -558,7 +558,13 @@ class Inventory(AuditMixin, Base):
     total_cost = Column(Numeric(16, 2), default=0)
     received_date = Column(Date, index=True)
     purchase_order_line_id = Column(Integer, ForeignKey("purchase_order_line.id"), nullable=True)
+    # 库存状态 7 态值集（PRD 03a-3 §「货物状态模型」蓝图 §5.4）：可售性纯值集 + 规则，
+    # 不加 DB 约束破坏底座。AVAILABLE 可售 / RESERVED 已预留 / QUARANTINE 待处理待检 /
+    # NG 不良 / SAMPLE 样品 / VENDOR_HOLD 原厂暂存 / SCRAP 报废(终态)。出库占用读它。
     status = Column(String(15), default="AVAILABLE")
+    # --- 段1a 库存标记扩充（PRD 03a-3）---
+    source_marker = Column(JSONB, default=dict)            # 来源/品质标记（RMA来源+品质好坏+原厂+PCN，可叠加筛选）
+    reported_customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)  # 原厂报备客户（串货隔离，蓝图 §5.2）
 
     material = relationship("Material")
     warehouse = relationship("Warehouse")
@@ -717,6 +723,13 @@ class GoodsReceipt(AuditMixin, Base):
     received_date = Column(Date, nullable=True)
     status = Column(String(15), default="PENDING")
     notes = Column(Text, default="")
+    # --- 段1a 入库头部扩充（PRD 03a-1 表头「基本進庫」）---
+    # inbound_type：外购入库 PURCHASE / 其他入库[样品] OTHER / 退货入库 RETURN / 调拨入库 TRANSFER /
+    #   委外加工入库 SUBCONTRACT（访谈 02:37、03a-9 委外做薄）。纯值集，默认外购入库。
+    inbound_type = Column(String(20), default="PURCHASE")
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)   # 头部供应商（外箱识别后选，行级亦带）
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)   # 客户（可后补，蓝图 §3.4）
+    reviewer_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 审核 PA（按供应商自动带出）
 
 
 class GoodsReceiptLine(Base):
@@ -724,7 +737,8 @@ class GoodsReceiptLine(Base):
     __queryable__ = True
     id = Column(Integer, primary_key=True)
     goods_receipt_id = Column(Integer, ForeignKey("goods_receipt.id"), nullable=False)
-    purchase_order_line_id = Column(Integer, ForeignKey("purchase_order_line.id"), nullable=False)
+    # 样品/无 PO 入库放宽：purchase_order_line_id 可空（PRD 03a-1 PO# 须问 PA / 样品无 PO）。
+    purchase_order_line_id = Column(Integer, ForeignKey("purchase_order_line.id"), nullable=True)
     material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
     expected_quantity = Column(Numeric(12, 2), nullable=False)
     actual_quantity = Column(Numeric(12, 2), nullable=False)
@@ -745,6 +759,13 @@ class GoodsReceiptLine(Base):
     location_code = Column(String(50), default="")
     date_code = Column(String(50), default="")
     production_date = Column(Date, nullable=True)
+    # --- 段1a 明细补列（PRD 03a-1 進庫詳細資料 6 列）---
+    remark = Column(Text, default="")                       # REMARK（尾码/版本/漏气/统一包装红字标）
+    customs_fee = Column(Numeric(16, 2), nullable=True)     # 报关费（多由报关模块回填）
+    freight_fee = Column(Numeric(16, 2), nullable=True)     # 运费（后补）
+    import_export_cert = Column(String(50), default="")     # 进出口证（可 #N/A）
+    bag_seal_date = Column(Date, nullable=True)             # BAG SEAL DATE（部分供应商封袋日）
+    ba_hold = Column(String(20), default="")               # BA留货（内部留货标记）
 
 
 class ShipmentRequest(AuditMixin, Base):
@@ -863,9 +884,10 @@ class LabelTemplate(AuditMixin, Base):
     __tablename__ = "label_template"
     __doc_types__ = ("LABEL_TEMPLATE",)
     id = Column(Integer, primary_key=True)
-    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=False, index=True)
+    # 段1a：放宽为可空——内部入仓编号标签（INTERNAL）不绑客户（PRD 03a-6）；客户标签仍带 customer_id。
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True, index=True)
     name = Column(String(100), nullable=False)  # 显示名
-    label_type = Column(String(20), default="PKG1")   # 标签类型：PKG1 包装1 / PKG2 包装2 / OUTER 外箱 / COMPANY_OUTER 公司外箱
+    label_type = Column(String(20), default="PKG1")   # 标签类型：PKG1 包装1 / PKG2 包装2 / OUTER 外箱 / COMPANY_OUTER 公司外箱 / INTERNAL 内部入仓编号
     size_mm = Column(String(20), default="")          # 尺寸（如 62x29）
     orientation = Column(String(10), default="PORTRAIT")  # 朝向（占位）
     # 二维码拼接规则（核心）：分隔符 + 进二维码的字段顺序（字段码有序数组）

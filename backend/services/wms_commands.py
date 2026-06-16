@@ -460,6 +460,61 @@ async def import_inventory_csv_rows(ctx: CommandContext, payload: dict) -> dict:
 
 
 @register_command(
+    "print_inbound_labels",
+    module="WMS",
+    title="打印入仓编号标签",
+    description="按选中批次行一键生成 62×29mm 入仓编号标签 payload（主文本+条码=inbound_number，真实打印留占位）",
+    affected_tables=("label_template", "goods_receipt_line"),
+)
+async def print_inbound_labels(ctx: CommandContext, payload: dict) -> dict:
+    """一键打标签（PRD 03a-6）：对选中批次行（goods_receipt_line）生成入仓编号标签 payload。
+
+    payload: {goods_receipt_id?, line_ids?[]} —— 给单则取整单全部明细，给 line_ids 则只取选中行。
+    复用 INTERNAL 标签模板（62×29mm，主文本+一维条码=inbound_number）。真实打印走 print_driver 占位。
+    """
+    from services.template_render import build_label_payload
+
+    gr_id = payload.get("goods_receipt_id")
+    line_ids = payload.get("line_ids") or []
+    stmt = select(m.GoodsReceiptLine)
+    if line_ids:
+        stmt = stmt.where(m.GoodsReceiptLine.id.in_(line_ids))
+    elif gr_id:
+        stmt = stmt.where(m.GoodsReceiptLine.goods_receipt_id == gr_id)
+    else:
+        raise CommandError("需提供 goods_receipt_id 或 line_ids")
+    lines = (await ctx.db.execute(stmt.order_by(m.GoodsReceiptLine.id))).scalars().all()
+    if not lines:
+        raise CommandError("无可打印的批次行", 404)
+
+    # 定位 INTERNAL 入仓编号标签模板（本公司）。
+    template = (await ctx.db.execute(
+        select(m.LabelTemplate).where(
+            m.LabelTemplate.company_id == ctx.user.company_id,
+            m.LabelTemplate.label_type == "INTERNAL",
+            m.LabelTemplate.is_active == True,
+        ).order_by(m.LabelTemplate.id).limit(1)
+    )).scalar_one_or_none()
+    if not template:
+        raise CommandError("未配置 INTERNAL 入仓编号标签模板", 404)
+
+    labels = []
+    for line in lines:
+        result = await build_label_payload(ctx, {
+            "template_id": template.id,
+            "doc_type": "goods_receipt_line",
+            "doc_id": line.id,
+        })
+        labels.append({
+            "line_id": line.id,
+            "inbound_number": line.inbound_number,
+            "payload": result,
+        })
+    ctx.add_event("inbound_labels_printed", {"template_id": template.id, "count": len(labels)})
+    return {"template_id": template.id, "size_mm": template.size_mm, "count": len(labels), "labels": labels}
+
+
+@register_command(
     "create_wms_attachment",
     module="WMS",
     title="创建 WMS 附件",

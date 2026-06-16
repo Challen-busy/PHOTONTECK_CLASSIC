@@ -347,11 +347,55 @@ async def seed():
         await db.flush()
 
         # 每家公司一个主仓骨架
+        warehouses = {}
         for comp in companies.values():
-            db.add(m.Warehouse(
+            wh = m.Warehouse(
                 code=f"WH-{comp.code}", name=f"{comp.short_name}主仓", warehouse_type="MAIN",
                 city=comp.country, company_id=comp.id, created_by_id=users["admin"].id,
-            ))
+            )
+            db.add(wh)
+            warehouses[comp.code] = wh
+        await db.flush()
+
+        # === 段1a 库位（PRD 03a-5 / 進庫詳細資料「位置」列 F03/C51/C48 等）===
+        # 各公司本仓挂一组库位行：普通货架 + 流转仓（快进快出不上架）+ RMA/样品/待处理/NG 专仓。
+        # location_type 驱动 WMS 行为（流转仓可不上架）；编码体系内地待补（gap-7）。
+        location_rows = [
+            ("F03", "F", "03", "", "NORMAL"),
+            ("C51", "C", "51", "", "NORMAL"),
+            ("C48", "C", "48", "", "NORMAL"),
+            ("TRANSIT", "T", "", "", "TRANSIT"),   # 流转仓
+            ("RMA01", "R", "01", "", "RMA"),       # RMA 专仓
+            ("SAMPLE01", "S", "01", "", "SAMPLE"), # 样品仓
+            ("QC01", "Q", "01", "", "QUARANTINE"), # 待处理/待检
+            ("NG01", "N", "01", "", "NG"),         # NG 专仓
+        ]
+        loc_count = 0
+        for comp in companies.values():
+            for code, zone, shelf, position, ltype in location_rows:
+                db.add(m.WarehouseLocation(
+                    warehouse_id=warehouses[comp.code].id,
+                    code=code, zone=zone, shelf=shelf, position=position,
+                    location_type=ltype, is_active=True,
+                ))
+                loc_count += 1
+        await db.flush()
+
+        # === 段1a 内部入仓编号标签模板（PRD 03a-6，62×29mm，主文本+条码=inbound_number）===
+        # INTERNAL 类型不绑客户（customer_id 空）；一键 print_inbound_labels 命令按选中批次行渲染。
+        internal_label = m.LabelTemplate(
+            company_id=ptk.id, customer_id=None,
+            name="入仓编号标签(62x29)", label_type="INTERNAL", size_mm="62x29",
+            qr_separator="", qr_field_order=[], barcode_fields=["入仓编号"],
+            status="ACTIVE", is_active=True, created_by_id=users["admin"].id,
+        )
+        db.add(internal_label)
+        await db.flush()
+        db.add(m.LabelFieldLine(
+            label_template_id=internal_label.id, line_number=1,
+            label_field_title="入仓编号", source_type="INBOUND",
+            source_field="inbound_number", in_qr=False, render_as_barcode=True,
+        ))
         await db.flush()
 
         # === 流程定义（基于K3截图+需求文档的真实流程）===

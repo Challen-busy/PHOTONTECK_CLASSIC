@@ -100,6 +100,61 @@ async def notify_dispatch(
     return [f"notification#{note.id} dispatched" if note else "notification deduped"]
 
 
+@register_transition_effect(
+    "wms.dispatch_goods_receipt_notice",
+    doc_type="GOODS_RECEIPT",
+    to_state="PA_REVIEW",
+)
+async def dispatch_goods_receipt_notice(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """進庫通知（PRD 03a-7）：提交 PA 审核（进 PA_REVIEW）时发"進庫通知"给审核 PA + CC 全体 PA。
+
+    站内通知直达 reviewer_id（按供应商自动带出的 PA），并广播给 PA 角色作 CC；
+    邮件留 stub（create_notification 的 _send_email_adapter 占位，真实 SMTP 待接入，03a-7 gap-9）。
+    """
+    company_id = getattr(doc, "company_id", None) or user.company_id
+    receipt_no = getattr(doc, "receipt_number", "") or f"GR{doc.id}"
+    title = f"富泰進庫通知 {receipt_no}"
+    body = (
+        f"入库单 {receipt_no} 已提交，待审核。请核对该单型号/数量/SN 与 PO 一致并确认货物性质。"
+    )
+    logs: list[str] = []
+    reviewer_id = getattr(doc, "reviewer_id", None)
+    # 直达审核 PA（含邮件占位 stub）。
+    note = await create_notification(
+        db,
+        company_id=company_id,
+        category="GOODS_RECEIPT_NOTICE",
+        title=title,
+        body=body,
+        severity="INFO",
+        recipient_id=reviewer_id,
+        source_doc_type=doc_type,
+        source_doc_id=doc.id,
+        dedup_key=f"grnotice:{doc.id}:reviewer",
+        queue_email=bool(reviewer_id),
+    )
+    if note:
+        logs.append(f"进库通知#{note.id} → reviewer={reviewer_id}")
+    # CC 全体 PA（广播给 PRODUCT_ASSISTANT 角色；recipient_id 空 + recipient_role）。
+    cc = await create_notification(
+        db,
+        company_id=company_id,
+        category="GOODS_RECEIPT_NOTICE",
+        title=title,
+        body=f"[CC] {body}",
+        severity="INFO",
+        recipient_role="PRODUCT_ASSISTANT",
+        source_doc_type=doc_type,
+        source_doc_id=doc.id,
+        dedup_key=f"grnotice:{doc.id}:cc_pa",
+    )
+    if cc:
+        logs.append(f"进库通知#{cc.id} → CC PA")
+    return logs or ["进库通知 deduped"]
+
+
 # ============================================================
 # 定时扫描骨架（引擎无 cron → 可调度入口：手动或外部调度调命令）
 # ============================================================

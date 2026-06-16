@@ -20,6 +20,12 @@ import MasterDataPage from './pages/master/MasterDataPage';
 import LabelTemplatePage from './pages/config/LabelTemplatePage';
 import DocTemplatePage from './pages/config/DocTemplatePage';
 
+// 3 仓储 WMS — 入库与库存（PRD 03a；干净业务页，替换原始引擎 demo WmsWorkbench）
+import InboundPage from './pages/wms/InboundPage';
+import InventoryPage from './pages/wms/InventoryPage';
+import MovementPage from './pages/wms/MovementPage';
+import LabelsPage from './pages/wms/LabelsPage';
+
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
   { label: 'A 信任', value: 'A' }, { label: 'B 亲切', value: 'B' },
@@ -99,16 +105,22 @@ function AppRoutes() {
         <Route path="purchase/intransit" element={PH('采购在途', '采购 / 供应链')} />
         <Route path="purchase/payments" element={PH('付款申请', '采购 / 供应链')} />
 
-        {/* 3 仓储 WMS */}
-        <Route path="wms/inbound" element={PH('入库收货', '仓储 WMS')} />
-        <Route path="wms/inventory" element={PH('库存（批次 / SN / LOT / 库位）', '仓储 WMS')} />
-        <Route path="wms/transactions" element={PH('库存流水 / 事务台账', '仓储 WMS')} />
+        {/* 3 仓储 WMS（入库与库存 03a：干净业务页，走元数据 API；出库/调拨/盘点/委外为后续段） */}
+        <Route path="wms/inbound" element={<InboundPage />} />
+        <Route path="wms/inventory" element={<InventoryPage />} />
+        <Route path="wms/transactions" element={<MovementPage />} />
         <Route path="wms/outbound" element={PH('出库发货', '仓储 WMS')} />
         <Route path="wms/subcontract" element={PH('委外加工', '仓储 WMS')} />
         <Route path="wms/transfer" element={PH('调拨（同公司内仓间）', '仓储 WMS')} />
         <Route path="wms/count" element={PH('盘点 / 库存调整单', '仓储 WMS')} />
-        <Route path="wms/locations" element={PH('库位管理', '仓储 WMS')} />
-        <Route path="wms/labels" element={PH('标签打印', '仓储 WMS')} />
+        <Route path="wms/locations" element={
+          <MasterDataPage
+            table="warehouse_location" title="库位管理" domain="仓储 WMS"
+            primaryCols={['code', 'zone', 'shelf', 'position']}
+            todoNote="warehouse_location 三级库位（货区/货架/货层）+ location_type（普通/流转仓/RMA/样品/待处理/NG）。流转仓「快进快出不上架」。为 __queryable__ 主数据、无 doc_type，建档/改档待后端 ➕ 写路径（EXT-02-W）。"
+          />
+        } />
+        <Route path="wms/labels" element={<LabelsPage />} />
 
         {/* 4 报关 */}
         <Route path="customs/declarations" element={PH('报关单（进口 / 出口 / 退运）', '报关')} />

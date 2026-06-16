@@ -424,7 +424,11 @@ async def validate_sn_lot_value(
 
 
 async def validate_goods_receipt_constraints(db: AsyncSession, doc: m.GoodsReceipt) -> list[str]:
-    """入库单保存/审核时的 WMS 校验。"""
+    """入库单保存/审核时的 WMS 校验（PRD 03a-1 状态机 hard_rules）。
+
+    硬规则：① 明细 Σactual_quantity = 头部应收总数（Σexpected_quantity）—— 数量对得上才放行；
+    ② 每行 SN/LOT# 非空；③ 每行性质 goods_nature 非空；④ SN/LOT 唯一 + 按 supplier_sn_rule 校验。
+    """
     result = await db.execute(
         select(m.GoodsReceiptLine).where(m.GoodsReceiptLine.goods_receipt_id == doc.id)
     )
@@ -432,7 +436,20 @@ async def validate_goods_receipt_constraints(db: AsyncSession, doc: m.GoodsRecei
     failures: list[str] = []
     seen: set[tuple[int | None, int | None, str]] = set()
 
+    if not lines:
+        failures.append("入库单: 至少需要一条批次明细")
+
+    total_expected = Decimal("0")
+    total_actual = Decimal("0")
     for line in lines:
+        total_expected += _num(line.expected_quantity)
+        total_actual += _num(line.actual_quantity)
+
+        if not (line.serial_lot_number or "").strip():
+            failures.append(f"入库明细#{line.id}: SN/LOT# 不能为空")
+        if not (line.goods_nature or "").strip():
+            failures.append(f"入库明细#{line.id}: 货物性质不能为空")
+
         sn = (line.serial_lot_number or "").strip()
         if sn:
             key = (line.supplier_id, line.material_id, sn)
@@ -448,6 +465,11 @@ async def validate_goods_receipt_constraints(db: AsyncSession, doc: m.GoodsRecei
                 material_id=line.material_id,
                 serial_lot_number=line.serial_lot_number,
             )
+        )
+
+    if lines and total_actual != total_expected:
+        failures.append(
+            f"入库单: 明细实收总数 {total_actual} 与应收总数 {total_expected} 不一致（须按 PO 核对/拆行）"
         )
     return failures
 
