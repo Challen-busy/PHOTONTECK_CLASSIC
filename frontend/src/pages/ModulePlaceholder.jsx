@@ -38,7 +38,7 @@ export default function ModulePlaceholder({ title, domain, columns }) {
         type="info"
         showIcon
         style={{ marginBottom: 16, borderRadius: 12 }}
-        message="功能已就绪 · 待开通"
+        title="功能已就绪 · 待开通"
         description="本页为前端壳占位（BizTable 台账壳：查询条 / 列配置 / 密度 / 批量已就位）。业务台账与录单抽屉将在 P 段按 PRD 对应模块建造。"
       />
 

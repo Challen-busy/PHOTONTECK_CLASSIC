@@ -176,7 +176,9 @@ class MaterialCategory(Base):
 
 class Material(Base):
     __tablename__ = "material"
-    __queryable__ = True
+    # 段0c：型号需可建档（PA 询价即建档），挂轻量单状态机 MATERIAL（ACTIVE，纯字典型）。
+    # 仍保留 __queryable__ 语义（has __doc_types__ → exposed），下游按 doc_type 走 execute_transition 建/改。
+    __doc_types__ = ("MATERIAL",)
     id = Column(Integer, primary_key=True)
     sku = Column(String(50), unique=True, nullable=False, index=True)
     name = Column(String(300), nullable=False)
@@ -849,16 +851,111 @@ class PickingListLine(Base):
     is_verified = Column(Boolean, default=False)
 
 
-class LabelTemplate(Base):
+class LabelTemplate(AuditMixin, Base):
+    """标签模板（段0c·标签模板引擎，PRD 09 §9.1 + 09-标签模板规格逐客户）。
+
+    一条 = 一种客户标签（按 客户×公司×标签类型 粒度，不按客户整体建）。引擎无原生
+    标签子系统（仅 custom_html 逃生舱），本表 + LabelFieldLine 子表 + build_label_payload
+    命令补足：模板头存尺寸/二维码拼接规则（分隔符 + 字段序），子表存字段映射（标签字段→
+    数据来源字段、顺序、是否渲条码/进二维码）。出库时由命令按模板把一张单的数据拼成标签
+    字段 + 二维码串。引擎五条不破坏：纯业务积木，写仍走 execute_transition / @register_command。
+    """
     __tablename__ = "label_template"
+    __doc_types__ = ("LABEL_TEMPLATE",)
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)  # 显示名
+    label_type = Column(String(20), default="PKG1")   # 标签类型：PKG1 包装1 / PKG2 包装2 / OUTER 外箱 / COMPANY_OUTER 公司外箱
+    size_mm = Column(String(20), default="")          # 尺寸（如 62x29）
+    orientation = Column(String(10), default="PORTRAIT")  # 朝向（占位）
+    # 二维码拼接规则（核心）：分隔符 + 进二维码的字段顺序（字段码有序数组）
+    qr_separator = Column(String(10), default="")     # & ; + , _ 无/自定义（各客户唯一，PRD §12）
+    qr_field_order = Column(JSONB, default=list)       # ["型号","物料编码",...] 有序字段码
+    barcode_fields = Column(JSONB, default=list)       # 哪些字段额外渲条码（如 数量列、发货日期）
+    # 兼容旧字段（保留，避免破坏既有引用）
+    template_content = Column(Text, default="")        # 渲染骨架/产物（custom_html 逃生舱落点）
+    fields_mapping = Column(JSONB, default=dict)        # 旧版字段映射（保留）
+    is_default = Column(Boolean, default=False)
+    status = Column(String(15), default="ACTIVE")      # 轻量单状态机 ACTIVE（建档/编辑）
+    is_active = Column(Boolean, default=True)
+    notes = Column(Text, default="")
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "customer_id", "label_type", name="ux_label_template_company_cust_type"),
+    )
+
+
+class LabelFieldLine(Base):
+    """标签字段映射子表（段0c·标签模板引擎，PRD 09 §9.1 字段子表）。
+
+    每行 = 标签上一个字段：标签字段名 → 数据来源字段 + 顺序号 + 是否渲条码 + 是否进二维码。
+    source_type：OUTBOUND 出库登记 / INBOUND 入库批次 / EMAIL 邮件附件手填 / CUSTOMER_SYS 客户系统 /
+    DERIVED 派生公式 / CONST 常量（PRD §9.1 source_type 枚举）。__queryable__ 子表，SubTableEditor 网格录入。
+    """
+    __tablename__ = "label_field_line"
     __queryable__ = True
     id = Column(Integer, primary_key=True)
-    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=False)
-    name = Column(String(100), nullable=False)
-    template_content = Column(Text, default="")
-    fields_mapping = Column(JSONB, default={})
-    is_default = Column(Boolean, default=False)
-    created_at = Column(DateTime, server_default=func.now())
+    label_template_id = Column(Integer, ForeignKey("label_template.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)  # 顺序号
+    label_field_title = Column(String(100), nullable=False)  # 标签上的字段显示名（如 "型號"/"LOT NO"/"COO"）
+    source_type = Column(String(20), default="OUTBOUND")     # 数据来源类型
+    source_field = Column(String(80), default="")            # 来源字段名（如 型號 / SN/LOT# / 數量 / 原產地）
+    derive_expr = Column(String(200), default="")            # 派生公式（source_type=DERIVED，如 "合同号前5位"）
+    const_value = Column(String(200), default="")            # 常量值（source_type=CONST，如供货单位预设抬头）
+    in_qr = Column(Boolean, default=False)                   # 是否进二维码
+    qr_order = Column(SmallInteger, nullable=True)           # 在二维码里的顺序（in_qr=True 时）
+    render_as_barcode = Column(Boolean, default=False)       # 该字段额外渲条码
+    __table_args__ = (UniqueConstraint("label_template_id", "line_number"),)
+
+
+class DocTemplate(AuditMixin, Base):
+    """单据模板（段0c·单据模板引擎，PRD 09 §9.2 + 09-单据模板规格 PL/INV/送货单）。
+
+    一条 = 一种客户×公司的对外单据模板（PL 装箱单 / INV 商业发票 / 送货单）。引擎无原生
+    单据模板子系统（仅 custom_html 逃生舱），本表 + DocTemplateFieldLine 子表 + render_doc_template
+    命令补足：模板头存抬头/区域/盖章·回签标志，子表存字段集（字段→来源 + 本地/出口切换 + 渲条码）。
+    customer_id 空=公司通用模板。引擎五条不破坏：纯业务积木。
+    """
+    __tablename__ = "doc_template"
+    __doc_types__ = ("DOC_TEMPLATE",)
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True, index=True)  # 空=公司通用
+    name = Column(String(100), nullable=False)  # 显示名
+    doc_kind = Column(String(20), default="PL")  # PL 装箱单 / INV 商业发票 / DN_CUST 客户送货单 / DN_FWD 货代托运单
+    region = Column(String(10), default="HK")    # HK / CN（区域差异：抬头/税率/币种，随 company）
+    needs_stamp = Column(Boolean, default=False)        # 盖章版（导出→打印盖章→扫描回传）
+    needs_countersign = Column(Boolean, default=False)  # 回签流转（客户签回）
+    header_title = Column(Text, default="")             # 发货公司抬头（随 company）
+    bank_block = Column(Text, default="")               # 银行块（保理/OSA 账户块，Innolight/Eoptolink）
+    render_html = Column(Text, default="")              # 渲染产物（custom_html 逃生舱落点）
+    status = Column(String(15), default="ACTIVE")       # 轻量单状态机 ACTIVE
+    is_active = Column(Boolean, default=True)
+    notes = Column(Text, default="")
+
+    __table_args__ = (
+        Index("ix_doc_template_company_kind", "company_id", "doc_kind", "customer_id"),
+    )
+
+
+class DocTemplateFieldLine(Base):
+    """单据模板字段子表（段0c·单据模板引擎，PRD 09 §9.2 字段子表）。
+
+    每行 = 单据上一个字段：字段标题 → 来源字段 + 本地/出口切换（is_variant，如发票号↔报关单号）+
+    是否渲条码（旭创/智禾数量列、外箱发货日期）。__queryable__ 子表，SubTableEditor 网格录入。
+    """
+    __tablename__ = "doc_template_field_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    doc_template_id = Column(Integer, ForeignKey("doc_template.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    doc_field_title = Column(String(100), nullable=False)  # 单据上字段显示名（如 DESCRIPTION OF GOODS / QUANTITY）
+    source_field = Column(String(80), default="")          # 来源字段（出库/发票/合同字段）
+    const_value = Column(String(200), default="")          # 常量值（抬头/固定文案）
+    is_variant_field = Column(Boolean, default=False)      # 本地/出口切换字段
+    variant_local = Column(String(80), default="")         # 本地取值来源（如发票号）
+    variant_export = Column(String(80), default="")        # 出口取值来源（如报关单号）
+    render_as_barcode = Column(Boolean, default=False)     # 渲条码（数量列/外箱发货日期）
+    __table_args__ = (UniqueConstraint("doc_template_id", "line_number"),)
 
 
 # ============================================================
@@ -1646,7 +1743,8 @@ class ProductLine(AuditMixin, Base):
     引擎不原生强制业务唯一性 → 用 DB 约束兜底（不破坏引擎，纯主数据无态机）。
     """
     __tablename__ = "product_line"
-    __queryable__ = True
+    # 段0c：产线需可建档（PM 维护），挂轻量单状态机 PRODUCT_LINE（ACTIVE）。
+    __doc_types__ = ("PRODUCT_LINE",)
     id = Column(Integer, primary_key=True)
     code = Column(String(30), index=True, default="")
     line_name = Column(String(100), nullable=False)  # 显示名 name
@@ -1673,7 +1771,8 @@ class ProductCode(AuditMixin, Base):
     内部 code 默认 PA 手编 + 唯一校验（GAP-4 待甲方确认是否系统生成）。
     """
     __tablename__ = "product_code"
-    __queryable__ = True
+    # 段0c：产品代码需可建档（PA 建型号×供应商内部 code），挂轻量单状态机 PRODUCT_CODE（ACTIVE）。
+    __doc_types__ = ("PRODUCT_CODE",)
     id = Column(Integer, primary_key=True)
     internal_code = Column(String(60), nullable=False, index=True)  # 显示名 code
     product_id = Column(Integer, ForeignKey("material.id"), nullable=False, index=True)  # 型号=Material

@@ -28,7 +28,7 @@ export default function Notifications() {
         type="warning"
         showIcon
         style={{ margin: '16px 0', borderRadius: 12 }}
-        message="通知子系统为后端扩展点（EXT-00b-C，待 P 段建造）"
+        title="通知子系统为后端扩展点（EXT-00b-C，待 P 段建造）"
         description="引擎无原生通知/消息子系统；进库/发货/到货/到期/退运180/样品超期/备货消单 等事件须新增 notification 模型 + effect/定时扫描派发 + 站内+邮件。本页为前端壳占位。"
       />
       <BizTable placeholder headerTitle="我的通知" columns={columns} rowSelection={{}} search={false} />

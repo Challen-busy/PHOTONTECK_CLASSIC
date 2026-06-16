@@ -70,6 +70,8 @@ def load_commands() -> None:
     import services.cosign  # noqa: F401
     import services.kingdee_outbox  # noqa: F401
     import services.notifications  # noqa: F401
+    # 段0c 标签/单据模板渲染命令
+    import services.template_render  # noqa: F401
 
     _loaded = True
 

@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.auth import hash_password
 from core.database import Base, get_async_engine, get_session_factory
 from services.phase1_workflows import phase1_workflow_definitions
+from services.master_data_workflows import master_data_workflow_definitions
 import models as m
 
 
@@ -238,6 +239,111 @@ async def seed():
                 customer_id=customers[ccode].id, line_number=ln, department=dept,
                 name=name, email=email, relation_level=level,
             ))
+        await db.flush()
+
+        # === 段0c：标签模板样本（PRD 09 §9.1 + 09-标签模板规格逐客户）===
+        # 一条 = 一种客户标签（客户×公司×标签类型）。头存尺寸 + 二维码拼接规则（分隔符+字段序），
+        # 子表 label_field_line 存字段映射（标签字段→数据来源 + 顺序 + 是否进二维码/渲条码）。
+        # 样本对齐规格：① TACLINK 包装标签2（无二维码）② 成都储翰式（分隔符 ;）③ Tri-light 式（分隔符 _）。
+        # demo 客户只有 INTEL / USTC，模板挂在其上演示「按 (客户,标签类型) 建模板」。
+        label_templates = [
+            # (客户, 标签类型, 尺寸, 分隔符, 二维码字段序, 字段行[(标签字段,来源类型,来源字段,进二维码,qr序,渲条码)])
+            ("INTEL", "PKG2", "60x40", "", [], [
+                ("客户料号", "OUTBOUND", "型號", False, None, False),
+                ("品名", "OUTBOUND", "product_name", False, None, False),
+                ("批次", "OUTBOUND", "SN/LOT#", False, None, False),
+                ("数量", "OUTBOUND", "數量", False, None, True),   # 旭创/智禾要求数量列渲条码
+                ("生产日期", "OUTBOUND", "出庫日期", False, None, False),
+            ]),
+            ("INTEL", "OUTER", "100x70", ";", ["供方代码", "物料编码", "批次号", "生产日期"], [
+                ("供方代码", "DERIVED", "", True, 1, False),     # 派生：合同号前几位（占位）
+                ("物料编码", "OUTBOUND", "型號", True, 2, False),
+                ("批次号", "OUTBOUND", "SN/LOT#", True, 3, False),
+                ("生产日期", "OUTBOUND", "出庫日期", True, 4, False),
+                ("数量", "OUTBOUND", "數量", False, None, False),
+            ]),
+            ("USTC", "PKG1", "62x29", "_",
+             ["批次号", "供应商", "生产日期", "失效日期", "品号", "合同号", "数量"], [
+                ("批次号", "OUTBOUND", "SN/LOT#", True, 1, False),
+                ("供应商", "OUTBOUND", "供應商", True, 2, False),
+                ("生产日期", "OUTBOUND", "出庫日期", True, 3, False),
+                ("失效日期", "DERIVED", "", True, 4, False),       # 派生：生产日期+保质期（占位）
+                ("品号", "OUTBOUND", "型號", True, 5, False),
+                ("合同号", "OUTBOUND", "出庫單號", True, 6, False),
+                ("数量", "OUTBOUND", "數量", True, 7, True),
+            ]),
+        ]
+        lt_count = 0
+        for cust, ltype, size, sep, qr_order, lines in label_templates:
+            lt = m.LabelTemplate(
+                company_id=ptk.id, customer_id=customers[cust].id,
+                name=f"{cust}-{ltype}标签", label_type=ltype, size_mm=size,
+                qr_separator=sep, qr_field_order=qr_order,
+                barcode_fields=[t for (t, *_rest) in lines if _rest[4]],
+                status="ACTIVE", is_active=True, created_by_id=users["admin"].id,
+            )
+            db.add(lt)
+            await db.flush()
+            for i, (title, stype, sfield, in_qr, qrn, barcode) in enumerate(lines, start=1):
+                db.add(m.LabelFieldLine(
+                    label_template_id=lt.id, line_number=i, label_field_title=title,
+                    source_type=stype, source_field=sfield,
+                    in_qr=in_qr, qr_order=qrn, render_as_barcode=barcode,
+                ))
+            lt_count += 1
+        await db.flush()
+
+        # === 段0c：单据模板样本（PRD 09 §9.2 + 09-单据模板规格 PL/INV/送货单）===
+        # 一条 = 一种客户×公司的对外单据（PL/INV/送货单）。头存抬头/区域/盖章·回签标志，
+        # 子表 doc_template_field_line 存字段集（字段→来源 + 本地/出口切换 + 渲条码开关）。
+        doc_templates = [
+            # (客户or None, 单据类型, 区域, 盖章, 回签, 抬头, 银行块, 字段行[(标题,来源,常量,变体,本地,出口,渲条码)])
+            ("INTEL", "PL", "HK", True, True, "Photonteck (HK) Limited（占位抬头）", "", [
+                ("DESCRIPTION OF GOODS", "型號", "", False, "", "", False),
+                ("SN/LOT#", "SN/LOT#", "", False, "", "", False),
+                ("QUANTITY", "數量", "", False, "", "", True),     # 旭创/智禾：数量列渲条码
+                ("Production date", "出庫日期", "", False, "", "", True),  # 外箱发货日期渲条码
+                ("CONTRACT NO.", "", "", True, "出庫單號", "报关单号", False),  # 本地/出口切换
+                ("NET WEIGHT", "出庫重量(Kgs)", "", False, "", "", False),
+                ("CARTON NO.", "箱號", "", False, "", "", False),
+            ]),
+            ("INTEL", "INV", "HK", True, True, "Photonteck (HK) Limited（占位抬头）",
+             "This account has been assigned to HSBC（保理 assigned 账户块占位）", [
+                ("DESCRIPTION OF GOODS", "型號", "", False, "", "", False),
+                ("QUANTITY", "數量", "", False, "", "", False),
+                ("UNIT PRICE", "unit_price", "", False, "", "", False),
+                ("SUBTOTAL", "total_price", "", False, "", "", False),
+                ("INV NO.", "INV#", "", True, "INV#", "报关单号", False),
+                ("PAYMENT TERMS", "", "NET 30", False, "", "", False),
+            ]),
+            (None, "DN_CUST", "HK", False, True, "Photonteck (HK) Limited（占位抬头）", "", [
+                ("型号", "型號", "", False, "", "", False),
+                ("数量", "數量", "", False, "", "", False),
+                ("箱数", "箱號", "", False, "", "", False),
+                ("运单号", "運單號", "", False, "", "", False),
+                ("送货形式", "送貨形式", "", False, "", "", False),
+            ]),
+        ]
+        dt_count = 0
+        for cust, kind, region, stamp, csign, header, bank, lines in doc_templates:
+            dt = m.DocTemplate(
+                company_id=ptk.id,
+                customer_id=customers[cust].id if cust else None,
+                name=f"{cust or '通用'}-{kind}模板", doc_kind=kind, region=region,
+                needs_stamp=stamp, needs_countersign=csign,
+                header_title=header, bank_block=bank,
+                status="ACTIVE", is_active=True, created_by_id=users["admin"].id,
+            )
+            db.add(dt)
+            await db.flush()
+            for i, (title, src, const, variant, vl, ve, barcode) in enumerate(lines, start=1):
+                db.add(m.DocTemplateFieldLine(
+                    doc_template_id=dt.id, line_number=i, doc_field_title=title,
+                    source_field=src, const_value=const,
+                    is_variant_field=variant, variant_local=vl, variant_export=ve,
+                    render_as_barcode=barcode,
+                ))
+            dt_count += 1
         await db.flush()
 
         # 每家公司一个主仓骨架
@@ -1112,6 +1218,15 @@ async def seed():
             # scripts.seed_phase1 做幂等更新，避免这里触发 (doc_type, version) 唯一冲突。
             if wf_def["doc_type"] not in existing_workflow_doc_types:
                 db.add(m.WorkflowDefinition(**wf_def))
+                existing_workflow_doc_types.add(wf_def["doc_type"])
+
+        # === 段0c：主数据 + 模板的轻量建档状态机（单状态 ACTIVE，经 execute_transition 建/改）===
+        # CUSTOMER/SUPPLIER 旧流程上面可能已建，幂等跳过；MATERIAL/PRODUCT_CODE/PRODUCT_LINE/
+        # LABEL_TEMPLATE/DOC_TEMPLATE 在此首建。让前端走引擎唯一写入路径增改主数据/模板。
+        for wf_def in master_data_workflow_definitions(users["admin"].id):
+            if wf_def["doc_type"] not in existing_workflow_doc_types:
+                db.add(m.WorkflowDefinition(**wf_def))
+                existing_workflow_doc_types.add(wf_def["doc_type"])
 
         # === 知识库 ===
         knowledge = [
@@ -1154,6 +1269,8 @@ async def seed():
             ("编号规则", m.NumberingRule),
             ("计量单位", m.UnitOfMeasure), ("HS编码", m.HsCode), ("产线", m.ProductLine),
             ("产品代码", m.ProductCode), ("客户联系人", m.CustomerContactLine),
+            ("标签模板", m.LabelTemplate), ("标签字段行", m.LabelFieldLine),
+            ("单据模板", m.DocTemplate), ("单据字段行", m.DocTemplateFieldLine),
         ]
         print("种子数据生成完成:")
         for label, model in tables:

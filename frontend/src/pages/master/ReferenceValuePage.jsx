@@ -71,7 +71,7 @@ export default function ReferenceValuePage({ title, sourceTable, sourceField, to
 
       <Alert
         type="warning" showIcon style={{ marginBottom: 16, borderRadius: 12 }}
-        message="字典表尚未在引擎建立 —— 当前为派生快照"
+        title="字典表尚未在引擎建立 —— 当前为派生快照"
         description={todoNote}
       />
 
