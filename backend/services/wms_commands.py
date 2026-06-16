@@ -717,6 +717,7 @@ async def create_inventory_count(ctx: CommandContext, payload: dict) -> dict:
             batch_number=inv.batch_number,
             inbound_number=inv.inbound_number,
             serial_lot_number=inv.serial_lot_number,
+            goods_nature=inv.goods_nature,  # 段1b-2：性质快照（盘点分性质视图）
             system_quantity=inv.quantity,
             counted_quantity=None,
             difference_quantity=0,
@@ -783,6 +784,16 @@ async def submit_inventory_count(ctx: CommandContext, payload: dict) -> dict:
     ))).scalar() or 0
     if pending:
         raise CommandError(f"还有 {pending} 行未录入盘点数量")
+
+    # 段1b-2 复核 hard_rule（PRD 03b 页面6）：差异行（difference_quantity≠0）调查备注必填。
+    # 命令驱动的盘点无边可挂 DSL hard_rule，故在提交复核命令里硬校验（写必留痕、差异必调查）。
+    diff_lines = (await ctx.db.execute(select(m.InventoryCountLine).where(
+        m.InventoryCountLine.inventory_count_id == count_id,
+        m.InventoryCountLine.difference_quantity != 0,
+    ))).scalars().all()
+    missing = [line.id for line in diff_lines if not (line.notes or "").strip()]
+    if missing:
+        raise CommandError(f"以下差异行须填调查备注后才能提交复核：{missing}")
 
     count.status = "SUBMITTED"
     count.submitted_at = datetime.now()
@@ -851,3 +862,68 @@ async def adjust_inventory_count(ctx: CommandContext, payload: dict) -> dict:
     count.updated_by_id = ctx.user.id
     ctx.add_event("inventory_count_adjusted", {"count_id": count.id, "adjusted": adjusted})
     return {"adjusted": adjusted}
+
+
+@register_command(
+    "generate_stock_adjustment_from_count",
+    module="WMS",
+    title="盘点差异生成库存调整单草稿",
+    description="盘点复核后按差异行生成一张库存调整单草稿（draft），供财务核原因后过账调结存推金蝶",
+    affected_tables=("stock_adjustment", "stock_adjustment_line"),
+    supports_retry=True,
+)
+async def generate_stock_adjustment_from_count(ctx: CommandContext, payload: dict) -> dict:
+    """盘点复核（review）→生成库存调整单草稿（PRD 03b 页面6→页面7，决策⑧）。
+
+    系统库存=本系统 inventory 真相源，系统内比对（无需从金蝶导）。
+    幂等：同一盘点单已生成过调整单则回放（一盘一调）。差异行（difference_quantity≠0）→ 调整明细。
+    生成的调整单走自己的 STOCK_ADJUSTMENT 状态机（draft→confirm[FINANCE]→posted），过账才动结存/推金蝶。
+    """
+    count_id = payload.get("count_id")
+    count = (await ctx.db.execute(
+        select(m.InventoryCount).where(m.InventoryCount.id == count_id)
+    )).scalar_one_or_none()
+    if not count:
+        raise CommandError("盘点任务不存在", 404)
+    _assert_company_access(ctx.user, count.company_id)
+
+    # 幂等：一盘一调（同盘点单已有调整单 → 回放）。
+    existing = (await ctx.db.execute(
+        select(m.StockAdjustment).where(m.StockAdjustment.inventory_count_id == count_id)
+    )).scalar_one_or_none()
+    if existing:
+        return {"id": existing.id, "adjustment_number": existing.adjustment_number, "generated": False}
+
+    diff_lines = (await ctx.db.execute(
+        select(m.InventoryCountLine).where(
+            m.InventoryCountLine.inventory_count_id == count_id,
+            m.InventoryCountLine.difference_quantity != 0,
+        ).order_by(m.InventoryCountLine.id)
+    )).scalars().all()
+    if not diff_lines:
+        raise CommandError("盘点无差异，无需生成库存调整单")
+
+    adjustment = m.StockAdjustment(
+        company_id=count.company_id,
+        created_by_id=ctx.user.id,
+        adjustment_number=f"ADJ-{date.today():%y%m%d}-{str(uuid.uuid4())[:6].upper()}",
+        inventory_count_id=count.id,
+        status="DRAFT",
+        notes=f"由盘点单 {count.count_number} 差异生成",
+    )
+    ctx.db.add(adjustment)
+    await ctx.db.flush()
+    for idx, line in enumerate(diff_lines, start=1):
+        ctx.db.add(m.StockAdjustmentLine(
+            stock_adjustment_id=adjustment.id,
+            line_number=idx,
+            inventory_id=line.inventory_id,
+            inbound_number=line.inbound_number,
+            system_quantity=line.system_quantity,
+            actual_quantity=line.counted_quantity if line.counted_quantity is not None else line.system_quantity,
+            difference=line.difference_quantity,
+            reason="",  # 差异原因由财务在 confirm 前逐行填（confirm hard_rule 必填）
+            notes=line.notes or "",
+        ))
+    ctx.add_event("stock_adjustment_generated", {"adjustment_id": adjustment.id, "count_id": count.id, "line_count": len(diff_lines)})
+    return {"id": adjustment.id, "adjustment_number": adjustment.adjustment_number, "line_count": len(diff_lines), "generated": True}

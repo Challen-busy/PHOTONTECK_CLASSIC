@@ -27,6 +27,10 @@ import MovementPage from './pages/wms/MovementPage';
 import LabelsPage from './pages/wms/LabelsPage';
 import OutboundPage from './pages/wms/OutboundPage';
 import OutboundLedgerPage from './pages/wms/OutboundLedgerPage';
+import InventoryCountPage from './pages/wms/InventoryCountPage';
+import StockTransferPage from './pages/wms/StockTransferPage';
+import StockAdjustmentPage from './pages/wms/StockAdjustmentPage';
+import SubcontractPage from './pages/wms/SubcontractPage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -113,14 +117,16 @@ function AppRoutes() {
         <Route path="wms/transactions" element={<MovementPage />} />
         <Route path="wms/outbound" element={<OutboundPage />} />
         <Route path="wms/outbound-ledger" element={<OutboundLedgerPage />} />
-        <Route path="wms/subcontract" element={PH('委外加工', '仓储 WMS')} />
-        <Route path="wms/transfer" element={PH('调拨（同公司内仓间）', '仓储 WMS')} />
-        <Route path="wms/count" element={PH('盘点 / 库存调整单', '仓储 WMS')} />
+        <Route path="wms/subcontract" element={<SubcontractPage />} />
+        <Route path="wms/transfer" element={<StockTransferPage />} />
+        <Route path="wms/count" element={<InventoryCountPage />} />
+        <Route path="wms/stock-adjustment" element={<StockAdjustmentPage />} />
         <Route path="wms/locations" element={
           <MasterDataPage
             table="warehouse_location" title="库位管理" domain="仓储 WMS"
+            docType="WAREHOUSE_LOCATION" writable
             primaryCols={['code', 'zone', 'shelf', 'position']}
-            todoNote="warehouse_location 三级库位（货区/货架/货层）+ location_type（普通/流转仓/RMA/样品/待处理/NG）。流转仓「快进快出不上架」。为 __queryable__ 主数据、无 doc_type，建档/改档待后端 ➕ 写路径（EXT-02-W）。"
+            todoNote="warehouse_location 三级库位（货区/货架/货层）+ location_type（普通/流转仓/RMA/样品/待处理/NG）。流转仓「快进快出不上架」。建档/改档走引擎唯一写入路径 /api/transition(WAREHOUSE_LOCATION 流程，照段0c 单态 ACTIVE + 自环编辑)；后端未注册该流程时引擎如实返回「没有活跃的流程定义」、本页不伪造成功。"
           />
         } />
         <Route path="wms/labels" element={<LabelsPage />} />

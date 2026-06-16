@@ -85,7 +85,27 @@ def phase1_workflow_definitions(created_by_id=None):
     goods_receipt_fields = [
         "purchase_order_id", "warehouse_id", "received_by_id", "received_date",
         "inbound_type", "supplier_id", "customer_id", "reviewer_id", "notes",
+        # 段1b-2：委外加工入库弱关联委外发料单号（03a-9b 做薄，仅留痕）。
+        "source_issue_number",
     ]
+    # 段1b-2 调拨单 / 库存调整单可建档/可改字段（DRAFT 录入；子表走 SubTableEditor）。
+    stock_transfer_fields = [
+        "transfer_number", "source_location_id", "target_location_id", "notes",
+    ]
+    stock_adjustment_fields = [
+        "adjustment_number", "inventory_count_id", "notes",
+    ]
+    # 调拨完成边 effect：移库位 + 写两条 TRANSFER_OUT/IN 流水（同公司 hard_rule 兜底）。
+    stock_transfer_done_effect = ["wms.apply_stock_transfer"]
+    # 同公司硬规则（lookup DSL，引擎 04 §4.B）：源/目标库位经各自仓库 company_id 比对相等。
+    stock_transfer_same_company_hard_rule = (
+        "lookup('warehouse', id=lookup('warehouse_location', id=doc.source_location_id).warehouse_id).company_id"
+        " == lookup('warehouse', id=lookup('warehouse_location', id=doc.target_location_id).warehouse_id).company_id"
+    )
+    # 库存调整过账边 effect：调结存 + COUNT_ADJUST 流水 + 推金蝶（EXPLICIT，默认 OFF 只入 outbox）。
+    stock_adjustment_post_effect = ["wms.apply_stock_adjustment", "kingdee.enqueue_push"]
+    # 库存调整确认 hard_rule（引擎 04 §4.B）：每行差异原因必填。
+    stock_adjustment_reason_hard_rule = "all((line.reason or '') != '' for line in lines)"
 
     inquiry_to_quote_effect = ["crm.create_quotation_from_inquiry"]
     quote_to_so_effect = ["crm.create_sales_order_from_quotation"]
@@ -404,6 +424,48 @@ def phase1_workflow_definitions(created_by_id=None):
                     {"to": "CREDIT_PROCESSING", "label": "进入红字/退款处理", "editable_fields": ["notes"]},
                 ]),
                 _state("CREDIT_PROCESSING", "红字处理", [], terminal=True),
+                _state("CANCELLED", "已取消", [], terminal=True),
+            ],
+        },
+        {
+            "doc_type": "STOCK_TRANSFER",
+            "name": "WMS-调拨单流程（仅同公司内仓间）",
+            "description": "选源批次+目标库位 -> ★主任复核 -> 调拨完成（源库位减、目标库位加，写两条流水）。"
+                           "绝不跨公司（源/目标库位 company 必须相同，hard_rule + validator 双保险）；默认不推金蝶。",
+            "group_name": "WMS",
+            "states": [
+                _start(["LOGISTICS", "LOGISTICS_LEAD", "OPERATIONS"]),
+                _state("DRAFT", "录入调拨单", ["LOGISTICS", "LOGISTICS_LEAD", "OPERATIONS"], [
+                    {"to": "REVIEW", "label": "提交主任复核", "editable_fields": stock_transfer_fields},
+                    {"to": "CANCELLED", "label": "取消调拨", "editable_fields": ["notes"]},
+                ], description="# 录入调拨单\n选源批次（入仓编号）+ 目标库位，填调拨数量（≤结存）。调拨不改 SN/LOT/原厂报备客户，仅改库位。"),
+                _state("REVIEW", "主任复核", ["LOGISTICS_LEAD", "OPERATIONS"], [
+                    # 同公司 hard_rule（lookup DSL）+ 完成 AUTO effect（移库位 + 两条 TRANSFER 流水）。
+                    {"to": "DONE", "label": "复核通过完成调拨", "editable_fields": ["notes"], "effects": stock_transfer_done_effect, "hard_rules": [stock_transfer_same_company_hard_rule]},
+                    {"to": "DRAFT", "label": "退回修改", "editable_fields": ["notes"]},
+                ]),
+                _state("DONE", "调拨完成", [], terminal=True),
+                _state("CANCELLED", "已取消", [], terminal=True),
+            ],
+        },
+        {
+            "doc_type": "STOCK_ADJUSTMENT",
+            "name": "WMS-库存调整单流程（盘点差异→推金蝶）",
+            "description": "盘点差异落账单：由盘点 review 派生草稿 -> 财务核差异原因（每行必填）-> 过账"
+                           "（按差异调 inventory.quantity + 写 COUNT_ADJUST 流水 + 推金蝶库存调整单，默认 OFF）。",
+            "group_name": "WMS",
+            "states": [
+                _start(["LOGISTICS_LEAD", "FINANCE", "OPERATIONS"]),
+                _state("DRAFT", "录入库存调整单", ["LOGISTICS_LEAD", "FINANCE", "OPERATIONS"], [
+                    {"to": "CONFIRM", "label": "提交财务确认", "editable_fields": stock_adjustment_fields},
+                    {"to": "CANCELLED", "label": "取消调整", "editable_fields": ["notes"]},
+                ], description="# 录入库存调整单\n一般由盘点 review 派生（generate_stock_adjustment_from_count）；逐行核差异原因。"),
+                _state("CONFIRM", "财务确认差异原因", ["FINANCE", "OPERATIONS"], [
+                    # 每行差异原因必填（hard_rule）；确认过账 → 调结存 + COUNT_ADJUST 流水 + 推金蝶。
+                    {"to": "POSTED", "label": "确认过账并推金蝶", "editable_fields": ["notes"], "effects": stock_adjustment_post_effect, "hard_rules": [stock_adjustment_reason_hard_rule]},
+                    {"to": "DRAFT", "label": "退回修改", "editable_fields": ["notes"]},
+                ]),
+                _state("POSTED", "已过账", [], terminal=True),
                 _state("CANCELLED", "已取消", [], terminal=True),
             ],
         },

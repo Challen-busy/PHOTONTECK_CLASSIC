@@ -40,7 +40,13 @@ const STATUS_ENUM = [
 // 头部表单不录入的列（引擎自动填/系统列）
 const HEAD_FORM_HIDDEN = ['receipt_number', 'status'];
 
-export default function InboundPage() {
+/**
+ * @param {string} title         页面标题（委外入口复用时覆盖）
+ * @param {string} subtitle      副标题
+ * @param {object} presetType    委外复用：{ field, value } 固定 inbound_type 过滤 + 新建默认值
+ *                               （field 例 'inbound_type'，value 例 'OUTSOURCE_IN'）
+ */
+export default function InboundPage({ title = '入库收货', subtitle, presetType } = {}) {
   const navigate = useNavigate();
   const { message } = App.useApp();
   const [schema, setSchema] = useState(null);
@@ -63,6 +69,8 @@ export default function InboundPage() {
     const { current: _c, pageSize, keyword, status, ...rest } = params;
     const filters = {};
     if (status) filters.status = status;
+    // 委外入口：固定 inbound_type 过滤（后端补该列后生效；未补列时 /api/query 忽略未知字段）
+    if (presetType?.field && presetType?.value != null) filters[presetType.field] = presetType.value;
     for (const [k, v] of Object.entries(rest)) {
       if (v == null || v === '' || k === '_timestamp') continue;
       filters[k] = v;
@@ -77,7 +85,7 @@ export default function InboundPage() {
       message.error(e.response?.data?.detail || '加载入库单失败');
       return { data: [], success: false, total: 0 };
     }
-  }, [schema, message]);
+  }, [schema, presetType, message]);
 
   // 加载可用动作（按 doc_type）
   useEffect(() => {
@@ -104,8 +112,10 @@ export default function InboundPage() {
   }, [loadLines]);
 
   const openNew = useCallback(() => {
-    setDetail(null); setEditMode(true); setLineRows([]); setDrawerOpen(true);
-  }, []);
+    // 委外入口新建时预填 inbound_type 默认值（schema 头表单回填）
+    setDetail(presetType?.field ? { [presetType.field]: presetType.value } : null);
+    setEditMode(true); setLineRows([]); setDrawerOpen(true);
+  }, [presetType]);
 
   // 当前单据在当前状态下可执行的动作
   const docActions = useMemo(() => {
@@ -223,9 +233,11 @@ export default function InboundPage() {
     <div>
       <div style={{ marginBottom: 16 }}>
         <h2 style={{ fontSize: 26, fontWeight: 300, letterSpacing: '-0.01em', color: '#000', margin: 0, lineHeight: 1.2 }}>
-          入库收货
+          {title}
         </h2>
-        <span style={{ color: '#777169', fontSize: 13 }}>仓储 WMS · 引擎单据 <code>{DOC_TYPE}</code></span>
+        <span style={{ color: '#777169', fontSize: 13 }}>
+          {subtitle || <>仓储 WMS · 引擎单据 <code>{DOC_TYPE}</code></>}
+        </span>
       </div>
 
       <Alert

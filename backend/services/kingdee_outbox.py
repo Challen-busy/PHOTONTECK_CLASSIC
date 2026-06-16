@@ -41,6 +41,8 @@ KINGDEE_FORM_MAP: dict[str, dict] = {
     "SALES_INVOICE":       {"form_id": "ar_finarbill",    "url": "/v2/ar/ar_finarbill/batchAdd"},
     "PURCHASE_INVOICE":    {"form_id": "ap_finapbill",    "url": "/v2/ap/ap_finapbill/batchAdd"},
     "INVENTORY_ADJUST":    {"form_id": "im_otherinbill",  "url": "/v2/im/im_otherinbill/batchAdd"},
+    # 段1b-2：库存调整单（盘点差异落账）→ 金蝶其他入库/出库单（按差异正负，实施对接细化，07b）。
+    "STOCK_ADJUSTMENT":    {"form_id": "im_otherinbill",  "url": "/v2/im/im_otherinbill/batchAdd"},
     "ADVANCE_RECEIPT":     {"form_id": "cas_recbill",     "url": "/v2/cas/cas_recbill/addSave"},
     "ADVANCE_PAYMENT":     {"form_id": "cas_paybill",     "url": "/v2/cas/cas_paybill/addSave"},
 }
@@ -49,7 +51,7 @@ KINGDEE_FORM_MAP: dict[str, dict] = {
 def _biz_no(doc) -> str:
     """业务单号（=幂等键）：取单上的 *_number 标识列。"""
     for f in ("order_number", "receipt_number", "shipment_number", "invoice_number",
-              "receipt_number", "payment_number", "number"):
+              "receipt_number", "payment_number", "adjustment_number", "transfer_number", "number"):
         v = getattr(doc, f, None)
         if v:
             return str(v)

@@ -59,6 +59,7 @@ export const getWmsCountDetail = (id) => api.get(`/wms/counts/${id}`);
 export const updateWmsCountLine = (countId, lineId, data) => api.post(`/wms/counts/${countId}/lines/${lineId}`, data);
 export const submitWmsCount = (id) => api.post(`/wms/counts/${id}/submit`);
 export const adjustWmsCount = (id) => api.post(`/wms/counts/${id}/adjust`);
+export const generateAdjustmentFromCount = (id) => api.post(`/wms/counts/${id}/generate-adjustment`);
 export const getWmsReport = (name, params = {}) => api.get(`/wms/reports/${name}`, { params });
 export const importWmsInventoryCsv = (formData) => api.post('/wms/import/inventory-csv', formData, {
   headers: { 'Content-Type': 'multipart/form-data' },

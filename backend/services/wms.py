@@ -563,3 +563,149 @@ def shipped_date_after_cutoff_failures(doc: m.ShipmentRequest) -> list[str]:
         f"出库日期 {sd.isoformat()} 在盘点截止 27 号之后，按规则应算下月 1 号（{expected.isoformat()}）"
     ]
 
+
+# ============================================================
+# 段1b-2 · 调拨单 / 库存调整单 域副作用（PRD 03b 页面5 / 页面7）
+#
+# 这里只写「领域数据变更」（库位移动 / 结存调整 + 库存流水 + 估值）；effect 注册壳在
+# wms_workflow_extensions.py（同入库/出库 effect 的归属：副作用注册器在 Workflow 侧）。
+# 唯一写入路径不破坏：由 execute_transition 的 effect 派发触发，落在 Command 事务里。
+# ============================================================
+
+def transfer_company_failures(
+    source_location: m.WarehouseLocation | None,
+    target_location: m.WarehouseLocation | None,
+    source_warehouse: m.Warehouse | None,
+    target_warehouse: m.Warehouse | None,
+) -> list[str]:
+    """调拨同公司硬校验（PRD 03b 页面5「绝不跨公司」，蓝图 §0/§5.6）。
+
+    库位无 company_id（挂在仓库上），故经 warehouse.company_id 比对。源/目标库位都须存在，
+    且两仓 company_id 必须相同。与 hard_rule(lookup DSL) 双保险（_company_filter 在命令层兜底）。
+    """
+    failures: list[str] = []
+    if not source_location or not target_location:
+        failures.append("调拨单源库位/目标库位不存在")
+        return failures
+    if not source_warehouse or not target_warehouse:
+        failures.append("调拨单源仓/目标仓不存在")
+        return failures
+    if source_warehouse.company_id != target_warehouse.company_id:
+        failures.append("调拨绝不跨公司：源库位与目标库位必须属于同一家公司")
+    return failures
+
+
+async def apply_stock_transfer(
+    db: AsyncSession,
+    doc: m.StockTransfer,
+    *,
+    command_log_id: int | None = None,
+    created_by_id: int | None = None,
+) -> list[str]:
+    """调拨完成 effect：改 inventory.location_id（按行）+ 写两条 InventoryMovement(TRANSFER_OUT/IN)。
+
+    同公司双保险：每行库存须与目标库位同公司，否则报错回滚整单（execute_transition 捕获）。
+    调拨不改批次 SN/LOT/原厂报备客户、不改结存总量，仅移库位（PRD 页面5）。
+    """
+    target = (await db.execute(
+        select(m.WarehouseLocation).where(m.WarehouseLocation.id == doc.target_location_id)
+    )).scalar_one_or_none()
+    source = (await db.execute(
+        select(m.WarehouseLocation).where(m.WarehouseLocation.id == doc.source_location_id)
+    )).scalar_one_or_none()
+    if not target or not source:
+        raise ValueError("调拨单库位不存在")
+    target_wh = (await db.execute(
+        select(m.Warehouse).where(m.Warehouse.id == target.warehouse_id)
+    )).scalar_one_or_none()
+    source_wh = (await db.execute(
+        select(m.Warehouse).where(m.Warehouse.id == source.warehouse_id)
+    )).scalar_one_or_none()
+    failures = transfer_company_failures(source, target, source_wh, target_wh)
+    if failures:
+        raise ValueError("; ".join(failures))
+
+    lines = (await db.execute(
+        select(m.StockTransferLine).where(m.StockTransferLine.stock_transfer_id == doc.id)
+        .order_by(m.StockTransferLine.line_number)
+    )).scalars().all()
+    logs: list[str] = []
+    for line in lines:
+        inv = (await db.execute(
+            select(m.Inventory).where(m.Inventory.id == line.inventory_id).with_for_update()
+        )).scalar_one_or_none()
+        if not inv:
+            raise ValueError(f"调拨明细#{line.id} 库存不存在")
+        if inv.company_id != doc.company_id:
+            raise ValueError("调拨批次与调拨单不属于同一家公司")
+        qty = _num(line.quantity)
+        # 移库位（批次整行移动；颗粒度=批次行，PRD 页面5 调拨不拆 SN/LOT）。
+        inv.location_id = target.id
+        inv.location_code = target.code
+        _add_inventory_movement(
+            db, company_id=doc.company_id, movement_type="TRANSFER_OUT",
+            material_id=inv.material_id, warehouse_id=source.warehouse_id, inventory_id=inv.id,
+            quantity_delta=-qty, unit_cost=_num(inv.unit_cost),
+            source_doc_type="STOCK_TRANSFER", source_doc_id=doc.id,
+            command_log_id=command_log_id, created_by_id=created_by_id,
+            notes=f"调拨出 {doc.transfer_number} → 库位#{target.id}",
+        )
+        _add_inventory_movement(
+            db, company_id=doc.company_id, movement_type="TRANSFER_IN",
+            material_id=inv.material_id, warehouse_id=target.warehouse_id, inventory_id=inv.id,
+            quantity_delta=qty, unit_cost=_num(inv.unit_cost),
+            source_doc_type="STOCK_TRANSFER", source_doc_id=doc.id,
+            command_log_id=command_log_id, created_by_id=created_by_id,
+            notes=f"调拨入 {doc.transfer_number} ← 库位#{source.id}",
+        )
+        logs.append(f"stock_transfer_line#{line.id} moved inventory#{inv.id} → location#{target.id}")
+    return logs
+
+
+async def apply_stock_adjustment(
+    db: AsyncSession,
+    doc: m.StockAdjustment,
+    *,
+    command_log_id: int | None = None,
+    created_by_id: int | None = None,
+) -> list[str]:
+    """库存调整单过账 effect：按差异调 inventory.quantity + 写 InventoryMovement(COUNT_ADJUST) + 估值。
+
+    difference = actual − system；调整后 inventory.quantity = actual_quantity（系统库存=本系统真相源）。
+    金蝶推送由 wms_workflow_extensions 在 posted 边显式列 kingdee.enqueue_push（默认 OFF 只入 outbox）。
+    """
+    lines = (await db.execute(
+        select(m.StockAdjustmentLine).where(m.StockAdjustmentLine.stock_adjustment_id == doc.id)
+        .order_by(m.StockAdjustmentLine.line_number)
+    )).scalars().all()
+    logs: list[str] = []
+    for line in lines:
+        diff = _num(line.difference)
+        if diff == 0:
+            continue
+        inv = (await db.execute(
+            select(m.Inventory).where(m.Inventory.id == line.inventory_id).with_for_update()
+        )).scalar_one_or_none()
+        if not inv:
+            raise ValueError(f"调整明细#{line.id} 库存不存在")
+        if inv.company_id != doc.company_id:
+            raise ValueError("调整批次与调整单不属于同一家公司")
+        inv.quantity = _num(line.actual_quantity)
+        if _num(inv.reserved_quantity) > _num(inv.quantity):
+            inv.reserved_quantity = inv.quantity
+        inv.status = "AVAILABLE" if _num(inv.quantity) > _num(inv.reserved_quantity) else "RESERVED"
+        await apply_inventory_adjustment_cost(
+            db, inv, quantity_delta=diff, tx_date=date.today(),
+            reference_type="STOCK_ADJUSTMENT_LINE", reference_id=line.id,
+        )
+        _add_inventory_movement(
+            db, company_id=doc.company_id, movement_type="COUNT_ADJUST",
+            material_id=inv.material_id, warehouse_id=inv.warehouse_id, inventory_id=inv.id,
+            quantity_delta=diff, unit_cost=_num(inv.unit_cost),
+            source_doc_type="STOCK_ADJUSTMENT", source_doc_id=doc.id,
+            command_log_id=command_log_id, created_by_id=created_by_id,
+            notes=f"库存调整 {doc.adjustment_number} 原因={line.reason}",
+        )
+        logs.append(f"stock_adjustment_line#{line.id} adjusted inventory#{inv.id} by {diff}")
+    return logs
+

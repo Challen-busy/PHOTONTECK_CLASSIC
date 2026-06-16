@@ -73,7 +73,12 @@ const EXCEPTION_STAGES = [
   { label: '盘点', value: '盘点' },
 ];
 
-export default function OutboundPage() {
+/**
+ * @param {string} title       页面标题（委外发料入口复用时覆盖）
+ * @param {string} subtitle    副标题
+ * @param {object} presetType  委外复用：{ field, value } 固定 outbound_type 过滤 + 新建默认值
+ */
+export default function OutboundPage({ title = '出库发货', subtitle, presetType } = {}) {
   const navigate = useNavigate();
   const { message } = App.useApp();
   const [schema, setSchema] = useState(null);
@@ -106,6 +111,8 @@ export default function OutboundPage() {
     const { current: _c, pageSize, keyword, status, ...rest } = params;
     const filters = {};
     if (status) filters.status = status;
+    // 委外发料入口：固定 outbound_type 过滤（后端补该列后生效；未补列时 /api/query 忽略未知字段）
+    if (presetType?.field && presetType?.value != null) filters[presetType.field] = presetType.value;
     for (const [k, v] of Object.entries(rest)) {
       if (v == null || v === '' || k === '_timestamp') continue;
       filters[k] = v;
@@ -120,7 +127,7 @@ export default function OutboundPage() {
       message.error(e.response?.data?.detail || '加载出库单失败');
       return { data: [], success: false, total: 0 };
     }
-  }, [schema, message]);
+  }, [schema, presetType, message]);
 
   useEffect(() => {
     getTransitions().then(({ data }) => {
@@ -151,12 +158,14 @@ export default function OutboundPage() {
   }, [loadLines]);
 
   const openNew = useCallback(() => {
-    setDetail(null); setEditMode(true); setLineRows([]);
+    // 委外发料入口新建时预填 outbound_type 默认值（schema 头表单回填）
+    setDetail(presetType?.field ? { [presetType.field]: presetType.value } : null);
+    setEditMode(true); setLineRows([]);
     setHeadCustomerId(undefined);
     setException({ type: undefined, stage: undefined, desc: '' });
     setDrawerTab('lines');
     setDrawerOpen(true);
-  }, []);
+  }, [presetType]);
 
   // 当前单据在当前状态下可执行的动作（按 from_state；角色已在 /api/transitions 服务端过滤）
   const docActions = useMemo(() => {
@@ -303,9 +312,11 @@ export default function OutboundPage() {
     <div>
       <div style={{ marginBottom: 16 }}>
         <h2 style={{ fontSize: 26, fontWeight: 300, letterSpacing: '-0.01em', color: '#000', margin: 0, lineHeight: 1.2 }}>
-          出库发货
+          {title}
         </h2>
-        <span style={{ color: '#777169', fontSize: 13 }}>仓储 WMS · 引擎单据 <code>{DOC_TYPE}</code> · 出库单 PD 号 + 拣货批次子表 + 两道关</span>
+        <span style={{ color: '#777169', fontSize: 13 }}>
+          {subtitle || <>仓储 WMS · 引擎单据 <code>{DOC_TYPE}</code> · 出库单 PD 号 + 拣货批次子表 + 两道关</>}
+        </span>
       </div>
 
       <Alert

@@ -107,3 +107,86 @@ async def apply_shipment_costs(
         command_log_id=command_log_id,
         created_by_id=user.id,
     )
+
+
+# ============================================================
+# 段1b-2 · 调拨单（STOCK_TRANSFER）— 同公司校验 + 完成移库 effect
+# ============================================================
+
+@register_transition_validator(
+    "wms.validate_stock_transfer_same_company",
+    doc_type="STOCK_TRANSFER",
+    to_state="DONE",
+)
+async def validate_stock_transfer_same_company(
+    db: AsyncSession,
+    doc_type: str,
+    doc,
+    to_state: str | None,
+    user: m.UserAccount,
+) -> list[str]:
+    # 同公司双保险（除边级 hard_rule lookup DSL 外的领域校验）：源/目标库位经仓库 company_id 比对。
+    from sqlalchemy import select
+
+    source = (await db.execute(
+        select(m.WarehouseLocation).where(m.WarehouseLocation.id == doc.source_location_id)
+    )).scalar_one_or_none()
+    target = (await db.execute(
+        select(m.WarehouseLocation).where(m.WarehouseLocation.id == doc.target_location_id)
+    )).scalar_one_or_none()
+    source_wh = target_wh = None
+    if source:
+        source_wh = (await db.execute(
+            select(m.Warehouse).where(m.Warehouse.id == source.warehouse_id)
+        )).scalar_one_or_none()
+    if target:
+        target_wh = (await db.execute(
+            select(m.Warehouse).where(m.Warehouse.id == target.warehouse_id)
+        )).scalar_one_or_none()
+    return wms.transfer_company_failures(source, target, source_wh, target_wh)
+
+
+@register_transition_effect(
+    "wms.apply_stock_transfer",
+    doc_type="STOCK_TRANSFER",
+    to_state="DONE",
+)
+async def apply_stock_transfer(
+    db: AsyncSession,
+    doc_type: str,
+    doc,
+    to_state: str | None,
+    user: m.UserAccount,
+    command_log_id: int | None,
+) -> list[str]:
+    return await wms.apply_stock_transfer(
+        db,
+        doc,
+        command_log_id=command_log_id,
+        created_by_id=user.id,
+    )
+
+
+# ============================================================
+# 段1b-2 · 库存调整单（STOCK_ADJUSTMENT）— 过账调结存 effect
+# ============================================================
+
+@register_transition_effect(
+    "wms.apply_stock_adjustment",
+    doc_type="STOCK_ADJUSTMENT",
+    to_state="POSTED",
+)
+async def apply_stock_adjustment(
+    db: AsyncSession,
+    doc_type: str,
+    doc,
+    to_state: str | None,
+    user: m.UserAccount,
+    command_log_id: int | None,
+) -> list[str]:
+    return await wms.apply_stock_adjustment(
+        db,
+        doc,
+        command_log_id=command_log_id,
+        created_by_id=user.id,
+    )

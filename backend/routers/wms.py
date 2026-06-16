@@ -832,6 +832,24 @@ async def adjust_count(
     return {"success": True, "adjusted": result["adjusted"]}
 
 
+@router.post("/counts/{count_id}/generate-adjustment")
+async def generate_count_adjustment(
+    count_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """盘点差异 → 生成库存调整单草稿（决策⑧：走 STOCK_ADJUSTMENT 状态机，
+    财务核差异原因后 confirm→post 才调结存+推金蝶；不在此直接改库存）。"""
+    result = await _run_command(
+        db,
+        user,
+        "generate_stock_adjustment_from_count",
+        {"count_id": count_id},
+        idempotency_key=f"generate_stock_adjustment_from_count:{count_id}",
+    )
+    return {"success": True, **result}
+
+
 async def _inbound_daily_rows(db: AsyncSession, user: m.UserAccount, day: date):
     stmt = (
         select(m.GoodsReceiptLine, m.GoodsReceipt)

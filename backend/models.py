@@ -516,7 +516,10 @@ class Warehouse(AuditMixin, Base):
 
 class WarehouseLocation(Base):
     __tablename__ = "warehouse_location"
-    __queryable__ = True
+    # 段1b-2：库位需可建档/改档（PRD 03b 页面5 调拨依赖库位主数据），挂轻量单状态机
+    #   WAREHOUSE_LOCATION（单态 ACTIVE，照段0c master_data_workflows 套路）。仍 __queryable__
+    #   语义（has __doc_types__ → exposed），前端经 execute_transition 建/改库位。
+    __doc_types__ = ("WAREHOUSE_LOCATION",)
     id = Column(Integer, primary_key=True)
     warehouse_id = Column(Integer, ForeignKey("warehouse.id"), nullable=False)
     code = Column(String(30), nullable=False)
@@ -527,6 +530,9 @@ class WarehouseLocation(Base):
     # --- 段0b 主数据扩充（PRD 02 页面6 库位）---
     location_type = Column(String(15), default="NORMAL")  # 普通/流转仓/RMA/样品/待处理/NG（驱动 WMS 行为，本页只存）
     capacity = Column(Numeric(12, 2), nullable=True)      # 容量（蓝图 §3.4）
+    # 段1b-2：轻量单状态机 WAREHOUSE_LOCATION（单态 ACTIVE）。execute_transition 编辑路径读 doc.status，
+    #   故纯字典库位也需一个 status 列；建档即 ACTIVE，自环编辑（照段0c master_data 套路）。
+    status = Column(String(15), default="ACTIVE")
     __table_args__ = (UniqueConstraint("warehouse_id", "code"),)
 
 
@@ -655,6 +661,9 @@ class InventoryCountLine(Base):
     batch_number = Column(String(50), default="")
     inbound_number = Column(String(50), default="")
     serial_lot_number = Column(String(100), default="")
+    # 段1b-2：盘点表「分性质视图」（走流程/待處理/貨/樣品/帶貨/RMA/NG品，PRD 03b 页面6）所需性质列。
+    # 建盘点行时从 inventory.goods_nature 快照带入，供前端按性质分 sheet 呈现。
+    goods_nature = Column(String(30), default="")
     system_quantity = Column(Numeric(12, 2), nullable=False)
     counted_quantity = Column(Numeric(12, 2), nullable=True)
     difference_quantity = Column(Numeric(12, 2), default=0)
@@ -669,6 +678,92 @@ class InventoryCountLine(Base):
         UniqueConstraint("inventory_count_id", "inventory_id"),
         Index("ix_inventory_count_line_count", "inventory_count_id"),
     )
+
+
+# ============================================================
+# 段1b-2 · 调拨单 / 库存调整单（PRD 03b 页面5 调拨 · 页面7 库存调整单）
+#
+# 两类新单据（引擎当前无 doc_type，照段0c/段1 套路 ➕ 新建模型 + __doc_types__ +
+# 轻量 WorkflowDefinition）。调拨=同公司内仓/库位间移库（绝不跨公司）；库存调整单=
+# 盘点差异落账（差异原因必填 → posted 调 inventory.quantity + COUNT_ADJUST 流水 + 推金蝶）。
+# 引擎五条不破坏：均为引擎扩展点（新实体不动核心），写仍走 execute_transition / @register_command。
+# ============================================================
+
+class StockTransfer(AuditMixin, Base):
+    """WMS: 调拨单（仅同公司内仓/库位间移库，PRD 03b 页面5）。
+
+    源库位.company_id == 目标库位.company_id（同公司 hard_rule + _company_filter 双保险）。
+    done AUTO effect：改 inventory.location_id + 写两条 InventoryMovement(TRANSFER_OUT/TRANSFER_IN)。
+    调拨为公司内移库，不改财务存货总量，默认不推金蝶（PRD 页面5 推送默认否）。
+    """
+    __tablename__ = "stock_transfer"
+    __doc_types__ = ("STOCK_TRANSFER",)
+    id = Column(Integer, primary_key=True)
+    transfer_number = Column(String(40), nullable=False, index=True)
+    source_location_id = Column(Integer, ForeignKey("warehouse_location.id"), nullable=False)
+    target_location_id = Column(Integer, ForeignKey("warehouse_location.id"), nullable=False)
+    status = Column(String(20), default="DRAFT")
+    notes = Column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("company_id", "transfer_number"),)
+
+
+class StockTransferLine(Base):
+    """WMS: 调拨明细（发出哪些批次 / 数量），PRD 03b 页面5 子表。"""
+    __tablename__ = "stock_transfer_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    stock_transfer_id = Column(Integer, ForeignKey("stock_transfer.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=False)
+    inbound_number = Column(String(50), default="")   # 入仓编号（批次定位，串货隔离用，不改 SN/LOT）
+    quantity = Column(Numeric(12, 2), nullable=False)
+    notes = Column(Text, default="")
+
+    inventory = relationship("Inventory")
+    __table_args__ = (UniqueConstraint("stock_transfer_id", "line_number"),)
+
+
+class StockAdjustment(AuditMixin, Base):
+    """WMS: 库存调整单（盘点差异 → 推金蝶，PRD 03b 页面7）。
+
+    一张 = 一次盘点的一批差异行；关联盘点单 inventory_count_id。
+    draft → confirm[FINANCE]（每行差异原因必填 hard_rule）→ posted（AUTO effect：
+    按差异调 inventory.quantity + 写 InventoryMovement(COUNT_ADJUST) + 推金蝶库存调整单，默认 OFF）。
+    """
+    __tablename__ = "stock_adjustment"
+    __doc_types__ = ("STOCK_ADJUSTMENT",)
+    id = Column(Integer, primary_key=True)
+    adjustment_number = Column(String(40), nullable=False, index=True)
+    inventory_count_id = Column(Integer, ForeignKey("inventory_count.id"), nullable=True, index=True)
+    status = Column(String(20), default="DRAFT")
+    notes = Column(Text, default="")
+
+    inventory_count = relationship("InventoryCount")
+    __table_args__ = (UniqueConstraint("company_id", "adjustment_number"),)
+
+
+class StockAdjustmentLine(Base):
+    """WMS: 库存调整明细（盘点带出系统/实际/差异 + 差异原因），PRD 03b 页面7 子表。
+
+    reason 值集：出库录错 OUT_ERR / 入库录错 IN_ERR / 实物损 PHYS_LOSS / 实物溢 PHYS_GAIN / 其他 OTHER。
+    差异原因必填（confirm hard_rule，引擎 04 §4.B）。difference = actual_quantity − system_quantity。
+    """
+    __tablename__ = "stock_adjustment_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    stock_adjustment_id = Column(Integer, ForeignKey("stock_adjustment.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=False)
+    inbound_number = Column(String(50), default="")
+    system_quantity = Column(Numeric(12, 2), nullable=False)
+    actual_quantity = Column(Numeric(12, 2), nullable=False)
+    difference = Column(Numeric(12, 2), default=0)
+    reason = Column(String(20), default="")   # OUT_ERR / IN_ERR / PHYS_LOSS / PHYS_GAIN / OTHER
+    notes = Column(Text, default="")
+
+    inventory = relationship("Inventory")
+    __table_args__ = (UniqueConstraint("stock_adjustment_id", "line_number"),)
 
 
 class SupplierSnRule(AuditMixin, Base):
@@ -726,10 +821,15 @@ class GoodsReceipt(AuditMixin, Base):
     # --- 段1a 入库头部扩充（PRD 03a-1 表头「基本進庫」）---
     # inbound_type：外购入库 PURCHASE / 其他入库[样品] OTHER / 退货入库 RETURN / 调拨入库 TRANSFER /
     #   委外加工入库 SUBCONTRACT（访谈 02:37、03a-9 委外做薄）。纯值集，默认外购入库。
+    # inbound_type 值集（段1b-2 追加 OUTSOURCE_IN 委外加工入库，03a-9b 做薄）：
+    #   PURCHASE 外购入库 / OTHER 其他入库[样品] / RETURN 退货入库 / TRANSFER 调拨入库 / OUTSOURCE_IN 委外加工入库。
+    #   委外加工入库复用整套 GOODS_RECEIPT 流程/PA 审核/STOCKED_IN effect，不新增 doc_type/状态机。
     inbound_type = Column(String(20), default="PURCHASE")
-    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)   # 头部供应商（外箱识别后选，行级亦带）
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)   # 头部供应商（外箱识别后选，行级亦带）；委外加工入库时语义=委外方
     customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)   # 客户（可后补，蓝图 §3.4）
     reviewer_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 审核 PA（按供应商自动带出）
+    # 段1b-2：委外加工入库弱关联对应委外发料单号（仅留痕，不做数量勾稽强校验，03a-9b 做薄）。
+    source_issue_number = Column(String(50), default="")
 
 
 class GoodsReceiptLine(Base):

@@ -84,6 +84,12 @@ def master_data_workflow_definitions(created_by_id=None):
         "customer_id", "name", "doc_kind", "region", "needs_stamp", "needs_countersign",
         "header_title", "bank_block", "render_html", "status", "is_active", "notes",
     ]
+    # 段1b-2：库位建档字段（PRD 03b 页面5 调拨依赖库位主数据）。warehouse_id 建档时必选；
+    #   zone/shelf/position 三级 = 货区/货架/货层；location_type 驱动 WMS 行为（NORMAL/TRANSIT/RMA/...）。
+    warehouse_location_fields = [
+        "warehouse_id", "code", "zone", "shelf", "position",
+        "location_type", "capacity", "is_active",
+    ]
 
     # (doc_type, 中文名, 维护角色, 可建档字段, 分组)
     specs = [
@@ -95,6 +101,7 @@ def master_data_workflow_definitions(created_by_id=None):
         ("PRODUCT_LINE", "产线建档", ["ADMIN", "PRODUCT_MANAGER"], product_line_fields, "主数据"),
         ("LABEL_TEMPLATE", "标签模板", ["ADMIN", "LOGISTICS"], label_template_fields, "配置模板"),
         ("DOC_TEMPLATE", "单据模板", ["ADMIN", "LOGISTICS"], doc_template_fields, "配置模板"),
+        ("WAREHOUSE_LOCATION", "库位建档", ["ADMIN", "LOGISTICS_LEAD"], warehouse_location_fields, "主数据"),
     ]
 
     defs = []
