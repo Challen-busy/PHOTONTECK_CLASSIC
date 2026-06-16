@@ -255,7 +255,8 @@ async def apply_shipment_costs(
             continue
         valuation = await _valuation_row(db, inv.company_id, inv.material_id)
         unit_cost = _num(inv.unit_cost) or _num(valuation.current_unit_cost)
-        qty = _num(line.quantity)
+        # 出库数量负数口径，结转/扣值取 abs（PRD 03b 第7点）。
+        qty = abs(_num(line.quantity))
         total_cost = qty * unit_cost
         inv.unit_cost = unit_cost
         inv.total_cost = _num(inv.quantity) * unit_cost
@@ -475,9 +476,16 @@ async def validate_goods_receipt_constraints(db: AsyncSession, doc: m.GoodsRecei
 
 
 async def validate_shipment_constraints(db: AsyncSession, doc: m.ShipmentRequest) -> list[str]:
-    """出库单保存/确认时的库存和预留校验。"""
+    """出库单保存/确认时的库存、预留、串货隔离校验。
+
+    串货隔离（蓝图 §5.2，PRD 03b 页面2 hard_rule）：每行批次的原厂报备客户
+    必须 ∈ {本单客户, 空}，否则阻断并指名批次（"报备给客户 A 的货不能出给客户 B"）。
+    数量口径：出庫登記显示负数，校验/扣结存按 abs() 取绝对值（PRD 03b 第7点）。
+    委外发料（outbound_type=OUTSOURCE）无销售订单/客户，跳过串货与客户预留校验，只验结存。
+    """
     failures: list[str] = []
     customer_id = None
+    is_outsource = (doc.outbound_type or "CUSTOMER") == "OUTSOURCE"
     barcode_requirements = doc.barcode_requirements or ""
     if doc.sales_order_id:
         so = (await db.execute(select(m.SalesOrder).where(m.SalesOrder.id == doc.sales_order_id))).scalar_one_or_none()
@@ -497,15 +505,23 @@ async def validate_shipment_constraints(db: AsyncSession, doc: m.ShipmentRequest
         if not inv:
             failures.append(f"发货明细#{line.id}: 库存批次不存在")
             continue
-        qty = _num(line.quantity)
+        qty = abs(_num(line.quantity))
         if qty <= 0:
-            failures.append(f"发货明细#{line.id}: 出库数量必须大于 0")
+            failures.append(f"发货明细#{line.id}: 出库数量不能为 0")
             continue
         if _num(inv.quantity) < qty:
             failures.append(f"发货明细#{line.id}: 库存 {inv.inbound_number or inv.batch_number} 数量不足")
             continue
 
-        if customer_id:
+        # 串货隔离：批次原厂报备客户 ∈ {本单客户, 空}，否则阻断（委外发料无客户，跳过）。
+        if not is_outsource and customer_id and inv.reported_customer_id and inv.reported_customer_id != customer_id:
+            failures.append(
+                f"发货明细#{line.id}: 库存 {inv.inbound_number or inv.batch_number} "
+                f"为原厂报备客户#{inv.reported_customer_id} 专属，不能出给本单客户#{customer_id}（串货隔离）"
+            )
+            continue
+
+        if not is_outsource and customer_id:
             other_reserved = await active_reserved_quantity(db, inv.id, exclude_customer_id=customer_id)
             if other_reserved > 0:
                 failures.append(
@@ -526,4 +542,24 @@ async def validate_shipment_constraints(db: AsyncSession, doc: m.ShipmentRequest
                 f"不满足条码要求：{'; '.join(barcode_failures)}"
             )
     return failures
+
+
+def shipped_date_after_cutoff_failures(doc: m.ShipmentRequest) -> list[str]:
+    """出库日期「27 号后算下月 1 号」校验（PRD 03b 页面2 第8点、访谈 05 L1168-1192）。
+
+    盘点截止日 = 每月 27 号；shipped_date 在 27 号之后（28~月末）须校正为下月 1 号。
+    只判定不改写（引擎 04 §4：validator 只读），由前端/制单按提示改日期。
+    """
+    sd = doc.shipped_date
+    if not sd:
+        return []
+    if sd.day <= 27:
+        return []
+    if sd.month == 12:
+        expected = date(sd.year + 1, 1, 1)
+    else:
+        expected = date(sd.year, sd.month + 1, 1)
+    return [
+        f"出库日期 {sd.isoformat()} 在盘点截止 27 号之后，按规则应算下月 1 号（{expected.isoformat()}）"
+    ]
 

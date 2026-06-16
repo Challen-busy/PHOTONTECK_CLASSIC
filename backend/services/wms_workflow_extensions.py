@@ -33,6 +33,11 @@ async def validate_goods_receipt(
 @register_transition_validator(
     "wms.validate_shipment",
     doc_type="SHIPMENT",
+    to_state="PICKING_RECHECK",
+)
+@register_transition_validator(
+    "wms.validate_shipment",
+    doc_type="SHIPMENT",
     to_state="SALES_OUTBOUND",
 )
 async def validate_shipment(
@@ -42,7 +47,24 @@ async def validate_shipment(
     to_state: str | None,
     user: m.UserAccount,
 ) -> list[str]:
+    # 库存/预留/串货隔离校验：进互检（PICKING_RECHECK）与出库（SALES_OUTBOUND）两关均跑。
     return await wms.validate_shipment_constraints(db, doc)
+
+
+@register_transition_validator(
+    "wms.validate_shipment_outbound_date",
+    doc_type="SHIPMENT",
+    to_state="SALES_OUTBOUND",
+)
+async def validate_shipment_outbound_date(
+    db: AsyncSession,
+    doc_type: str,
+    doc,
+    to_state: str | None,
+    user: m.UserAccount,
+) -> list[str]:
+    # 出库日期「27 号后算下月 1 号」（PRD 03b 页面2 第8点）。
+    return wms.shipped_date_after_cutoff_failures(doc)
 
 
 @register_transition_effect(

@@ -25,6 +25,8 @@ import InboundPage from './pages/wms/InboundPage';
 import InventoryPage from './pages/wms/InventoryPage';
 import MovementPage from './pages/wms/MovementPage';
 import LabelsPage from './pages/wms/LabelsPage';
+import OutboundPage from './pages/wms/OutboundPage';
+import OutboundLedgerPage from './pages/wms/OutboundLedgerPage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -109,7 +111,8 @@ function AppRoutes() {
         <Route path="wms/inbound" element={<InboundPage />} />
         <Route path="wms/inventory" element={<InventoryPage />} />
         <Route path="wms/transactions" element={<MovementPage />} />
-        <Route path="wms/outbound" element={PH('出库发货', '仓储 WMS')} />
+        <Route path="wms/outbound" element={<OutboundPage />} />
+        <Route path="wms/outbound-ledger" element={<OutboundLedgerPage />} />
         <Route path="wms/subcontract" element={PH('委外加工', '仓储 WMS')} />
         <Route path="wms/transfer" element={PH('调拨（同公司内仓间）', '仓储 WMS')} />
         <Route path="wms/count" element={PH('盘点 / 库存调整单', '仓储 WMS')} />

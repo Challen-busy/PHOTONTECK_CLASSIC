@@ -566,7 +566,9 @@ async def apply_shipment_stock_out(
             result = await db.execute(select(m.Inventory).where(m.Inventory.id == line.inventory_id).with_for_update())
             inventory = result.scalar_one_or_none()
         if inventory:
-            remaining = _num(line.quantity)
+            # 出库数量负数口径（出庫登記沿用），扣结存取 abs（PRD 03b 第7点）。
+            qty_abs = abs(_num(line.quantity))
+            remaining = qty_abs
             if sales_order:
                 reservations = await _all(
                     db,
@@ -588,10 +590,10 @@ async def apply_shipment_stock_out(
                     else:
                         reservation.quantity = new_qty
                     remaining -= consume
-            inventory.quantity = _num(inventory.quantity) - _num(line.quantity)
-            inventory.reserved_quantity = max(_num(inventory.reserved_quantity) - _num(line.quantity), Decimal("0"))
+            inventory.quantity = _num(inventory.quantity) - qty_abs
+            inventory.reserved_quantity = max(_num(inventory.reserved_quantity) - qty_abs, Decimal("0"))
             inventory.status = "AVAILABLE" if _num(inventory.quantity) > _num(inventory.reserved_quantity) else "RESERVED"
-            logs.append(f"reduced inventory#{inventory.id} by {line.quantity}")
+            logs.append(f"reduced inventory#{inventory.id} by {qty_abs}")
         if line.sales_order_line_id:
             so_line = await _one(db, m.SalesOrderLine, m.SalesOrderLine.id == line.sales_order_line_id)
             if so_line:

@@ -83,6 +83,7 @@ const buildMenuItems = (todoCount, isAdmin) => {
         { key: '/wms/inventory', label: '库存' },
         { key: '/wms/transactions', label: '库存流水 / 事务台账' },
         { key: '/wms/outbound', label: '出库发货' },
+        { key: '/wms/outbound-ledger', label: '出库台账 / 基本出库' },
         { key: '/wms/subcontract', label: '委外加工' },
         { key: '/wms/transfer', label: '调拨' },
         { key: '/wms/count', label: '盘点 / 库存调整' },

@@ -8,6 +8,16 @@ export const WMS_STATUS_STYLE = {
   PA_REVIEW:  { bg: '#eaf1fb', color: '#1f5aa8' },
   STOCKED_IN: { bg: '#ebf5ee', color: '#1f8f3a' },
   CANCELLED:  { bg: '#fdecea', color: '#b42318' },
+  // SHIPMENT 出库单 10 态（引擎实况 seed：DRAFT→FINANCE_APPROVAL→EXCEPTION_APPROVAL→
+  // PACKING_LABELING→PICKING_RECHECK→SALES_OUTBOUND→CUSTOMER_RECEIVED/RETURN_REQUESTED/CANCELLED）
+  DRAFT:             { bg: '#fbf5e4', color: '#b8860b' },
+  FINANCE_APPROVAL:  { bg: '#eaf1fb', color: '#1f5aa8' },
+  EXCEPTION_APPROVAL:{ bg: '#fdecea', color: '#b42318' },
+  PACKING_LABELING:  { bg: '#f1ebfa', color: '#6b46c1' },
+  PICKING_RECHECK:   { bg: '#e7f3f5', color: '#0e7490' },
+  SALES_OUTBOUND:    { bg: '#ebf5ee', color: '#1f8f3a' },
+  CUSTOMER_RECEIVED: { bg: '#ebf5ee', color: '#1f8f3a' },
+  RETURN_REQUESTED:  { bg: '#fdecea', color: '#b42318' },
   // 库存 7 态（AVAILABLE/RESERVED 引擎已有；其余 PRD E2 扩展，后端补值后自动显示）
   AVAILABLE:   { bg: '#ebf5ee', color: '#1f8f3a' },
   RESERVED:    { bg: '#fbf5e4', color: '#b8860b' },

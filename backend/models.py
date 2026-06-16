@@ -791,6 +791,12 @@ class ShipmentRequest(AuditMixin, Base):
     status = Column(String(20), default="DRAFT")
     shipped_date = Column(Date, nullable=True)
     notes = Column(Text, default="")
+    # --- 段1b-1 出库头部扩充（PRD 03b 页面2 + 03a-9 委外发料）---
+    # outbound_type：出库类型纯值集。CUSTOMER 客户发货（默认，走互检+财务放行两道关）/
+    #   TRANSFER 调拨出库 / OUTSOURCE 委外发料（发料对象=委外方非客户，绕过客户发货财务放行关，03a-9）。
+    outbound_type = Column(String(20), default="CUSTOMER")
+    vendor_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)   # 委外方=供应商主数据（仅委外发料用，03a-9）
+    outsource_note = Column(Text, default="")                               # 加工/采买说明（自由文本，不建工序/BOM，03a-9）
 
 
 class ShipmentLine(Base):
@@ -798,7 +804,8 @@ class ShipmentLine(Base):
     __queryable__ = True
     id = Column(Integer, primary_key=True)
     shipment_id = Column(Integer, ForeignKey("shipment_request.id"), nullable=False)
-    sales_order_line_id = Column(Integer, ForeignKey("sales_order_line.id"), nullable=False)
+    # 委外发料无销售订单（发料对象=委外方），放宽为可空（PRD 03a-9）；客户发货仍由 validator 兜底。
+    sales_order_line_id = Column(Integer, ForeignKey("sales_order_line.id"), nullable=True)
     inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=False)
     quantity = Column(Numeric(12, 2), nullable=False)
     uom = Column(String(20), default="")
@@ -812,6 +819,9 @@ class ShipmentLine(Base):
     carton_number = Column(String(50), default="")
     origin_country = Column(String(50), default="")
     hs_code = Column(String(50), default="")
+    # --- 段1b-1 每包照片留证（PRD 03b 页面2 第4/5点：规定每一包都要拍照）---
+    # photo_refs：多图引用（wms_attachment.id 或外部共享文档引用字符串），进互检前 hard_rule 须非空。
+    photo_refs = Column(JSONB, default=list)
 
 
 class SalesReturn(AuditMixin, Base):

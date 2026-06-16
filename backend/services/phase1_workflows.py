@@ -79,6 +79,8 @@ def phase1_workflow_definitions(created_by_id=None):
         "product_line", "payment_terms_text", "document_status", "packaging_requirements",
         "barcode_requirements", "delivery_requirements", "label_status",
         "inspection_status", "shipped_date", "notes",
+        # 段1b-1：出库类型 + 委外发料字段（DRAFT 录入；CUSTOMER 默认走两道关，OUTSOURCE 委外直发）。
+        "outbound_type", "vendor_id", "outsource_note",
     ]
     goods_receipt_fields = [
         "purchase_order_id", "warehouse_id", "received_by_id", "received_date",
@@ -101,6 +103,14 @@ def phase1_workflow_definitions(created_by_id=None):
     shipment_stock_effect = ["wms.apply_shipment_stock_out"]
     shipment_sales_invoice_effect = ["finance.create_sales_invoice_from_shipment"]
     shipment_sales_return_effect = ["wms.create_sales_return_from_shipment"]
+    # 出库扣库存后推金蝶销售出库单（07b·EXPLICIT effect，开关默认 OFF 只入 outbox；幂等键 shipment_number + company_id）。
+    shipment_kingdee_effect = ["kingdee.enqueue_push"]
+    # 进互检前 hard_rule（DSL，引擎 04 §4.B）：每行须有照片引用（每包拍照留证，PRD 03b 页面2 第5点）。
+    # lines = shipment_line 子表行；photo_refs 非空（JSONB 列表）即过。
+    shipment_photo_hard_rule = "all(line.photo_refs for line in lines)"
+    # 委外直发边守卫（DSL，引擎 04 §4.B）：互检→出库直发边仅限委外发料（绕过财务放行，PRD 03a-9）；
+    # 客户发货/调拨出库必须经财务放行边（蓝图 §5.1）。挂在边上（hard_rules 是 next_entry 边级）。
+    shipment_outsource_only_hard_rule = 'doc.outbound_type == "OUTSOURCE"'
     purchase_invoice_ap_effect = ["finance.create_accounts_payable_from_purchase_invoice"]
     purchase_invoice_po_effect = ["erp.mark_purchase_order_invoice_matching"]
     sales_invoice_ar_effect = ["finance.create_accounts_receivable_from_sales_invoice"]
@@ -266,27 +276,34 @@ def phase1_workflow_definitions(created_by_id=None):
         {
             "doc_type": "SHIPMENT",
             "name": "WMS-发货出库流程",
-            "description": "发货通知 -> 财务放行 -> 包装贴标 -> 复检出库 -> 客户签收。",
+            "description": "发货通知 -> 分箱拣货拍照 -> 仓库互检★ -> 财务放行★ -> 出库扣库存推金蝶 -> 客户签收。"
+                           "（业务序：拣货→互检→财务放行→出库；委外发料绕过财务放行直发，03a-9）",
             "group_name": "WMS",
             "states": [
                 _start(["SALES_ASSISTANT", "OPERATIONS"]),
                 _state("DRAFT", "SA 发布发货通知", ["SALES_ASSISTANT", "OPERATIONS"], [
-                    {"to": "FINANCE_APPROVAL", "label": "提交财务审批", "editable_fields": shipment_fields},
+                    {"to": "PACKING_LABELING", "label": "提交物流分箱拣货", "editable_fields": shipment_fields},
                     {"to": "CANCELLED", "label": "取消发货", "editable_fields": ["notes"]},
                 ]),
-                _state("FINANCE_APPROVAL", "财务审批放行", ["FINANCE", "OPERATIONS", "BOSS"], [
-                    {"to": "PACKING_LABELING", "label": "财务放行", "editable_fields": ["approved_by_id", "notes"]},
+                _state("PACKING_LABELING", "包装与制标", ["LOGISTICS", "OPERATIONS"], [
+                    # 进互检前 hard_rule：每行须有照片引用（每包拍照留证，PRD 03b 页面2 验收④）。
+                    {"to": "PICKING_RECHECK", "label": "完成制标提交互检", "editable_fields": ["label_status", "inspection_status", "tracking_number", "carton_number", "photo_refs", "notes"], "hard_rules": [shipment_photo_hard_rule]},  # noqa: E501
+                ]),
+                _state("PICKING_RECHECK", "仓库互检（出库复核）★", ["LOGISTICS", "OPERATIONS"], [
+                    # 互检可同一人复核（甲方 Q7，效率优先）：不校验复核人≠制单人，仅留痕。通过→财务放行。
+                    {"to": "FINANCE_APPROVAL", "label": "互检通过提交财务放行", "editable_fields": ["inspection_status", "notes"]},
+                    {"to": "PACKING_LABELING", "label": "互检退回重做", "editable_fields": ["notes"]},
+                    # 委外发料绕过客户发货财务放行边：发料对象=委外方非客户，直发出库（03a-9）；边 hard_rule 限 outbound_type=OUTSOURCE。
+                    {"to": "SALES_OUTBOUND", "label": "委外发料直接发出", "editable_fields": ["shipped_date", "tracking_number", "notes"], "effects": shipment_stock_effect + shipment_kingdee_effect, "hard_rules": [shipment_outsource_only_hard_rule]},
+                ]),
+                _state("FINANCE_APPROVAL", "财务放行★", ["FINANCE", "OPERATIONS", "BOSS"], [
+                    # 财务未放行货坚决不出仓（蓝图 §5.1）。放行→出库扣库存+生成销售发票+推金蝶。
+                    {"to": "SALES_OUTBOUND", "label": "财务放行出库", "editable_fields": ["approved_by_id", "shipped_date", "tracking_number", "notes"], "effects": shipment_stock_effect + shipment_sales_invoice_effect + shipment_kingdee_effect},
                     {"to": "EXCEPTION_APPROVAL", "label": "超额/超期审批", "editable_fields": ["notes"]},
                 ]),
                 _state("EXCEPTION_APPROVAL", "例外审批", ["BOSS", "OPERATIONS"], [
-                    {"to": "PACKING_LABELING", "label": "特批放行", "editable_fields": ["notes"]},
+                    {"to": "SALES_OUTBOUND", "label": "特批放行出库", "editable_fields": ["approved_by_id", "shipped_date", "notes"], "effects": shipment_stock_effect + shipment_sales_invoice_effect + shipment_kingdee_effect},
                     {"to": "CANCELLED", "label": "驳回发货", "editable_fields": ["notes"]},
-                ]),
-                _state("PACKING_LABELING", "包装与制标", ["LOGISTICS", "OPERATIONS"], [
-                    {"to": "PICKING_RECHECK", "label": "完成制标并拣货复检", "editable_fields": ["label_status", "inspection_status", "tracking_number", "notes"]},
-                ]),
-                _state("PICKING_RECHECK", "拣货复检", ["LOGISTICS", "OPERATIONS"], [
-                    {"to": "SALES_OUTBOUND", "label": "确认出库", "editable_fields": ["shipped_date", "tracking_number", "notes"], "effects": shipment_stock_effect + shipment_sales_invoice_effect},
                 ]),
                 _state("SALES_OUTBOUND", "销售出库", ["FINANCE", "LOGISTICS", "OPERATIONS"], [
                     {"to": "CUSTOMER_RECEIVED", "label": "客户签收", "editable_fields": ["notes"]},
