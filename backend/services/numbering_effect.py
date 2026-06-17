@@ -43,6 +43,9 @@ NUMBER_COLUMN_BY_DOC_TYPE: dict[str, str] = {
     "PAYMENT_REQUEST": "payment_number",
     # 段2d-1 备货申请：备货单号 SU-YYMM-001（月度连号，04b-1）。
     "STOCK_UP_REQUEST": "request_number",
+    # 段2d-2 RMA：RMA-YYMM-NNN（月度连号，04b-5）。样品 SDN 走专属 effect
+    # sample.assign_sdn_number（号中含供应商线字母 C/L，§00-7），不在此通用映射。
+    "RMA": "rma_number",
 }
 
 # 引擎默认兜底号形态：{PREFIX}-{YYMMDD}-{6位HEX}（_auto_fill_required_fields）。

@@ -127,6 +127,32 @@ def phase1_workflow_definitions(created_by_id=None):
     # next_entry.hard_rules 在 execute_transition 推进路径被校验，已勘）。<20万→PENDING_PM，≥20万→PENDING_REVIEW。
     stock_up_under_threshold_rule = "doc.amount < 200000"
     stock_up_over_threshold_rule = "doc.amount >= 200000"
+    # 段2d-2 样品 SDN（04b-3）：REQUESTED 可录申请字段（sdn_number 由建单取号 effect 给，
+    # overdue_days 计算字段不入库列，子表 sample_sdn_line 走 SubTableEditor）。supplier_line 录线字母（C/L）。
+    sample_sdn_request_fields = [
+        "sdn_date", "supplier_id", "supplier_line", "pa_id", "pa_names", "customer_id", "sales_id",
+        "sample_nature", "paid_disposition", "application", "competitor", "demand",
+        "target_price", "pd_dept", "remark",
+    ]
+    # SDN 转正 effect（CONVERTED 推进）：该批库存 SAMPLE→AVAILABLE（§5.4，对接 03 库存）。
+    sample_sdn_convert_effect = ["sample.convert_to_available"]
+    # 段2d-2 RMA（04b-5）：各节点 editable_fields（节点级 allowed_roles 分 SA/PA/PM 控权，规避 D-02e 边级坑）。
+    # REPORTED(SA) 录客户侧；PA_VERIFY(PA) 录采购侧 + 核料；ESCALATED_PM(PM) 填决策；VENDOR_RMA(PA) 回填原厂号。
+    rma_reported_fields = [
+        "rma_date", "customer_id", "sales_id", "failure_description", "failure_location", "remark",
+    ]
+    rma_verify_fields = [
+        "supplier_id", "po_number", "ship_date", "invoice_number", "pa_id", "pe_id", "pm_id", "pd_dept", "remark",
+    ]
+    rma_pm_fields = ["pm_decision", "remark"]
+    rma_vendor_fields = ["supplier_rma_number", "tracking", "return_customs_status", "remark"]
+    rma_return_fields = ["tracking", "remark"]
+    # RMA 核料 effect（PA_VERIFY 推进，gap-7 自动倒查给建议）：写 sold_by_us（倒查 SN/LOT+PO+出库）
+    # + under_warranty（ship_date+质保期 vs today）。判定为建议，PA 据此走成立(ESCALATED)/驳回(REJECTED)。
+    rma_verify_effect = ["rma.assess_warranty_and_origin"]
+    # RMA 货回入库 effect（GOODS_RETURNED 推进）：生成退货入库 inbound_type=RETURN + inventory.source_marker
+    # （RMA来源+品质好坏+原厂），好货 status=AVAILABLE 混回可售（§5.4 / 03 库存，04b-6）。
+    rma_goods_returned_effect = ["rma.create_return_inbound"]
     # 调拨完成边 effect：移库位 + 写两条 TRANSFER_OUT/IN 流水（同公司 hard_rule 兜底）。
     stock_transfer_done_effect = ["wms.apply_stock_transfer"]
     # 同公司硬规则（lookup DSL，引擎 04 §4.B）：源/目标库位经各自仓库 company_id 比对相等。
@@ -656,6 +682,125 @@ def phase1_workflow_definitions(created_by_id=None):
                 _state("CLOSED", "已关闭", [], terminal=True),
                 _state("REJECTED", "已驳回", [], terminal=True),
                 _state("CANCELLED", "已取消", [], terminal=True),
+            ],
+        },
+        {
+            "doc_type": "SAMPLE_SDN",
+            "name": "采购-样品 SDN 流程",
+            "description": (
+                "04b-3 样品 SDN（向原厂申请免费/收费样品，走其他入库进样品仓，跟回签/超期/转正）：\n"
+                "REQUESTED 录申请（建单 START 取号 SDN-{C/L}-YYMM-NNN，supplier_line 拼线字母）→\n"
+                "VENDOR_SHIPPED（原厂发货，录 tracking）→ STOCKED_SAMPLE（其他入库进样品仓，库存=SAMPLE）→\n"
+                "SENT_TO_CUSTOMER（寄客户，超期未签触发提醒）→ SIGNED（回签）→ TESTING（PM/销售跟测试）→\n"
+                "  CONVERTED（测试通过转正：该批库存 SAMPLE→AVAILABLE，code 建好可下正式单）→ CLOSED；\n"
+                "  RETURNED（需归还已还）/ CLOSED 终态。target_price 对 SALES 遮蔽（字段防火墙 §00-8）。"
+            ),
+            "group_name": "ERP",
+            "states": [
+                # 建单取号 SDN-{C/L}-YYMM-NNN（sample.assign_sdn_number 在 START 拼线字母，见 phase1_effects）。
+                _start(["SALES", "PRODUCT_MANAGER", "PRODUCT_ASSISTANT", "OPERATIONS"], first_state="REQUESTED",
+                       effects=["sample.assign_sdn_number"]),
+                _state("REQUESTED", "样品申请录入", ["SALES", "PRODUCT_MANAGER", "PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "VENDOR_SHIPPED", "label": "原厂已发货", "editable_fields": sample_sdn_request_fields},
+                    {"to": "CLOSED", "label": "作废", "editable_fields": ["remark"]},
+                ], description=(
+                    "# 样品申请录入\n销售发起→PM 定用哪个客户身份申请→PA 向原厂申请（数量少、多免费）。\n"
+                    "录供应商/线字母(C/L)/客户/样品性质/目标价/子表型号数量；建单自动取 SDN 号。"
+                )),
+                _state("VENDOR_SHIPPED", "原厂已发货", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "STOCKED_SAMPLE", "label": "已入样品仓", "editable_fields": ["tracking", "remark"]},
+                ], description="# 原厂已发货\n原厂随其他货发来、无 PO 号；物流按「无 PO+量少」判为样品。"),
+                _state("STOCKED_SAMPLE", "样品仓在库", ["PRODUCT_ASSISTANT", "LOGISTICS", "OPERATIONS"], [
+                    {"to": "SENT_TO_CUSTOMER", "label": "已寄客户", "editable_fields": ["tracking", "remark"]},
+                ], description="# 样品仓在库\n走其他入库[样品] 进样品仓，库存状态=SAMPLE（不可售，§5.4 / 03）。"),
+                _state("SENT_TO_CUSTOMER", "已寄客户", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "SIGNED", "label": "客户已回签", "editable_fields": ["signed_return", "tracking", "remark"]},
+                ], description=(
+                    "# 已寄客户\nPA 寄样品给客户、记 tracking；跟回签（signed_return）。\n"
+                    "超期未签（overdue_basis_date 起算）触发催归还提醒（list_user_todos + 定时任务）。"
+                )),
+                _state("SIGNED", "已回签", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "TESTING", "label": "进入测试跟进", "editable_fields": ["signed_return", "remark"]},
+                ], description="# 已回签\n记客户侧 SN/LOT（原厂也要管控）；进测试跟进。"),
+                _state("TESTING", "测试跟进中", ["PRODUCT_MANAGER", "SALES", "PRODUCT_ASSISTANT"], [
+                    {"to": "CONVERTED", "label": "测试通过转正", "editable_fields": ["project_status", "remark"],
+                     "effects": sample_sdn_convert_effect},
+                    {"to": "RETURNED", "label": "需归还已还", "editable_fields": ["paid_disposition", "signed_return", "remark"]},
+                    {"to": "CLOSED", "label": "测试失败/作废", "editable_fields": ["project_status", "remark"]},
+                ], description=(
+                    "# 测试跟进\nPM 跟销售沟通测试情况（在测/通过/失败）。\n"
+                    "通过→转正（该批库存 SAMPLE→AVAILABLE，可下正式单）；需归还→已还；失败→作废。"
+                )),
+                _state("CONVERTED", "已转正", ["PRODUCT_MANAGER", "OPERATIONS"], [
+                    {"to": "CLOSED", "label": "关闭", "editable_fields": ["remark"]},
+                ], description="# 已转正\ncode 建好→客户可下正式单；该批库存已转 AVAILABLE 可售（§5.4）。"),
+                _state("RETURNED", "已归还", [], terminal=True),
+                _state("CLOSED", "已关闭", [], terminal=True),
+            ],
+        },
+        {
+            "doc_type": "RMA",
+            "name": "采购-RMA 退货统一单",
+            "description": (
+                "04b-5/04b-6 RMA 退货统一单（一张统一单共用 RMA 号，SA/PA 双视图，决策⑨ 字段防火墙）：\n"
+                "REPORTED(SA 录客户报修)→ PA_VERIFY(PA 核料：sold_by_us 倒查 SN/PO/出库 + under_warranty 算过保，\n"
+                "  非我方卖/过保→REJECTED；成立→上报)→ ESCALATED_PM(PM 决策：报原厂 VENDOR / 内部消化 INTERNAL)→\n"
+                "  VENDOR_RMA(PA 对接原厂，回填原厂 RMA 号，跨境走退关 180 天)/ INTERNAL(商务停富泰)→\n"
+                "  GOODS_RETURNED(货回入库带 source_marker，好货 AVAILABLE 混回可售)→ RETURN_TO_CUSTOMER(SA 退客户)→\n"
+                "  CLOSED；REJECTED 终态。节点级 allowed_roles 分 SA/PA/PM 控权（规避 D-02e 边级坑）。\n"
+                "★对 SA(SALES_ASSISTANT)+SALES 遮蔽采购侧列（supplier_id/po_number/unit_price/supplier_rma_number，"
+                "tools.py query+schema 两路）。"
+            ),
+            "group_name": "ERP",
+            "states": [
+                # 建单取号 RMA-YYMM-NNN（标准 numbering effect）。SA 报修即建。
+                _start(["SALES_ASSISTANT", "SALES", "OPERATIONS"], first_state="REPORTED",
+                       effects=[NUMBERING_EFFECT]),
+                _state("REPORTED", "客户报修", ["SALES_ASSISTANT", "SALES", "OPERATIONS"], [
+                    {"to": "PA_VERIFY", "label": "转 PA 核料", "editable_fields": rma_reported_fields},
+                ], description=(
+                    "# 客户报修（SA 视图）\n客户先联系 CC/销售报某批货有问题；SA 录客户/型号/SN/失效描述/失效位置。\n"
+                    "销售对客户、不对原厂（采购侧列对 SA 遮蔽，决策⑨）。"
+                )),
+                # PA 核料（节点级 allowed_roles=[PRODUCT_ASSISTANT]）：核 SN/LOT+PO+出库 + 算过保。
+                _state("PA_VERIFY", "PA 核料判定", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "ESCALATED_PM", "label": "成立上报 PM", "editable_fields": rma_verify_fields,
+                     "effects": rma_verify_effect},
+                    {"to": "REJECTED", "label": "非我方卖/过保→驳回", "editable_fields": rma_verify_fields},
+                ], description=(
+                    "# PA 核料（PA 视图）\n凭 SN/LOT+PO+入库倒查「是否我方卖、哪个供应商、是否过保」（core 料判定 effect 自动给建议）。\n"
+                    "非我方卖（客户多渠道拿货）/ 过保 → 不收不成立（REJECTED）；成立 → 上报 PM。"
+                )),
+                # PM 决策（节点级 allowed_roles=[PRODUCT_MANAGER]）。
+                _state("ESCALATED_PM", "上报 PM 决策", ["PRODUCT_MANAGER", "OPERATIONS"], [
+                    {"to": "VENDOR_RMA", "label": "报原厂（换/退/修）", "editable_fields": rma_pm_fields},
+                    {"to": "INTERNAL", "label": "内部消化", "editable_fields": rma_pm_fields},
+                ], description=(
+                    "# 上报 PM 决策（决策⑨核心）\nPM 决定报原厂（原厂确认接受→换/退/修）或内部消化（商务停富泰）。"
+                )),
+                _state("VENDOR_RMA", "对接原厂", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "GOODS_RETURNED", "label": "货已回到仓", "editable_fields": rma_vendor_fields},
+                ], description=(
+                    "# 对接原厂（PA 视图）\n原厂发商务邮件确认接受→回填原厂 RMA 号；跨境走退关（海关审批后 180 天内回）。"
+                )),
+                _state("INTERNAL", "内部消化", ["PRODUCT_ASSISTANT", "SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "GOODS_RETURNED", "label": "货已回到仓", "editable_fields": ["remark"]},
+                    {"to": "RETURN_TO_CUSTOMER", "label": "直接退换客户", "editable_fields": ["remark"]},
+                ], description="# 内部消化\n公司内部跟客户做退换，商务流程停留富泰。"),
+                # 货回入库（PA/LOGISTICS）：走退货入库带 source_marker，好货 AVAILABLE 混回可售。
+                _state("GOODS_RETURNED", "货回入库", ["PRODUCT_ASSISTANT", "LOGISTICS", "OPERATIONS"], [
+                    {"to": "RETURN_TO_CUSTOMER", "label": "退客户", "editable_fields": ["remark"],
+                     "effects": rma_goods_returned_effect},
+                ], description=(
+                    "# 货回入库\n原厂换回/客户退回的货回仓，走退货入库（inbound_type=RETURN）带 source_marker\n"
+                    "（RMA来源+品质好坏+原厂，§5.4）；好货 status=AVAILABLE 混回可售、坏货报废/返原厂。"
+                )),
+                # 退客户（节点级 allowed_roles=[SALES_ASSISTANT]，回到 SA 客户侧）。
+                _state("RETURN_TO_CUSTOMER", "退客户", ["SALES_ASSISTANT", "SALES", "OPERATIONS"], [
+                    {"to": "CLOSED", "label": "已退客户关闭", "editable_fields": ["tracking", "remark"]},
+                ], description="# 退客户（SA 视图）\n货回来后告诉对应 SA 退/换给客户；退完 PA/SA 关闭 RMA。"),
+                _state("CLOSED", "已关闭", [], terminal=True),
+                _state("REJECTED", "已驳回", [], terminal=True),
             ],
         },
     ]

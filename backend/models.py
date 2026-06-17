@@ -1514,6 +1514,123 @@ class StockUpRequest(AuditMixin, Base):
     __table_args__ = (UniqueConstraint("company_id", "request_number", name="ux_stock_up_request_number"),)
 
 
+class SampleSdn(AuditMixin, Base):
+    """样品 SDN 头（04b-3，权威=SDN Record.xlsx 31 列）：向原厂申请免费/收费样品，
+    走其他入库进样品仓，跟回签/算超期/跟测试，测试通过转正可下正式单。
+
+    引擎排除「样品」业务（引擎 02 §2.9）→ 全新增 doc_type + 子表 sample_sdn_line。流程：
+      REQUESTED → VENDOR_SHIPPED → STOCKED_SAMPLE → SENT_TO_CUSTOMER → SIGNED → TESTING
+      → CONVERTED（转正：该批库存 SAMPLE→AVAILABLE）/ RETURNED / CLOSED 终态。
+    建单 START effect 取号 SDN-{C/L}-YYMM-NNN（供应商线字母由 supplier_line 列拼进，月度连号）。
+    超期天数 overdue_days = 计算字段（前端/定时任务按 today−基准日，本段留只读列）。
+    字段防火墙（§00-8）：target_price（目标价）对 SALES 遮蔽（query+schema 两路）。
+    """
+    __tablename__ = "sample_sdn"
+    __doc_types__ = ("SAMPLE_SDN",)
+    id = Column(Integer, primary_key=True)
+    sdn_number = Column(String(40), index=True, nullable=False)  # SDN-{C/L}-YYMM-NNN
+    supplier_line = Column(String(4), default="")   # 供应商线字母（C/L…），拼进 SDN 号
+    sdn_date = Column(Date, nullable=True)
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)
+    pa_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 负责 PA（多 PA 实样含逗号串，本段单值＋备注兜底）
+    pa_names = Column(String(120), default="")      # 多 PA 名（实样「边远,杨日红」逗号串，关联表留 gap-11）
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)  # 申请所用客户身份（PM 定）
+    sales_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    sample_nature = Column(String(12), default="FREE")        # FREE 免费 / NOT_FREE 收费（访谈 07:1302）
+    paid_disposition = Column(String(16), default="")         # 非免费处置：RETURN 归还 / RESELL 转销售 / RETURNED 已归还
+    signed_return = Column(String(12), default="")            # 回签状态：Y / N / RETURNED 已归还 / NA
+    application = Column(Text, default="")
+    competitor = Column(Text, default="")
+    demand = Column(Text, default="")
+    target_price = Column(Numeric(16, 4), nullable=True)      # 目标价（成本侧，对 SALES 遮蔽，§00-8）
+    tracking = Column(String(100), default="")
+    project_status = Column(String(16), default="")          # 项目状态：IN_TEST 在测 / PASSED 通过 / FAILED 失败 / CONVERTED 转正
+    pd_dept = Column(String(60), default="")                 # 产品线归属部门（如「光电材料部」）
+    overdue_basis_date = Column(Date, nullable=True)         # 超期基准日（默认寄客户日，gap-5；overdue_days 据此前端/定时算）
+    remark = Column(Text, default="")
+    status = Column(String(30), default="REQUESTED")
+
+    supplier = relationship("Supplier")
+    customer = relationship("Customer")
+
+    __table_args__ = (UniqueConstraint("company_id", "sdn_number", name="ux_sample_sdn_number"),)
+
+
+class SampleSdnLine(Base):
+    """样品 SDN 明细（一型号一行，权威=SDN Record P/N/Description/QTY/SN）。"""
+    __tablename__ = "sample_sdn_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    sample_sdn_id = Column(Integer, ForeignKey("sample_sdn.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
+    description = Column(Text, default="")            # 质量描述（旧AR/Dummy样品/良品/机械样品）
+    quantity = Column(Numeric(12, 2), nullable=False)
+    serial_lot_number = Column(String(100), default="")
+    __table_args__ = (UniqueConstraint("sample_sdn_id", "line_number"),)
+
+
+class Rma(AuditMixin, Base):
+    """RMA 退货统一单（04b-5，权威=RMA record.xlsx 24 列）：一张统一单共用一个 RMA 号，
+    SA 看客户侧 / PA 看货物侧（决策⑨ 字段防火墙，同一单两视图）。
+
+    引擎排除「退货」业务（引擎 02 §2.9）；采购侧 RMA ≠ WMS 客退 SALES_RETURN → 全新增
+    doc_type + 子表 rma_line。流程（节点级 allowed_roles 分 SA/PA/PM 控权，规避 D-02e 边级坑）：
+      REPORTED(SA) → PA_VERIFY(PA 核料) → ESCALATED_PM(PM 决策) → VENDOR_RMA / INTERNAL
+      → GOODS_RETURNED(货回入库带 source_marker) → RETURN_TO_CUSTOMER(SA) → CLOSED ；REJECTED 终态。
+    核料判定 effect（PA_VERIFY 推进）：sold_by_us 倒查 SN/LOT+PO+出库、under_warranty=ship_date+质保期 vs today；
+    非我方卖/过保 → 建议 REJECTED（PA 确认，gap-7）。货回入库 effect（GOODS_RETURNED 推进）：生成退货入库
+    inbound_type=RETURN + inventory.source_marker（RMA来源+品质+原厂），好货 status=AVAILABLE 混回可售（§5.4）。
+    ★字段防火墙（决策⑨）：对 SA(SALES_ASSISTANT)+SALES 遮蔽采购侧列
+    （supplier_id/po_number/unit_price/supplier_rma_number），对 PA/PM 给全列（tools.py query+schema 两路）。
+    """
+    __tablename__ = "rma"
+    __doc_types__ = ("RMA",)
+    id = Column(Integer, primary_key=True)
+    rma_number = Column(String(40), index=True, nullable=False)  # RMA-YYMM-NNN（我方内部档案号）
+    rma_date = Column(Date, nullable=True)
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)   # ★PA 视图（对原厂）；对 SA 遮蔽
+    failure_description = Column(Text, default="")           # 失效描述（客户报来）
+    failure_location = Column(Text, default="")
+    po_number = Column(String(50), default="")               # ★PA 视图（倒查是否我方卖）；对 SA 遮蔽
+    ship_date = Column(Date, nullable=True)                  # 发货日期（判过保基准）
+    invoice_number = Column(String(50), default="")
+    supplier_rma_number = Column(String(50), default="")     # ★PA 视图（原厂 RMA 号回填）；对 SA 遮蔽
+    tracking = Column(String(100), default="")
+    remark = Column(Text, default="")
+    sales_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    pa_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    pe_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    pm_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)     # 上报对象/决策人
+    pd_dept = Column(String(60), default="")
+    sold_by_us = Column(Boolean, nullable=True)              # 核料派生：是否我方卖（倒查 SN/LOT+PO+出库）
+    under_warranty = Column(Boolean, nullable=True)          # 核料派生：是否在保（ship_date+质保期 vs today）
+    pm_decision = Column(String(16), default="")             # PM 决策：VENDOR 报原厂 / INTERNAL 内部消化（换/退/修在 remark）
+    return_customs_status = Column(String(20), default="")   # 退运/退关状态（关联 04 报关，180 天预警）
+    status = Column(String(30), default="REPORTED")
+
+    customer = relationship("Customer")
+    supplier = relationship("Supplier")
+
+    __table_args__ = (UniqueConstraint("company_id", "rma_number", name="ux_rma_number"),)
+
+
+class RmaLine(Base):
+    """RMA 明细（一 SN/型号一行，权威=RMA record P/N/SN/QTY/Failure）。"""
+    __tablename__ = "rma_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    rma_id = Column(Integer, ForeignKey("rma.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
+    serial_lot_number = Column(String(100), default="")     # 核料倒查键
+    quantity = Column(Numeric(12, 2), nullable=False)
+    failure_description = Column(Text, default="")
+    quality_result = Column(String(10), default="")         # 货回品质：GOOD 好 / BAD 坏（GOODS_RETURNED 录）
+    __table_args__ = (UniqueConstraint("rma_id", "line_number"),)
+
+
 class PurchaseInvoice(AuditMixin, Base):
     """采购发票：与外购入库单勾稽后形成采购核算（04a-7：PA 录→★FINANCE 审→形成应付）。"""
     __tablename__ = "purchase_invoice"

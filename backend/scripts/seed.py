@@ -78,6 +78,10 @@ async def seed():
             ("PAYMENT_REQUEST",  "PAY", "MONTH"),
             # 段2d-1 备货申请：备货单号 SU-YYMM-001（月度连号补零3，04b-1）。
             ("STOCK_UP_REQUEST", "SU",  "MONTH"),
+            # 段2d-2 样品 SDN / RMA：SDN-{C/L}-YYMM-NNN（线字母由 sample.assign_sdn_number effect 拼）
+            # / RMA-YYMM-NNN（月度连号补零3，04b-3/04b-5）。
+            ("SAMPLE_SDN", "SDN", "MONTH"),
+            ("RMA",        "RMA", "MONTH"),
         ]
         # 有编号规则的 doc_type 集合：用于给 START 状态挂建单取号 effect（取业务连号）。
         numbering_doc_types = {doc_type for doc_type, _, _ in numbering_seed}

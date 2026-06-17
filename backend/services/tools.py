@@ -94,6 +94,32 @@ USER_ACCOUNT_ALWAYS_HIDDEN = {"password_hash"}
 USER_ACCOUNT_ADMIN_ONLY = {"is_admin"}
 
 # ============================================================
+# 段2d-2 字段级防火墙（(表×角色) 删列）：决策⑨ RMA 双视图 + 样品成本侧（04b-3/04b-5，§00-8）
+# ============================================================
+# ★RMA SA/PA 双视图（决策⑨，引擎原生 (表,角色) 列遮蔽）：同一 rma 表，对销售端（SA/SALES/SE）
+# 遮蔽采购侧列——SA 不对原厂、单价是成本侧（§00-8）；对 PA/PM/运营/财务给全列。query+schema 两路一致。
+RMA_PA_ONLY_FIELDS = {"supplier_id", "po_number", "supplier_rma_number", "unit_price"}
+# 样品 SDN 目标价（成本侧）对销售端遮蔽（§00-8）。
+SAMPLE_SDN_COST_FIELDS = {"target_price"}
+
+
+def _can_view_rma_purchase_side(user: m.UserAccount) -> bool:
+    """RMA/样品 采购侧列可见集：销售端（SALES/SALES_ASSISTANT/SALES_ENGINEER）遮蔽，其余给全列。
+
+    决策⑨ 铁律：采购(PA)不对客户、销售(SA)不对原厂 → 销售端看不到供应商/PO/原厂RMA号/单价（成本侧）。
+    """
+    return user.role not in ("SALES", "SALES_ASSISTANT", "SALES_ENGINEER")
+
+
+def _table_role_field_masked(table_name: str, col_name: str, user: m.UserAccount) -> bool:
+    """(表,角色) 维度的列遮蔽（决策⑨ RMA 双视图 + 样品成本侧）。query 序列化与 schema 两路共用。"""
+    if table_name == "rma" and col_name in RMA_PA_ONLY_FIELDS and not _can_view_rma_purchase_side(user):
+        return True
+    if table_name == "sample_sdn" and col_name in SAMPLE_SDN_COST_FIELDS and not _can_view_rma_purchase_side(user):
+        return True
+    return False
+
+# ============================================================
 # 表级权限:哪些角色能查哪些表
 # ============================================================
 # 短期方案:硬编白名单。长期会搬到 role_definition 表(手术 3)。
@@ -123,6 +149,10 @@ ROLE_ALLOWED_TABLES = {
         # 段2d-1 备货申请（04b-1）：销售可发起/查看本人备货单。amount=含税报价口径对 SALES 可见
         # （§00-8：单上无成本/买价列 → 不进 BUY_TABLES，不遮 amount）。
         "stock_up_request",
+        # 段2d-2 样品 SDN（04b-3）：销售发起样品申请（target_price 由防火墙遮蔽）。
+        "sample_sdn", "sample_sdn_line",
+        # 段2d-2 RMA（04b-5）：销售把客户报修传 PA；采购侧列由决策⑨ 防火墙遮蔽。
+        "rma", "rma_line",
     },
     "SALES_ASSISTANT": _COMMON_TABLES | {
         "customer", "framework_contract",
@@ -136,6 +166,10 @@ ROLE_ALLOWED_TABLES = {
         "inventory", "inventory_reservation",  # 承诺发货前查库存/预留
         # 对原厂询价：可见行，但 unit_price/commission 由字段防火墙遮蔽（Q18，与 SALES 同隐藏层）
         "supplier_inquiry", "supplier_inquiry_line",
+        # 段2d-2 ★RMA SA 视图（决策⑨）：SA 报客户侧/退客户；采购侧列（supplier_id/po_number/
+        # supplier_rma_number/unit_price）由 (rma×SA) 字段防火墙遮蔽。
+        "rma", "rma_line",
+        "sample_sdn", "sample_sdn_line",
     },
     "SALES_ENGINEER": _COMMON_TABLES | {
         "customer", "framework_contract",
@@ -165,6 +199,9 @@ ROLE_ALLOWED_TABLES = {
         "warehouse", "warehouse_location",
         # 段2d-1 备货申请（04b-1）：PA 批后下 PO + 原始 vs 最新消单跟踪（谁买谁跟到底）。
         "stock_up_request",
+        # 段2d-2 ★RMA PA 视图（决策⑨，全列）+ 样品 SDN（PA 主责申请/跟到货/核料/货回）。
+        "rma", "rma_line",
+        "sample_sdn", "sample_sdn_line",
     },
     "PRODUCT_MANAGER": _COMMON_TABLES | {
         "supplier", "customer",
@@ -178,6 +215,9 @@ ROLE_ALLOWED_TABLES = {
         "inventory", "inventory_reservation", "inventory_policy", "supplier_sn_rule", "inventory_movement",
         # 段2d-1 备货申请（04b-1）：PM 发起/单批/会审参与。
         "stock_up_request",
+        # 段2d-2 RMA（04b-5 决策⑨核心：报原厂/内部消化）+ 样品 SDN（决定申请/跟测试转正），PM 给全列。
+        "rma", "rma_line",
+        "sample_sdn", "sample_sdn_line",
     },
     "LOGISTICS": _COMMON_TABLES | {
         "shipment_request", "shipment_line",
@@ -190,6 +230,9 @@ ROLE_ALLOWED_TABLES = {
         "label_template",
         "sales_order", "sales_order_line", "customer",
         "purchase_order", "purchase_order_line", "supplier",
+        # 段2d-2：样品收货入样品仓 / RMA 货回入库带来源标记（物流货物到仓时操作）。
+        "rma", "rma_line",
+        "sample_sdn", "sample_sdn_line",
     },
 }
 
@@ -319,6 +362,10 @@ def _serialize_row(row, table_name: str, user: m.UserAccount) -> dict:
         if table_name in BUY_TABLES and col.name in BUY_PRICE_FIELDS and not _can_view_buy_price(user):
             continue
         if table_name in SELL_TABLES and col.name in SELL_PRICE_FIELDS and not _can_view_sell_price(user):
+            continue
+
+        # 段2d-2 (表×角色) 防火墙：RMA 双视图（决策⑨）+ 样品成本侧（§00-8）
+        if _table_role_field_masked(table_name, col.name, user):
             continue
 
         # user_account 字段防火墙

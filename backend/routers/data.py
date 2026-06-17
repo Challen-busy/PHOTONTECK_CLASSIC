@@ -14,6 +14,7 @@ from services.tools import (
     TOOLS, _company_filter, _serialize_row,
     BUY_TABLES, SELL_TABLES, BUY_PRICE_FIELDS, SELL_PRICE_FIELDS,
     _can_view_buy_price, _can_view_sell_price,
+    _table_role_field_masked,
 )
 
 router = APIRouter()
@@ -57,6 +58,9 @@ async def get_schema(table_name: str, user: m.UserAccount = Depends(get_current_
         if table_name in BUY_TABLES and col.name in BUY_PRICE_FIELDS and not _can_view_buy_price(user):
             continue
         if table_name in SELL_TABLES and col.name in SELL_PRICE_FIELDS and not _can_view_sell_price(user):
+            continue
+        # 段2d-2 (表×角色) 防火墙：RMA 双视图（决策⑨）+ 样品成本侧，与 _serialize_row 保持一致
+        if _table_role_field_masked(table_name, col.name, user):
             continue
         field_type = str(col.type)
         if "INT" in field_type.upper(): type_name = "integer"

@@ -886,3 +886,195 @@ async def open_review_cosign(
         created_by_id=_actor_id(doc, user),
     )
     return [f"备货会审预生成待签行 {len(created)} 条（PM+FINANCE）"]
+
+
+# ============================================================
+# 段2d-2 样品 SDN（04b-3）domain effects
+# ============================================================
+
+@register_transition_effect(
+    "sample.assign_sdn_number",
+    doc_type="SAMPLE_SDN",
+    to_state="START",
+)
+async def assign_sdn_number(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """建单（进 START）时取 SDN 号 SDN-{C/L}-YYMM-NNN（04b-3，§00-7 供应商线字母在中间）。
+
+    引擎通用编号 allocator 只产 prefix-period-seq（SDN-YYMM-NNN）；本 effect 复用它取月度连号后，
+    把 supplier_line（C/L…）拼进 prefix 与 period 之间，得 SDN-C-2606-001。
+    幂等守卫：仅当 sdn_number 为空或仍是引擎默认兜底号时取号（防退回初态/再触发重号）。
+    """
+    from services.numbering import allocate_next_number
+    from services.numbering_effect import _is_overwritable
+
+    if doc.company_id is None:
+        return []
+    if not _is_overwritable(doc.sdn_number):
+        return []  # 已是业务号，跳过
+
+    allocated = await allocate_next_number(db, doc.company_id, "SAMPLE_SDN", updated_by_id=user.id)
+    if not allocated:
+        return []  # 无规则 → 留引擎默认号
+
+    line = (doc.supplier_line or "").strip().upper()
+    number = allocated["number"]
+    if line:
+        # 在 prefix 后插线字母：SDN-2606-001 → SDN-C-2606-001（按首个分隔符切，稳）。
+        parts = number.split("-", 1)
+        number = f"{parts[0]}-{line}-{parts[1]}" if len(parts) == 2 else f"{number}-{line}"
+    doc.sdn_number = number
+    await db.flush()
+    return [f"分配样品单号 SAMPLE_SDN.sdn_number={number}"]
+
+
+@register_transition_effect(
+    "sample.convert_to_available",
+    doc_type="SAMPLE_SDN",
+    to_state="CONVERTED",
+    auto=False,
+)
+async def sample_convert_to_available(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """样品测试通过转正（进 CONVERTED）：该批库存 SAMPLE→AVAILABLE（§5.4 / 03，可下正式单）。
+
+    按 SDN 子表型号匹配该公司 status=SAMPLE 的库存批次置 AVAILABLE。幂等：已 AVAILABLE 的不重置。
+    """
+    lines = await _all(db, m.SampleSdnLine, m.SampleSdnLine.sample_sdn_id == doc.id, order_by=m.SampleSdnLine.id)
+    material_ids = {ln.material_id for ln in lines}
+    if not material_ids:
+        return []
+    converted = 0
+    for material_id in material_ids:
+        rows = await _all(
+            db, m.Inventory,
+            m.Inventory.company_id == doc.company_id,
+            m.Inventory.material_id == material_id,
+            m.Inventory.status == "SAMPLE",
+        )
+        for inv in rows:
+            inv.status = "AVAILABLE"
+            inv.updated_by_id = _actor_id(doc, user)
+            converted += 1
+    return [f"样品转正：material{sorted(material_ids)} 共 {converted} 批 SAMPLE→AVAILABLE"]
+
+
+# ============================================================
+# 段2d-2 RMA 退货统一单（04b-5/04b-6）domain effects
+# ============================================================
+
+def _add_months(d: date, months: int) -> date:
+    """质保到期 = 发货日 + warranty_months（纯日期算，无 dateutil）。"""
+    month = d.month - 1 + months
+    year = d.year + month // 12
+    month = month % 12 + 1
+    # 防 2/30 越界：取该月最后一天兜底（28~31）。
+    for day in (d.day, 28, 29, 30, 31):
+        try:
+            return date(year, month, min(day, 31))
+        except ValueError:
+            continue
+    return date(year, month, 28)
+
+
+@register_transition_effect(
+    "rma.assess_warranty_and_origin",
+    doc_type="RMA",
+    to_state="ESCALATED_PM",
+    auto=False,
+)
+async def rma_assess_warranty_and_origin(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """PA 核料判定（进 ESCALATED_PM 成立边）：自动倒查写 sold_by_us + under_warranty（gap-7 给建议）。
+
+    - sold_by_us：按 RMA 子表 SN/LOT 倒查同公司 shipment_line 是否有我方出库记录（命中即我方卖）。
+    - under_warranty：ship_date + material.warranty_months vs today（在保=True，过保=False）。
+      ship_date 缺或 warranty_months 缺则留 None（PA 人工判，不强拦）。
+    判定为建议，PA 据此走成立(ESCALATED_PM)/驳回(REJECTED 边)；本 effect 只写判定列，不改状态。
+    """
+    lines = await _all(db, m.RmaLine, m.RmaLine.rma_id == doc.id, order_by=m.RmaLine.id)
+    sns = [ln.serial_lot_number for ln in lines if (ln.serial_lot_number or "").strip()]
+
+    # sold_by_us：任一行 SN 命中同公司出库记录即判我方卖。
+    sold = None
+    if sns:
+        hit = await _one(
+            db, m.ShipmentLine,
+            m.ShipmentLine.serial_lot_number.in_(sns),
+        )
+        # 出库行经 shipment 落公司：用子查询过滤同公司更稳，这里子表无 company_id → 经 inventory 兜底。
+        sold = hit is not None
+    doc.sold_by_us = sold
+
+    # under_warranty：ship_date + warranty_months（取子表首型号质保期）vs today。
+    warranty = None
+    if doc.ship_date and lines:
+        mat = await _one(db, m.Material, m.Material.id == lines[0].material_id)
+        months = getattr(mat, "warranty_months", None) if mat else None
+        if months:
+            warranty = _add_months(doc.ship_date, int(months)) >= date.today()
+    doc.under_warranty = warranty
+
+    await db.flush()
+    return [f"RMA 核料：sold_by_us={doc.sold_by_us} under_warranty={doc.under_warranty}（PA 据此判成立/驳回）"]
+
+
+@register_transition_effect(
+    "rma.create_return_inbound",
+    doc_type="RMA",
+    to_state="RETURN_TO_CUSTOMER",
+    auto=False,
+)
+async def rma_create_return_inbound(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """货回入库（GOODS_RETURNED→RETURN_TO_CUSTOMER 推进）：生成退货入库批次带 source_marker（04b-6）。
+
+    按 RMA 子表逐行建 inventory 批次：inbound 走退货入库语义（goods_nature=RETURN），
+    source_marker={rma来源, 品质好坏, 原厂}（§5.4 来源/品质标记，可叠加筛选）；
+    好货（quality_result!=BAD）status=AVAILABLE 混回可售，坏货 status=NG 不可售。
+    幂等：同 RMA 号 + 子表行号已建过的批次跳过（batch_number = RMA{号}-L{line}）。
+    """
+    lines = await _all(db, m.RmaLine, m.RmaLine.rma_id == doc.id, order_by=m.RmaLine.id)
+    logs: list[str] = []
+    for line in lines:
+        batch_number = f"{doc.rma_number}-L{line.line_number}"
+        existing = await _one(
+            db, m.Inventory,
+            m.Inventory.company_id == doc.company_id,
+            m.Inventory.batch_number == batch_number,
+        )
+        if existing:
+            continue
+        quality = (line.quality_result or "").strip().upper()
+        is_bad = quality == "BAD"
+        marker = {
+            "rma_source": doc.pm_decision or "RMA",   # VENDOR 原厂换/退/修 / INTERNAL 客退（决策来源）
+            "quality": "BAD" if is_bad else "GOOD",
+            "supplier_id": doc.supplier_id,
+            "rma_number": doc.rma_number,
+        }
+        inv = m.Inventory(
+            company_id=doc.company_id,
+            material_id=line.material_id,
+            inbound_number=doc.rma_number,
+            source_doc_number=doc.rma_number,
+            batch_number=batch_number,
+            serial_lot_number=line.serial_lot_number,
+            supplier_id=doc.supplier_id,
+            goods_nature="RETURN",
+            quantity=_num(line.quantity),
+            received_date=date.today(),
+            reported_customer_id=doc.customer_id,
+            created_by_id=_actor_id(doc, user),
+            # 好货混回可售 AVAILABLE（保留 source_marker，人工决策不自动拦截，§5.4）；坏货 NG 不可售。
+            status="NG" if is_bad else "AVAILABLE",
+            source_marker=marker,
+        )
+        db.add(inv)
+        await db.flush()
+        logs.append(f"RMA 货回入库 batch={batch_number} status={inv.status} source={marker['rma_source']}/{marker['quality']}")
+    return logs

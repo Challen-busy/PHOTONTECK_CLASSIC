@@ -43,6 +43,7 @@ export default function PurchaseDocPage({
   todoNote,          // 待后端开通时占位说明
   primaryToStates = [],   // 哪些 to_state 用 primary 按钮高亮
   noLines = false,   // 无子表单据（如付款申请 ADVANCE_PAYMENT）：跳过明细加载/网格，仅头 + 动作
+  derivedColumns = [],  // ➕ 前端派生只读列（引擎无原生计算列，如样品超期天数 = 今天-基准日），插在操作列前
 }) {
   const { message } = App.useApp();
   const [schema, setSchema] = useState(null);
@@ -188,7 +189,7 @@ export default function PurchaseDocPage({
     }
   }, [detail, docType, EDITABLE, buildSubUpdates, message]);
 
-  const columns = useMemo(() => schemaToColumns(schema?.fields || [], {
+  const baseColumns = useMemo(() => schemaToColumns(schema?.fields || [], {
     frozen: [numberField, 'status'].filter(Boolean),
     statusFilter: ['status'],
     statusEnum: { status: statusEnum },
@@ -206,6 +207,13 @@ export default function PurchaseDocPage({
       ),
     },
   }), [schema, numberField, statusEnum, openDetail, EDITABLE]);
+
+  // 派生只读列插在「操作」列前（操作列恒为最后一项），保持冻结操作列在最右
+  const columns = useMemo(() => {
+    if (!derivedColumns.length) return baseColumns;
+    const action = baseColumns[baseColumns.length - 1];
+    return [...baseColumns.slice(0, -1), ...derivedColumns, action];
+  }, [baseColumns, derivedColumns]);
 
   const headFields = useMemo(() => schema?.fields || [], [schema]);
   const detailFields = useMemo(() => headFields.filter((f) => f.name !== 'id'), [headFields]);

@@ -434,6 +434,27 @@ TABLE_LABELS = {
         "_table": "SN/LOT规则",
         "status": "规则状态",
     },
+    "sample_sdn": {
+        "_table": "样品 SDN",
+        "status": "样品状态", "sdn_number": "SDN 号", "supplier_line": "供应商线",
+        "sample_nature": "样品性质", "paid_disposition": "非免费处置", "signed_return": "回签状态",
+        "target_price": "目标价", "project_status": "项目状态", "overdue_basis_date": "超期基准日",
+    },
+    "sample_sdn_line": {
+        "_table": "样品 SDN 明细",
+        "serial_lot_number": "SN/LOT#",
+    },
+    "rma": {
+        "_table": "RMA 退货单",
+        "status": "RMA 状态", "rma_number": "RMA 号", "po_number": "PO#",
+        "supplier_rma_number": "原厂 RMA 号", "sold_by_us": "是否我方卖", "under_warranty": "是否在保",
+        "pm_decision": "PM 决策", "return_customs_status": "退关状态",
+        "failure_description": "失效描述", "failure_location": "失效位置",
+    },
+    "rma_line": {
+        "_table": "RMA 明细",
+        "serial_lot_number": "SN/LOT#", "failure_description": "失效描述", "quality_result": "货回品质",
+    },
     "wms_attachment": {
         "_table": "WMS附件",
     },
