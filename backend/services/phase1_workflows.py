@@ -76,6 +76,9 @@ def phase1_workflow_definitions(created_by_id=None):
         "ship_to_contact", "ship_to_phone", "packaging_requirements",
         "barcode_requirements", "sales_engineer_id", "sales_assistant_id",
         "sales_assistant_names", "product_manager_id", "customer_region", "notes",
+        # 段3b 决策①（合同即 SO）：编号(客户订单号)/合同签章字段组/事业部分类（PRD 05 页面1/2）。
+        "external_order_no", "contract_attachment_ref", "signature_status",
+        "signature_party", "business_unit", "research_sub_market",
     ]
     purchase_notice_fields = [
         "sales_order_id", "requested_by_id", "purchase_assistant_id",
@@ -195,6 +198,14 @@ def phase1_workflow_definitions(created_by_id=None):
     ]
     sales_order_to_purchase_notice_effect = ["erp.create_purchase_notice_from_sales_order"]
     sales_order_advance_receipt_effect = ["finance.create_advance_receipt_from_sales_order"]
+    # 段3b 决策①：SO 审核通过（销售经理/SA leader 下级审核 + 签章后）→ 推金蝶销售订单
+    #   （销售/应收源，总览 §6.2「SO 审核通过」；EXPLICIT effect，开关默认 OFF 只入 outbox；
+    #    幂等键 order_number + company_id）。同步累加备货消单（SO 成交匹配备货型号+意向客户）。
+    sales_order_reviewed_kingdee_effect = ["kingdee.enqueue_push", "stockup.consume_on_sales_order"]
+    # ★预付到账闸（PRD 05 页面2 验收4）：付款方式=预付（requires_advance_receipt=True）时，
+    #   预付到账（advance_receipt_confirmed=True）才放行采购；非预付单直接放行（边级 hard_rule，引擎 04 §4.B）。
+    #   到账确认单在财务域 ADVANCE_RECEIPT（confirm effect 回写本标志，TODO：财务确认到账时回写 SO.advance_receipt_confirmed）。
+    sales_order_advance_gate_rule = "(not doc.requires_advance_receipt) or doc.advance_receipt_confirmed"
     purchase_notice_sent_effect = ["erp.mark_sales_order_purchase_notice_sent"]
     purchase_notice_to_po_effect = ["erp.create_purchase_order_from_notice"]
     purchase_order_to_goods_receipt_effect = ["wms.create_goods_receipt_from_purchase_order"]
@@ -229,7 +240,9 @@ def phase1_workflow_definitions(created_by_id=None):
     # EXPLICIT，默认 OFF 只入 outbox；幂等键 payment_number + company_id）。本系统只记到账确认，做账在金蝶。
     payment_request_confirm_effect = ["finance.confirm_payment_request_settlement"]
     payment_request_kingdee_effect = ["kingdee.enqueue_push"]
-    sales_invoice_ar_effect = ["finance.create_accounts_receivable_from_sales_invoice"]
+    # 段3b 决策③：销项发票勾稽通过 → 形成应收（accounts_receivable）+ 推金蝶销项/应收
+    #   （总览 §6.2；EXPLICIT effect，开关默认 OFF 只入 outbox；幂等键 invoice_number + company_id）。
+    sales_invoice_ar_effect = ["finance.create_accounts_receivable_from_sales_invoice", "kingdee.enqueue_push"]
 
     defs = [
         {
@@ -391,21 +404,29 @@ def phase1_workflow_definitions(created_by_id=None):
         {
             "doc_type": "SALES_ORDER",
             "name": "ERP-销售订单履约流程",
-            "description": "销售订单审核 -> 预收判断 -> 采购通知 -> 发货通知。",
+            "description": "决策①（合同即 SO）：SA 录单 → SA leader 下级审核（签章 + 推金蝶销售订单）"
+                           "→ ★预付到账闸（付款方式=预付时须到账才放行采购）→ 采购通知 → 发货通知 → 完成。"
+                           "SA leader 下级审核 allowed_roles：现无 SALES_ASSISTANT_LEADER 角色 → 用 OPERATIONS 兜底"
+                           "（TODO：甲方确认 SA leader 角色后改 allowed_roles=[SALES_ASSISTANT_LEADER]）。",
             "group_name": "ERP",
             "states": [
-                _start(["SALES_ASSISTANT", "OPERATIONS"]),
+                # 建单取号：START 挂 numbering effect → SO 内部订单号月度连号 SO-YYMM-001（决策①）。
+                _start(["SALES_ASSISTANT", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
                 _state("DRAFT", "SA 录入客户订单", ["SALES_ASSISTANT", "OPERATIONS"], [
-                    {"to": "SALES_MANAGER_REVIEW", "label": "提交销售经理审核", "editable_fields": sales_order_fields},
+                    {"to": "SALES_MANAGER_REVIEW", "label": "提交 SA leader 下级审核", "editable_fields": sales_order_fields},
                     {"to": "CANCELLED", "label": "取消订单", "editable_fields": ["notes"]},
                 ]),
-                _state("SALES_MANAGER_REVIEW", "销售经理审核", ["OPERATIONS", "BOSS"], [
-                    {"to": "ADVANCE_RECEIPT_REQUIRED", "label": "需要客户预收", "editable_fields": ["requires_advance_receipt", "advance_receipt_amount", "notes"], "effects": sales_order_advance_receipt_effect},
-                    {"to": "READY_FOR_PURCHASE", "label": "无需预收/放行采购", "editable_fields": ["notes"]},
+                # SA leader 下级审核（业务审核关，非财务关）：审核通过签章 + 推金蝶销售订单（决策①/③）。
+                # allowed_roles 兜底 OPERATIONS（无 SALES_ASSISTANT_LEADER 角色，TODO 上述）。
+                _state("SALES_MANAGER_REVIEW", "SA leader 下级审核（签章）", ["OPERATIONS", "BOSS"], [
+                    {"to": "ADVANCE_RECEIPT_REQUIRED", "label": "需要客户预收（签章后）", "editable_fields": ["requires_advance_receipt", "advance_receipt_amount", "signature_status", "signature_party", "contract_attachment_ref", "notes"], "effects": sales_order_advance_receipt_effect + sales_order_reviewed_kingdee_effect},
+                    {"to": "READY_FOR_PURCHASE", "label": "无需预收/签章放行采购", "editable_fields": ["signature_status", "signature_party", "contract_attachment_ref", "notes"], "effects": sales_order_reviewed_kingdee_effect},
                     {"to": "DRAFT", "label": "退回修改", "editable_fields": ["notes"]},
                 ]),
-                _state("ADVANCE_RECEIPT_REQUIRED", "待客户预收", ["FINANCE", "SALES_ASSISTANT", "OPERATIONS"], [
-                    {"to": "READY_FOR_PURCHASE", "label": "预收已确认", "editable_fields": ["notes"]},
+                # ★预付到账闸：付款方式=预付（requires_advance_receipt）时，advance_receipt_confirmed 才放行采购
+                #   （边级 hard_rule）；非预付单不受阻。到账确认在财务域 ADVANCE_RECEIPT。
+                _state("ADVANCE_RECEIPT_REQUIRED", "待客户预收（★到账闸）", ["FINANCE", "SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "READY_FOR_PURCHASE", "label": "预收已到账放行采购", "editable_fields": ["advance_receipt_confirmed", "notes"], "hard_rules": [sales_order_advance_gate_rule]},
                 ]),
                 _state("READY_FOR_PURCHASE", "可发起采购通知", ["SALES_ASSISTANT", "OPERATIONS"], [
                     {"to": "PURCHASE_NOTICE_SENT", "label": "已发起采购通知", "editable_fields": ["notes"]},

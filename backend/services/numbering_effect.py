@@ -26,6 +26,8 @@ from services.workflow_extensions import register_transition_effect
 # 多数主单据有不止一个 *_number 列（如 goods_receipt 另有 source_issue_number、
 # shipment_request 另有 tracking_number），盲扫会写错列。
 NUMBER_COLUMN_BY_DOC_TYPE: dict[str, str] = {
+    # 段3b 决策①：销售订单内部订单号（合同号）月度连号 SO-YYMM-001。
+    "SALES_ORDER": "order_number",
     "PURCHASE_ORDER": "order_number",
     "GOODS_RECEIPT": "receipt_number",
     "SHIPMENT": "shipment_number",

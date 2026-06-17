@@ -49,6 +49,10 @@ import RmaPage from './pages/purchase/RmaPage';
 import LeadPage from './pages/sales/LeadPage';
 import OpportunityPage from './pages/sales/OpportunityPage';
 import QuotationPage from './pages/sales/QuotationPage';
+import SalesOrderPage from './pages/sales/SalesOrderPage';
+import SalesOrderLedgerPage from './pages/sales/SalesOrderLedgerPage';
+import ShipmentRequestPage from './pages/sales/ShipmentRequestPage';
+import SalesInvoicePage from './pages/sales/SalesInvoicePage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -115,9 +119,11 @@ function AppRoutes() {
         <Route path="sales/leads" element={<LeadPage />} />
         <Route path="sales/opportunities" element={<OpportunityPage />} />
         <Route path="sales/quotes" element={<QuotationPage />} />
-        <Route path="sales/orders" element={PH('销售订单 SO', '客户 / 销售')} />
-        <Route path="sales/shipments" element={PH('发货申请 / 发货通知', '客户 / 销售')} />
-        <Route path="sales/invoices" element={PH('销项发票管理', '客户 / 销售')} />
+        <Route path="sales/orders" element={<SalesOrderPage />} />
+        <Route path="sales/orders-ledger" element={<SalesOrderLedgerPage />} />
+        <Route path="sales/shipment-requests" element={<ShipmentRequestPage />} />
+        <Route path="sales/shipments" element={<ShipmentRequestPage />} />
+        <Route path="sales/invoices" element={<SalesInvoicePage />} />
         <Route path="sales/tickets" element={PH('售后技术工单', '客户 / 销售')} />
         <Route path="sales/qualification" element={PH('客户认证 / 标书', '客户 / 销售')} />
         <Route path="sales/forecast" element={PH('Forecast 接单', '客户 / 销售')} />

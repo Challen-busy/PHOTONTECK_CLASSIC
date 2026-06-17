@@ -37,6 +37,9 @@ export const getCommandDetail = (id) => api.get(`/commands/logs/${id}`);
 export const getCommandInventoryMovements = (id) => api.get(`/commands/logs/${id}/inventory-movements`);
 export const retryCommandLog = (id) => api.post(`/commands/logs/${id}/retry`);
 
+// 销售签单台账聚合（段3b 只读端点；后端未开通时 404 → 页面降级「待后端补段」）
+export const getSalesLedger = (params = {}) => api.get('/sales/ledger', { params });
+
 // 采购台账聚合（段2b/2c 只读端点）
 export const getPurchaseLedger = (params = {}) => api.get('/purchase/ledger', { params });
 export const getPurchaseIntransit = (params = {}) => api.get('/purchase/intransit', { params });

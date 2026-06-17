@@ -935,6 +935,102 @@ async def open_review_cosign(
 
 
 # ============================================================
+# 段3b 销售订单履约 domain effects（决策①/③/⑥ + 接段2 备货消单遗留）
+# ============================================================
+
+@register_transition_effect("stockup.consume_on_sales_order", auto=False)
+async def consume_on_sales_order(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """SO 成交（审核放行=执行）→ 匹配备货型号 + 意向客户 → 累加 STOCK_UP_REQUEST.consumed_quantity。
+
+    接段2d-1 遗留接口（备货消单）：备货是「先囤后销」，SO 成交即对其备货单消单。
+    匹配口径（保守、可解释）：同公司 + 备货单 material_id == SO 明细 material_id +
+      （意向客户匹配：stock_up_request.intended_customer_id 为空 或 == SO.customer_id）+
+      备货单已 APPROVED/TRACKING（已批可消）。每个 SO 明细按 FIFO（request_number 升序）消，
+      不超 (stockup_quantity − consumed_quantity) 余量，逐单累加直至该明细数量消完或无可消备货单。
+
+    幂等（EXPLICIT，可能因 SO 多次推进被触发）：以 (SO 明细) 对每张备货单是否已消为锚 —— 用
+    stock_up_consumption 流水行（source SALES_ORDER_LINE + stock_up_request_id）守卫；已记则跳过该
+    (明细, 备货单) 组合，绝不重复累加。
+    """
+    logs: list[str] = []
+    lines = await _all(db, m.SalesOrderLine, m.SalesOrderLine.sales_order_id == doc.id, order_by=m.SalesOrderLine.line_number)
+    for line in lines:
+        if not line.material_id:
+            continue
+        remaining = _num(line.quantity)
+        if remaining <= 0:
+            continue
+        requests = await _all(
+            db,
+            m.StockUpRequest,
+            m.StockUpRequest.company_id == doc.company_id,
+            m.StockUpRequest.material_id == line.material_id,
+            m.StockUpRequest.status.in_(("APPROVED", "TRACKING")),
+            order_by=m.StockUpRequest.request_number,
+        )
+        for req in requests:
+            if remaining <= 0:
+                break
+            # 意向客户匹配：备货单未指定意向客户（通用囤货）或指定客户==本 SO 客户。
+            if req.intended_customer_id is not None and req.intended_customer_id != doc.customer_id:
+                continue
+            # 幂等守卫：该 (SO 明细 → 备货单) 是否已消过。
+            already = await _one(
+                db,
+                m.StockUpConsumption,
+                m.StockUpConsumption.stock_up_request_id == req.id,
+                m.StockUpConsumption.sales_order_line_id == line.id,
+            )
+            if already:
+                continue
+            req_remaining = _num(req.stockup_quantity) - _num(req.consumed_quantity)
+            if req_remaining <= 0:
+                continue
+            consume = min(remaining, req_remaining)
+            req.consumed_quantity = _num(req.consumed_quantity) + consume
+            if _num(req.consumed_quantity) >= _num(req.stockup_quantity):
+                req.status = "CLOSED"
+            db.add(m.StockUpConsumption(
+                stock_up_request_id=req.id,
+                sales_order_id=doc.id,
+                sales_order_line_id=line.id,
+                quantity=consume,
+                company_id=doc.company_id,
+                created_by_id=_actor_id(doc, user),
+            ))
+            remaining -= consume
+            logs.append(f"备货消单 SU#{req.id} += {consume}（SO#{doc.id} 明细#{line.id}）")
+    return logs
+
+
+@register_transition_effect(
+    "finance.confirm_sales_order_advance_receipt",
+    doc_type="ADVANCE_RECEIPT",
+    to_state="CONFIRMED",
+)
+async def confirm_sales_order_advance_receipt(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """财务确认预收到账（ADVANCE_RECEIPT→CONFIRMED）→ 回写关联 SO.advance_receipt_confirmed=True。
+
+    ★预付到账闸的放行信号源：SO ADVANCE_RECEIPT_REQUIRED→READY_FOR_PURCHASE 边的 hard_rule
+    校验 advance_receipt_confirmed；本 effect 把财务域的到账确认回写到 SO 标志位上（跨单据弱关联，
+    避免 SO 流程直接查财务单据状态）。幂等：已 True 则跳过。
+    """
+    if not doc.sales_order_id:
+        return []
+    order = await _one(db, m.SalesOrder, m.SalesOrder.id == doc.sales_order_id)
+    if not order:
+        return []
+    if order.advance_receipt_confirmed:
+        return [f"sales_order#{order.id} advance receipt already confirmed"]
+    order.advance_receipt_confirmed = True
+    return [f"回写 sales_order#{order.id} advance_receipt_confirmed=True（预付到账闸放行信号）"]
+
+
+# ============================================================
 # 段2d-2 样品 SDN（04b-3）domain effects
 # ============================================================
 

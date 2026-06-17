@@ -60,6 +60,8 @@ async def seed():
         # 取号走 allocate_document_number 命令（行锁原子自增 + 跨期重置）。
         # 前缀/周期对齐编号规则总表：入库 PR{YYMM}-、出库 PD{YYMM}-、发票 I{YYMM}-、采购 PO{YYMM}-。
         numbering_seed = [
+            # 段3b 决策①：销售订单内部订单号（合同号）月度连号 SO-YYMM-001。
+            ("SALES_ORDER",    "SO", "MONTH"),
             ("PURCHASE_ORDER", "PO", "MONTH"),
             ("GOODS_RECEIPT",  "PR", "MONTH"),
             ("SHIPMENT",       "PD", "MONTH"),

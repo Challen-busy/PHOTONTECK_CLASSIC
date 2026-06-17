@@ -284,6 +284,21 @@ class SalesOrder(AuditMixin, Base):
     barcode_requirements = Column(Text, default="")
     status = Column(String(30), default="DRAFT")
     notes = Column(Text, default="")
+    # --- 段3b 决策①（合同即 SO）：PRD 05 页面1/2 合同信息字段组 + 签章 + 事业部分类 ---
+    # 编号（客户订单号，主单号，全链只读不可改）。customer_po_number 偏「客户 PO 号」语义，
+    # PRD 页面2 字段表把「编号/客户订单号」单列映射 external_order_no，故新增对齐 PRD 列名。
+    external_order_no = Column(String(50), default="", index=True)
+    # 合同/电子签章（一签宝占位，PRD 页面1 兼容性：引擎无对象存储/签章原生支持 → 字段 + 占位集成）。
+    contract_attachment_ref = Column(Text, default="")          # 双签合同附件引用（本地上传/共享盘引用字符串）
+    signature_status = Column(String(20), default="PENDING")    # 待申请/已申请/已盖章/已回传（一签宝状态占位）
+    signature_party = Column(String(20), default="")            # 我方带章 OUR / 客户带章 CUSTOMER（谁做合同谁带章）
+    signed_at = Column(DateTime, nullable=True)                 # 合同成立（双签回传）时间戳
+    # 事业部分类（Memo）+ 科研细分市场（科研单条件维度，PRD 页面2/签单大表筛选维度）。
+    business_unit = Column(String(40), default="")              # 事业部（光通信/科研SIO/…），签单大表筛选维度
+    research_sub_market = Column(String(60), default="")        # 科研细分市场（Memo=科研时用，签单大表筛选维度）
+    # ★预付到账闸标志（PRD 页面2 验收4）：付款方式=预付时 signed→executing 前须置 True
+    #   （到账确认单在财务域 ADVANCE_RECEIPT，本字段为本流程消费的放行标志；hard_rule 校验）。
+    advance_receipt_confirmed = Column(Boolean, default=False)
 
     customer = relationship("Customer")
 
@@ -1546,6 +1561,24 @@ class StockUpRequest(AuditMixin, Base):
     material = relationship("Material")
 
     __table_args__ = (UniqueConstraint("company_id", "request_number", name="ux_stock_up_request_number"),)
+
+
+class StockUpConsumption(AuditMixin, Base):
+    """备货消单流水（段3b）：SO 成交累加 STOCK_UP_REQUEST.consumed_quantity 的明细留痕 + 幂等锚。
+
+    一行 = 一次「某 SO 明细消某备货单 N 件」。(stock_up_request_id, sales_order_line_id) 唯一，
+    使 consume_on_sales_order EXPLICIT effect 多次触发不重复累加（幂等守卫读本表）。
+    """
+    __tablename__ = "stock_up_consumption"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    stock_up_request_id = Column(Integer, ForeignKey("stock_up_request.id"), nullable=False)
+    sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=False)
+    sales_order_line_id = Column(Integer, ForeignKey("sales_order_line.id"), nullable=False)
+    quantity = Column(Numeric(12, 2), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("stock_up_request_id", "sales_order_line_id", name="ux_stockup_consumption_so_line"),
+    )
 
 
 class SampleSdn(AuditMixin, Base):
