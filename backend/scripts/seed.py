@@ -65,7 +65,13 @@ async def seed():
             ("SHIPMENT",       "PD", "MONTH"),
             ("SALES_INVOICE",  "I",  "MONTH"),
             ("SALES_RETURN",   "RMA", "MONTH"),
+            # 段0b·1 接线补：调拨/调整/盘点也走业务连号（前缀 TR/AJ/PC，月度重置补零3）。
+            ("STOCK_TRANSFER",   "TR", "MONTH"),
+            ("STOCK_ADJUSTMENT", "AJ", "MONTH"),
+            ("INVENTORY_COUNT",  "PC", "MONTH"),
         ]
+        # 有编号规则的 doc_type 集合：用于给 START 状态挂建单取号 effect（取业务连号）。
+        numbering_doc_types = {doc_type for doc_type, _, _ in numbering_seed}
         for comp in companies.values():
             for doc_type, prefix, reset in numbering_seed:
                 db.add(m.NumberingRule(
@@ -997,6 +1003,8 @@ async def seed():
                     "custom_html": "",
                     "hard_rules": [],
                     "hooks": [],
+                    # 有编号规则的 doc_type：建单后由 numbering effect 取业务连号覆盖引擎默认 UUID 号。
+                    "effects": ["numbering.assign_business_number"] if doc_type in numbering_doc_types else [],
                     "next": [
                         {"to": code, "label": "开始", "editable_fields": []} for code in old_initial_codes
                     ],

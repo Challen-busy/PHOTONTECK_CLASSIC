@@ -46,6 +46,55 @@ def format_document_number(rule: m.NumberingRule, seq: int, period_token: str) -
     return sep.join(parts)
 
 
+async def allocate_next_number(
+    db,
+    company_id: int,
+    doc_type: str,
+    *,
+    updated_by_id: int | None = None,
+    require: bool = False,
+) -> dict | None:
+    """取下一个业务号（纯 async 共享函数，非命令包装）。
+
+    `allocate_document_number` 命令与建单取号 effect 共用这一段：行锁该
+    (company, doc_type) 规则行 → 跨期重置 → 原子自增 → format。
+
+    无规则 / 规则停用：`require=False`（effect 路径）静默返回 None 让上层 no-op；
+    `require=True`（命令路径）抛 CommandError 保留原 404/停用语义。
+    返回 {number, seq, period} 或 None。
+    """
+    rule = (await db.execute(
+        select(m.NumberingRule)
+        .where(
+            m.NumberingRule.company_id == company_id,
+            m.NumberingRule.doc_type == doc_type,
+        )
+        .with_for_update()
+    )).scalar_one_or_none()
+    if not rule:
+        if require:
+            raise CommandError(f"未配置编号规则: company={company_id} doc_type={doc_type}", 404)
+        return None
+    if not rule.is_active:
+        if require:
+            raise CommandError(f"编号规则已停用: {doc_type}")
+        return None
+
+    today = date.today()
+    period_token = _period_token(rule.reset_period, rule.period_format, today)
+
+    # 跨期重置：当前周期与规则记录的周期不同 → 序号归 0 重新连号（月度重置）。
+    if rule.current_period != period_token:
+        rule.current_period = period_token
+        rule.current_seq = 0
+
+    rule.current_seq = (rule.current_seq or 0) + 1
+    if updated_by_id is not None:
+        rule.updated_by_id = updated_by_id
+    number = format_document_number(rule, rule.current_seq, period_token)
+    return {"number": number, "seq": rule.current_seq, "period": period_token}
+
+
 @register_command(
     "allocate_document_number",
     module="CONFIG",
@@ -65,42 +114,21 @@ async def allocate_document_number(ctx: CommandContext, payload: dict) -> dict:
     if not doc_type:
         raise CommandError("doc_type 不能为空")
 
-    # 行锁：锁住该 (company, doc_type) 规则行，序列化并发取号，杜绝撞号。
-    rule = (await ctx.db.execute(
-        select(m.NumberingRule)
-        .where(
-            m.NumberingRule.company_id == company_id,
-            m.NumberingRule.doc_type == doc_type,
-        )
-        .with_for_update()
-    )).scalar_one_or_none()
-    if not rule:
-        raise CommandError(f"未配置编号规则: company={company_id} doc_type={doc_type}", 404)
-    if not rule.is_active:
-        raise CommandError(f"编号规则已停用: {doc_type}")
-
-    today = date.today()
-    period_token = _period_token(rule.reset_period, rule.period_format, today)
-
-    # 跨期重置：当前周期与规则记录的周期不同 → 序号归 0 重新连号（月度重置）。
-    if rule.current_period != period_token:
-        rule.current_period = period_token
-        rule.current_seq = 0
-
-    rule.current_seq = (rule.current_seq or 0) + 1
-    rule.updated_by_id = ctx.user.id
-    number = format_document_number(rule, rule.current_seq, period_token)
+    # 行锁 + 跨期重置 + 原子自增统一走共享函数（require=True 保留 404/停用语义）。
+    result = await allocate_next_number(
+        ctx.db, company_id, doc_type, updated_by_id=ctx.user.id, require=True,
+    )
 
     ctx.add_event("document_number_allocated", {
         "doc_type": doc_type, "company_id": company_id,
-        "number": number, "seq": rule.current_seq, "period": period_token,
+        "number": result["number"], "seq": result["seq"], "period": result["period"],
     })
     return {
-        "number": number,
+        "number": result["number"],
         "doc_type": doc_type,
         "company_id": company_id,
-        "seq": rule.current_seq,
-        "period": period_token,
+        "seq": result["seq"],
+        "period": result["period"],
     }
 
 

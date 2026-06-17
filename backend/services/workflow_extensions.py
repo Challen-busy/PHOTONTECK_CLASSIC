@@ -58,6 +58,8 @@ _EXTENSION_MODULES = (
     "services.cosign",
     "services.kingdee_outbox",
     "services.notifications",
+    # 段0b·1：建单取号 effect（把引擎默认 UUID 号换成业务连号）
+    "services.numbering_effect",
 )
 _loaded = False
 

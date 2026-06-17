@@ -246,7 +246,8 @@ class SalesOrder(AuditMixin, Base):
     __tablename__ = "sales_order"
     __doc_types__ = ("SALES_ORDER",)
     id = Column(Integer, primary_key=True)
-    order_number = Column(String(30), unique=True, index=True, nullable=False)
+    order_number = Column(String(30), index=True, nullable=False)
+    __table_args__ = (UniqueConstraint("company_id", "order_number"),)
     customer_po_number = Column(String(50), index=True, default="")
     customer_po_date = Column(Date, nullable=True)
     customer_vendor_no = Column(String(50), default="")
@@ -407,7 +408,8 @@ class PurchaseOrder(AuditMixin, Base):
     __tablename__ = "purchase_order"
     __doc_types__ = ("PURCHASE_ORDER",)
     id = Column(Integer, primary_key=True)
-    order_number = Column(String(30), unique=True, index=True, nullable=False)
+    order_number = Column(String(30), index=True, nullable=False)
+    __table_args__ = (UniqueConstraint("company_id", "order_number"),)
     po_date = Column(Date, nullable=True)
     supplier_id = Column(Integer, ForeignKey("supplier.id"))
     purchase_assistant_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
@@ -811,7 +813,8 @@ class GoodsReceipt(AuditMixin, Base):
     __tablename__ = "goods_receipt"
     __doc_types__ = ("GOODS_RECEIPT",)
     id = Column(Integer, primary_key=True)
-    receipt_number = Column(String(30), unique=True, nullable=False)
+    receipt_number = Column(String(30), nullable=False)
+    __table_args__ = (UniqueConstraint("company_id", "receipt_number"),)
     purchase_order_id = Column(Integer, ForeignKey("purchase_order.id"))
     warehouse_id = Column(Integer, ForeignKey("warehouse.id"))
     received_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
@@ -872,7 +875,8 @@ class ShipmentRequest(AuditMixin, Base):
     __tablename__ = "shipment_request"
     __doc_types__ = ("SHIPMENT",)
     id = Column(Integer, primary_key=True)
-    shipment_number = Column(String(30), unique=True, nullable=False)
+    shipment_number = Column(String(30), nullable=False)
+    __table_args__ = (UniqueConstraint("company_id", "shipment_number"),)
     sales_order_id = Column(Integer, ForeignKey("sales_order.id"))
     requested_by_id = Column(Integer, ForeignKey("user_account.id"))
     approved_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)

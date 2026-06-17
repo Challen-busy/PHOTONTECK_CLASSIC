@@ -10,6 +10,7 @@ import models as m
 from services.command_context import CommandContext
 from services.command_registry import register_command
 from services.commands import CommandError
+from services.numbering import allocate_next_number
 from services.tools import _company_filter
 from services.wms import (
     ACTIVE_RESERVATION,
@@ -695,10 +696,13 @@ async def create_inventory_count(ctx: CommandContext, payload: dict) -> dict:
     if not invs:
         raise CommandError("当前范围没有可盘点库存")
 
+    # 盘点单号：有 INVENTORY_COUNT 编号规则则走业务连号 PC-YYMM-NNN（按公司），否则 CNT-uuid 兜底。
+    _num = await allocate_next_number(ctx.db, company_id, "INVENTORY_COUNT", updated_by_id=ctx.user.id)
+    count_number = _num["number"] if _num else f"CNT-{date.today():%y%m%d}-{str(uuid.uuid4())[:6].upper()}"
     count = m.InventoryCount(
         company_id=company_id,
         created_by_id=ctx.user.id,
-        count_number=f"CNT-{date.today():%y%m%d}-{str(uuid.uuid4())[:6].upper()}",
+        count_number=count_number,
         warehouse_id=warehouse_id,
         planned_date=_parse_date(payload.get("planned_date")) or date.today(),
         counted_by_id=ctx.user.id,

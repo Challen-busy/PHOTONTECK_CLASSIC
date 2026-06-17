@@ -5,7 +5,12 @@ raw transitions 折叠逻辑。seed.py 和补种脚本都复用这里。
 """
 
 
-def _start(roles, first_state="DRAFT", label="开始录入"):
+# 建单取号 effect 名（在 services.numbering_effect 注册）。挂进有编号规则的流程
+# START 状态的 effects，使 execute_transition 建单后同事务内把引擎默认 UUID 号换成业务连号。
+NUMBERING_EFFECT = "numbering.assign_business_number"
+
+
+def _start(roles, first_state="DRAFT", label="开始录入", effects=None):
     return {
         "code": "START",
         "name": "开始",
@@ -15,6 +20,7 @@ def _start(roles, first_state="DRAFT", label="开始录入"):
         "custom_html": "",
         "hard_rules": [],
         "hooks": [],
+        "effects": effects or [],
         "next": [{"to": first_state, "label": label, "editable_fields": []}],
     }
 
@@ -280,7 +286,7 @@ def phase1_workflow_definitions(created_by_id=None):
             "description": "仓库收货 -> PA 审核 -> 库存入库。",
             "group_name": "WMS",
             "states": [
-                _start(["LOGISTICS", "OPERATIONS"], first_state="PENDING", label="开始收货录入"),
+                _start(["LOGISTICS", "OPERATIONS"], first_state="PENDING", label="开始收货录入", effects=[NUMBERING_EFFECT]),
                 _state("PENDING", "仓库收货录入", ["LOGISTICS", "OPERATIONS"], [
                     {"to": "PA_REVIEW", "label": "提交 PA 审核", "editable_fields": goods_receipt_fields},
                     {"to": "CANCELLED", "label": "取消入库", "editable_fields": ["notes"]},
@@ -300,7 +306,7 @@ def phase1_workflow_definitions(created_by_id=None):
                            "（业务序：拣货→互检→财务放行→出库；委外发料绕过财务放行直发，03a-9）",
             "group_name": "WMS",
             "states": [
-                _start(["SALES_ASSISTANT", "OPERATIONS"]),
+                _start(["SALES_ASSISTANT", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
                 _state("DRAFT", "SA 发布发货通知", ["SALES_ASSISTANT", "OPERATIONS"], [
                     {"to": "PACKING_LABELING", "label": "提交物流分箱拣货", "editable_fields": shipment_fields},
                     {"to": "CANCELLED", "label": "取消发货", "editable_fields": ["notes"]},
@@ -393,7 +399,7 @@ def phase1_workflow_definitions(created_by_id=None):
             "description": "销售发票 -> 销售出库勾稽 -> 应收账款/销售成本。",
             "group_name": "ERP",
             "states": [
-                _start(["FINANCE", "OPERATIONS"]),
+                _start(["FINANCE", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
                 _state("DRAFT", "登记销售发票", ["FINANCE", "OPERATIONS"], [
                     {"to": "MATCHING", "label": "提交勾稽", "editable_fields": ["invoice_number", "customer_id", "sales_order_id", "shipment_id", "amount", "currency", "tax_rate", "invoice_date", "notes"]},
                     {"to": "CANCELLED", "label": "取消发票", "editable_fields": ["notes"]},
@@ -412,7 +418,7 @@ def phase1_workflow_definitions(created_by_id=None):
             "description": "客户退货通知 -> 物流收货 -> 退货入库/红字处理。",
             "group_name": "WMS",
             "states": [
-                _start(["SALES_ASSISTANT", "OPERATIONS"]),
+                _start(["SALES_ASSISTANT", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
                 _state("DRAFT", "SA 做退货通知", ["SALES_ASSISTANT", "OPERATIONS"], [
                     {"to": "LOGISTICS_RECEIVING", "label": "通知物流收货", "editable_fields": ["return_number", "sales_order_id", "shipment_id", "customer_id", "warehouse_id", "return_reason", "logistics_tracking_number", "notes"]},
                     {"to": "CANCELLED", "label": "取消退货", "editable_fields": ["notes"]},
@@ -434,7 +440,7 @@ def phase1_workflow_definitions(created_by_id=None):
                            "绝不跨公司（源/目标库位 company 必须相同，hard_rule + validator 双保险）；默认不推金蝶。",
             "group_name": "WMS",
             "states": [
-                _start(["LOGISTICS", "LOGISTICS_LEAD", "OPERATIONS"]),
+                _start(["LOGISTICS", "LOGISTICS_LEAD", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
                 _state("DRAFT", "录入调拨单", ["LOGISTICS", "LOGISTICS_LEAD", "OPERATIONS"], [
                     {"to": "REVIEW", "label": "提交主任复核", "editable_fields": stock_transfer_fields},
                     {"to": "CANCELLED", "label": "取消调拨", "editable_fields": ["notes"]},
@@ -455,7 +461,7 @@ def phase1_workflow_definitions(created_by_id=None):
                            "（按差异调 inventory.quantity + 写 COUNT_ADJUST 流水 + 推金蝶库存调整单，默认 OFF）。",
             "group_name": "WMS",
             "states": [
-                _start(["LOGISTICS_LEAD", "FINANCE", "OPERATIONS"]),
+                _start(["LOGISTICS_LEAD", "FINANCE", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
                 _state("DRAFT", "录入库存调整单", ["LOGISTICS_LEAD", "FINANCE", "OPERATIONS"], [
                     {"to": "CONFIRM", "label": "提交财务确认", "editable_fields": stock_adjustment_fields},
                     {"to": "CANCELLED", "label": "取消调整", "editable_fields": ["notes"]},
