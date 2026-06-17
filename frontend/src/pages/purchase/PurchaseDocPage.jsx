@@ -42,6 +42,7 @@ export default function PurchaseDocPage({
   newLabel,          // 新建按钮文案
   todoNote,          // 待后端开通时占位说明
   primaryToStates = [],   // 哪些 to_state 用 primary 按钮高亮
+  noLines = false,   // 无子表单据（如付款申请 ADVANCE_PAYMENT）：跳过明细加载/网格，仅头 + 动作
 }) {
   const { message } = App.useApp();
   const [schema, setSchema] = useState(null);
@@ -92,12 +93,12 @@ export default function PurchaseDocPage({
   }, [docType]);
 
   const loadLines = useCallback(async (headId) => {
-    if (!headId) { setLineRows([]); return; }
+    if (noLines || !headId) { setLineRows([]); return; }
     try {
       const { data } = await query(lineTable, { filters: { [lineFk]: headId }, limit: 200 });
       setLineRows((data?.data || []).map((r) => ({ ...r })));
     } catch { setLineRows([]); }
-  }, [lineTable, lineFk]);
+  }, [noLines, lineTable, lineFk]);
 
   const openDetail = useCallback((row, edit = false) => {
     setDetail(row);
@@ -116,7 +117,8 @@ export default function PurchaseDocPage({
   }, [allActions, detail]);
 
   // ★段1b 教训：strip `_` 前缀派生展示列 + 空值键，防 buildSubUpdates 剥键丢真值。
-  const buildSubUpdates = useCallback(() => lineRows.map((r, i) => {
+  // noLines 单据（无子表）：恒返回空 sub_updates。
+  const buildSubUpdates = useCallback(() => (noLines ? [] : lineRows.map((r, i) => {
     const { id, _delete, [lineFk]: _p, ...rest } = r;
     const isNew = id == null || String(id).startsWith('new_');
     const fields = { ...rest, line_number: rest.line_number || i + 1 };
@@ -127,7 +129,7 @@ export default function PurchaseDocPage({
     return isNew
       ? { table: lineTable, parent_fk: lineFk, fields }
       : { table: lineTable, id, _delete: _delete || undefined, fields };
-  }), [lineRows, lineTable, lineFk]);
+  })), [noLines, lineRows, lineTable, lineFk]);
 
   const onSave = useCallback(async (values) => {
     const field_updates = {};
@@ -297,12 +299,16 @@ export default function PurchaseDocPage({
             <div style={{ fontWeight: 500, color: '#4e4e4e', margin: '4px 0 8px' }}>单据头</div>
             <MasterFormFields fields={headFields} hidden={HEAD_FORM_HIDDEN} />
 
-            <div style={{ fontWeight: 500, color: '#4e4e4e', margin: '12px 0 8px' }}>{lineTitle}</div>
-            <PurchaseLineGrid
-              value={lineRows} onChange={setLineRows}
-              lineTable={lineTable} lineFk={lineFk}
-              scanSequence={scanSequence}
-            />
+            {!noLines && (
+              <>
+                <div style={{ fontWeight: 500, color: '#4e4e4e', margin: '12px 0 8px' }}>{lineTitle}</div>
+                <PurchaseLineGrid
+                  value={lineRows} onChange={setLineRows}
+                  lineTable={lineTable} lineFk={lineFk}
+                  scanSequence={scanSequence}
+                />
+              </>
+            )}
           </>
         ) : (
           <>
@@ -316,10 +322,14 @@ export default function PurchaseDocPage({
                 </Descriptions.Item>
               ))}
             </Descriptions>
-            <div style={{ fontWeight: 500, color: '#4e4e4e', margin: '16px 0 8px' }}>
-              {lineTitle.replace('（网格录入）', '')} · {lineRows.length} 行
-            </div>
-            <PurchaseLineReadonly rows={lineRows} fields={lineFields(lineRows)} />
+            {!noLines && (
+              <>
+                <div style={{ fontWeight: 500, color: '#4e4e4e', margin: '16px 0 8px' }}>
+                  {lineTitle.replace('（网格录入）', '')} · {lineRows.length} 行
+                </div>
+                <PurchaseLineReadonly rows={lineRows} fields={lineFields(lineRows)} />
+              </>
+            )}
           </>
         )}
       </BizDrawerForm>

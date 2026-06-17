@@ -157,8 +157,15 @@ def phase1_workflow_definitions(created_by_id=None):
     # 委外直发边守卫（DSL，引擎 04 §4.B）：互检→出库直发边仅限委外发料（绕过财务放行，PRD 03a-9）；
     # 客户发货/调拨出库必须经财务放行边（蓝图 §5.1）。挂在边上（hard_rules 是 next_entry 边级）。
     shipment_outsource_only_hard_rule = 'doc.outbound_type == "OUTSOURCE"'
+    # 段2c 04a-7：进项发票 ★FINANCE 审核通过 → 形成应付 + 回写 PO + 推金蝶（应付/进项源，EXPLICIT，
+    # 默认 OFF 只入 outbox；幂等键 invoice_number + company_id）。
     purchase_invoice_ap_effect = ["finance.create_accounts_payable_from_purchase_invoice"]
     purchase_invoice_po_effect = ["erp.mark_purchase_order_invoice_matching"]
+    purchase_invoice_kingdee_effect = ["kingdee.enqueue_push"]
+    # 段2c 04a-8：付款申请到账确认 → 应付余额递减（accounts_payable.paid_amount）+ 推金蝶（应付付款执行源，
+    # EXPLICIT，默认 OFF 只入 outbox；幂等键 payment_number + company_id）。本系统只记到账确认，做账在金蝶。
+    payment_request_confirm_effect = ["finance.confirm_payment_request_settlement"]
+    payment_request_kingdee_effect = ["kingdee.enqueue_push"]
     sales_invoice_ar_effect = ["finance.create_accounts_receivable_from_sales_invoice"]
 
     defs = [
@@ -443,20 +450,58 @@ def phase1_workflow_definitions(created_by_id=None):
         },
         {
             "doc_type": "PURCHASE_INVOICE",
-            "name": "ERP-采购发票勾稽流程",
-            "description": "采购发票 -> 外购入库勾稽 -> 应付账款。",
+            "name": "ERP-进项发票审核流程",
+            "description": (
+                "04a-7 进项发票录入 → ★FINANCE 审核 → 形成应付：\n"
+                "PA 收到原厂 invoice 录单（必关联 PO + 入库单，无入库不能录）→ 提交 PENDING_REVIEW\n"
+                "→ ★进项发票审核（allowed_roles=[FINANCE]，财务核发票号/金额/与入库一致）→ AP_CREATED\n"
+                "（形成应付 + 回写 PO + 推金蝶应付/进项源）。这是 PA 在采购端的最后一步。"
+            ),
             "group_name": "ERP",
             "states": [
-                _start(["FINANCE", "PRODUCT_ASSISTANT", "OPERATIONS"]),
+                # 建单取号 PI-YYMM-001（NumberingRule，月度连号）。
+                _start(["FINANCE", "PRODUCT_ASSISTANT", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
                 _state("DRAFT", "登记采购发票", ["FINANCE", "PRODUCT_ASSISTANT", "OPERATIONS"], [
-                    {"to": "MATCHING", "label": "提交勾稽", "editable_fields": ["invoice_number", "supplier_id", "purchase_order_id", "goods_receipt_id", "amount", "currency", "tax_rate", "invoice_date", "notes"]},
+                    {"to": "PENDING_REVIEW", "label": "提交财务审核", "editable_fields": ["invoice_number", "supplier_id", "purchase_order_id", "goods_receipt_id", "amount", "currency", "tax_rate", "invoice_date", "due_date", "notes"]},
                     {"to": "CANCELLED", "label": "取消发票", "editable_fields": ["notes"]},
                 ]),
-                _state("MATCHING", "采购发票勾稽", ["FINANCE", "OPERATIONS"], [
-                    {"to": "AP_CREATED", "label": "勾稽通过并生成应付", "editable_fields": ["notes"], "effects": purchase_invoice_ap_effect + purchase_invoice_po_effect},
-                    {"to": "DRAFT", "label": "退回修改", "editable_fields": ["notes"]},
-                ]),
+                # ★进项发票审核硬关卡（蓝图 §5.1 五关卡之一）：仅 FINANCE 可推进（节点级 allowed_roles）。
+                _state("PENDING_REVIEW", "★进项发票审核（财务）", ["FINANCE"], [
+                    {"to": "AP_CREATED", "label": "审核通过并生成应付", "editable_fields": ["reviewed_by_id", "reviewed_at", "notes"], "effects": purchase_invoice_ap_effect + purchase_invoice_po_effect + purchase_invoice_kingdee_effect},
+                    {"to": "DRAFT", "label": "驳回退回修改", "editable_fields": ["notes"]},
+                ], description="# ★进项发票审核\n财务核对发票号/金额/与入库实收一致 → 形成应付 + 推金蝶；驳回退 DRAFT。"),
                 _state("AP_CREATED", "已生成应付", [], terminal=True),
+                _state("CANCELLED", "已取消", [], terminal=True),
+            ],
+        },
+        {
+            "doc_type": "PAYMENT_REQUEST",
+            "name": "ERP-付款申请流程",
+            "description": (
+                "04a-8 付款申请（货后付款，决策④：发起在采购、执行在财务）：\n"
+                "PA 发起（关联已审进项发票 / PO，金额≤应付余额）→ 提交 PENDING_FINANCE\n"
+                "→ ★FINANCE 执行（做账/打款在金蝶）→ PAID → 到账确认 CONFIRMED\n"
+                "（confirmed 标记 + 应付余额递减；本系统只记到账确认，做账在金蝶）。"
+            ),
+            "group_name": "ERP",
+            "states": [
+                # 建单取号 PAY-YYMM-001（NumberingRule，月度连号）。
+                _start(["PRODUCT_ASSISTANT", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
+                _state("DRAFT", "PA 发起付款申请", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "PENDING_FINANCE", "label": "提交财务执行", "editable_fields": ["payment_number", "payment_type", "supplier_id", "purchase_order_id", "purchase_invoice_id", "requested_by_id", "payee_name", "bank_account", "amount", "currency", "due_date", "notes"]},
+                    {"to": "CANCELLED", "label": "取消申请", "editable_fields": ["notes"]},
+                ]),
+                # ★财务执行硬关卡：仅 FINANCE 可推进（节点级 allowed_roles）；执行=打款做账在金蝶。
+                _state("PENDING_FINANCE", "★财务执行付款（财务）", ["FINANCE"], [
+                    {"to": "PAID", "label": "财务执行付款", "editable_fields": ["approved_by_id", "payment_date", "notes"], "effects": payment_request_kingdee_effect},
+                    {"to": "DRAFT", "label": "驳回退回修改", "editable_fields": ["notes"]},
+                ], description="# ★财务执行付款\n财务执行打款（做账在金蝶）+ 推金蝶应付付款执行源；驳回退 DRAFT。"),
+                _state("PAID", "已付款待确认", ["FINANCE", "OPERATIONS"], [
+                    # confirmed 标记由 confirm effect 置（不放进 editable_fields）：effect 守卫 confirmed 幂等，
+                    # 同事务内置标记 + 递减应付（field_updates 先于 effects 执行，放白名单会让守卫误判已确认）。
+                    {"to": "CONFIRMED", "label": "确认到账", "editable_fields": ["payment_date", "notes"], "effects": payment_request_confirm_effect},
+                ], description="# 已付款\n财务打款后等到账回单 → 确认到账 + 台账应付递减（决策④只记到账确认）。"),
+                _state("CONFIRMED", "已确认到账", [], terminal=True),
                 _state("CANCELLED", "已取消", [], terminal=True),
             ],
         },

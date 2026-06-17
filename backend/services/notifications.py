@@ -217,6 +217,59 @@ async def scan_return_180(db: AsyncSession) -> int:
     return created
 
 
+async def scan_purchase_in_transit_alerts(db: AsyncSession) -> int:
+    """采购在途提醒（04a-6）：扫「已下单未到货」的在途行，超期未给货期/未发货 → 通知 PA。
+
+    引擎无定时器 → 本扫描留可调度入口（手动/外部调度），dedup_key 幂等防重复刷屏。
+    判定（按 purchase_in_transit.track_status 业务约定值）：
+      - track_status ∈ {PENDING_ACCEPT, ACCEPTED} 且 promised/latest_eta 均空（未给货期）→ 提醒；
+      - promised/latest_eta 已过期且尚未发货（track_status 未到 SHIPPED/PARTIAL/RECEIVED）→ 提醒。
+    通知派给该 PO 的 PA（purchase_assistant_id）；无 PA 则角色广播 PRODUCT_ASSISTANT。返回新增通知数。
+    """
+    today = date.today()
+    rows = (await db.execute(
+        select(m.PurchaseInTransit).where(
+            m.PurchaseInTransit.track_status.notin_(("SHIPPED", "PARTIAL", "RECEIVED")),
+        )
+    )).scalars().all()
+    created = 0
+    for it in rows:
+        eta = it.promised_eta or it.latest_eta
+        no_eta = it.track_status in ("PENDING_ACCEPT", "ACCEPTED") and not eta
+        overdue = eta is not None and eta < today
+        if not (no_eta or overdue):
+            continue
+        po = (await db.execute(
+            select(m.PurchaseOrder).where(m.PurchaseOrder.id == it.purchase_order_id)
+        )).scalar_one_or_none()
+        po_no = po.order_number if po else f"PO{it.purchase_order_id}"
+        pa_id = po.purchase_assistant_id if po else None
+        if no_eta:
+            title = f"采购在途超期未给货期 {po_no}"
+            body = f"PO {po_no} 已下单未给货期（{it.track_status}），请催原厂确认承诺货期。"
+            dedup = f"intransit:noeta:{it.id}:{today}"
+        else:
+            title = f"采购在途超期未发货 {po_no}"
+            body = f"PO {po_no} 承诺货期 {eta} 已过期仍未发货（{it.track_status}），请催原厂发货。"
+            dedup = f"intransit:overdue:{it.id}:{eta}"
+        note = await create_notification(
+            db,
+            company_id=it.company_id,
+            category="IN_TRANSIT",
+            title=title,
+            body=body,
+            severity="WARN",
+            recipient_id=pa_id,
+            recipient_role="PRODUCT_ASSISTANT" if pa_id is None else "",
+            source_doc_type="PURCHASE_IN_TRANSIT",
+            source_doc_id=it.id,
+            dedup_key=dedup,
+        )
+        if note:
+            created += 1
+    return created
+
+
 async def scan_overdue_payables(db: AsyncSession) -> int:
     """应付到期（超期）扫描：到期日已过且未付 → 通知财务。返回新增通知数。"""
     today = date.today()
@@ -300,7 +353,7 @@ async def mark_notification_read(ctx: CommandContext, payload: dict) -> dict:
     "run_notification_scan",
     module="NOTIFY",
     title="跑通知扫描",
-    description="可调度入口：扫描应收/应付到期、退运180天，生成通知（引擎无 cron）",
+    description="可调度入口：扫描应收/应付到期、退运180天、采购在途超期，生成通知（引擎无 cron）",
     affected_tables=("notification",),
     supports_retry=True,
 )
@@ -309,8 +362,13 @@ async def run_notification_scan(ctx: CommandContext, payload: dict) -> dict:
     due_ar = await scan_due_receivables(ctx.db)
     due_ap = await scan_overdue_payables(ctx.db)
     return_180 = await scan_return_180(ctx.db)
-    total = due_ar + due_ap + return_180
+    in_transit = await scan_purchase_in_transit_alerts(ctx.db)
+    total = due_ar + due_ap + return_180 + in_transit
     ctx.add_event("notification_scan_done", {
-        "due_receivables": due_ar, "due_payables": due_ap, "return_180": return_180, "total": total,
+        "due_receivables": due_ar, "due_payables": due_ap, "return_180": return_180,
+        "in_transit": in_transit, "total": total,
     })
-    return {"due_receivables": due_ar, "due_payables": due_ap, "return_180": return_180, "total": total}
+    return {
+        "due_receivables": due_ar, "due_payables": due_ap, "return_180": return_180,
+        "in_transit": in_transit, "total": total,
+    }

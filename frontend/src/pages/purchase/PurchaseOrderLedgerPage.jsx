@@ -19,9 +19,36 @@ import { Alert, App, Button, Descriptions, Segmented, Space, Tabs, Tag } from 'a
 import { DownloadOutlined } from '@ant-design/icons';
 import { BizTable, BizDrawerForm } from '../../components/biz';
 import { useAuth } from '../../auth';
-import { query, getSchema } from '../../api';
+import { query, getSchema, getPurchaseLedger } from '../../api';
 import { schemaToColumns, renderCellByField } from '../wms/wmsHelpers';
 import { StatusPill } from '../wms/wmsShared';
+
+const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+
+// 发货 / 付款段字段（源 Shipping total，沿 FK 聚合 shipment + advance_payment/payment_request）。
+// 由后端扩展的 /api/purchase/ledger 行携带；段2c 后端补齐前对应键缺失 → 该行不渲（不写死假列）。
+// 应付余额=发货额-已付 等买价口径列对 SALES+SA 由后端遮蔽（buy_price_visible=false 时整键剔除）。
+const SHIP_PAY_FIELDS = [
+  { key: 'shipped_date', label: '实际发货日期', type: 'date' },
+  { key: 'arrival_date', label: '到库日期', type: 'date' },
+  { key: 'shipped_quantity', label: '发货数量', type: 'num' },
+  { key: 'invoice_number', label: '发票号', type: 'text' },
+  { key: 'payment_due_date', label: '货款到期日', type: 'date' },
+  { key: 'payment_status', label: '付款状态', type: 'text' },
+  { key: 'shipped_amount', label: '发货金额🔒', type: 'num' },
+  { key: 'paid_amount', label: '已付金额🔒', type: 'num' },
+  { key: 'payable_balance', label: '应付余额🔒', type: 'num' },
+  { key: 'payment_date_1', label: '付款日 1', type: 'date' },
+  { key: 'payment_date_2', label: '付款日 2', type: 'date' },
+  { key: 'payment_date_3', label: '付款日 3', type: 'date' },
+];
+
+function shipPayCell(type, v) {
+  if (v == null || v === '') return <span style={{ color: '#bfbbb5' }}>—</span>;
+  if (type === 'num') return <span style={{ fontFamily: MONO }}>{Number(v).toLocaleString()}</span>;
+  if (type === 'date') return String(v).slice(0, 10);
+  return String(v);
+}
 
 const TABLE = 'purchase_order';
 const LINE_TABLE = 'purchase_order_line';
@@ -39,6 +66,8 @@ export default function PurchaseOrderLedgerPage() {
   const [pivotRows, setPivotRows] = useState([]);   // 透视 Tab 聚合数据源
   const [detail, setDetail] = useState(null);
   const [lineRows, setLineRows] = useState([]);
+  const [aggRow, setAggRow] = useState(null);       // 当前 PO 的聚合台账行（含发货/付款段，/api/purchase/ledger）
+  const [aggState, setAggState] = useState('idle'); // idle | loading | ready | unavailable
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -93,11 +122,31 @@ export default function PurchaseOrderLedgerPage() {
     } catch { setLineRows([]); }
   }, []);
 
+  // 拉本 PO 的聚合台账行（发货/付款/在途段，沿 FK over shipment + advance_payment/payment_request）。
+  // 端点未扩展（段2c 前）或无对应行 → unavailable，drawer 显示「聚合中」而非写死假列。
+  const loadAggRow = useCallback(async (po) => {
+    if (!po?.id) { setAggRow(null); setAggState('idle'); return; }
+    setAggState('loading');
+    try {
+      const { data } = await getPurchaseLedger({
+        ...(po.purchase_assistant_id ? { purchase_assistant_id: po.purchase_assistant_id } : {}),
+        limit: 500,
+      });
+      const found = (data?.rows || []).find((r) => r.purchase_order_id === po.id) || null;
+      setAggRow(found);
+      setAggState(found ? 'ready' : 'unavailable');
+    } catch {
+      setAggRow(null);
+      setAggState('unavailable');
+    }
+  }, []);
+
   const openDetail = useCallback((row) => {
     setDetail(row);
     loadLines(row?.id);
+    loadAggRow(row);
     setDrawerOpen(true);
-  }, [loadLines]);
+  }, [loadLines, loadAggRow]);
 
   const exportCsv = useCallback(async () => {
     try {
@@ -153,6 +202,12 @@ export default function PurchaseOrderLedgerPage() {
     [schema]
   );
 
+  // 聚合行里实际存在的发货/付款段字段（买价口径列被后端遮蔽时该键本就不在 → 不出现，守 Q18）。
+  const shipPayPresent = useMemo(
+    () => (aggRow ? SHIP_PAY_FIELDS.filter((f) => f.key in aggRow) : []),
+    [aggRow]
+  );
+
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
@@ -167,7 +222,7 @@ export default function PurchaseOrderLedgerPage() {
       <Alert
         type="info" showIcon style={{ marginBottom: 16, borderRadius: 12 }}
         title="采购台账 = 跨单据聚合的只读全景；点行下钻 PO 详情（不在大表内联编辑，编辑回 PO 单据页）"
-        description="PA「只拉我的数据」（默认按本人过滤，可切全部）；列含下单日期 / PO号 / 原厂SO# / 报备客户 / 供应商 / PM / 型号 / 订单数量 / 单价🔒 / 是否备货 / 备货消单。单价 / 订单金额 / 备货金额等采购进价由后端字段防火墙对销售端（SALES + SA）遮蔽——按 schema 渲染，销售登录时该列不出现。在途 / 发货 / 付款段属跨单据聚合端点，标「待段2c」。"
+        description="PA「只拉我的数据」（默认按本人过滤，可切全部）；列含下单日期 / PO号 / 原厂SO# / 报备客户 / 供应商 / PM / 型号 / 订单数量 / 单价🔒 / 是否备货 / 备货消单。单价 / 订单金额 / 备货金额等采购进价由后端字段防火墙对销售端（SALES + SA）遮蔽——按 schema 渲染，销售登录时该列不出现。下钻 PO 详情含在途 / 发货 / 付款段（沿 FK 聚合 shipment + 付款，/api/purchase/ledger）。"
       />
 
       <Tabs
@@ -244,11 +299,31 @@ export default function PurchaseOrderLedgerPage() {
         </div>
         <LineReadonly rows={lineRows} fields={lineDisplayFields(lineRows)} />
 
-        <Alert
-          type="warning" showIcon style={{ marginTop: 16, borderRadius: 12 }}
-          title="在途 / 发货 / 付款段 · 待段2c"
-          description="发货日期 / 到库日期 / 发货数量 / 货款到期 / 付款状态 / 应付余额 / 付款日1·2·3 等（源 Shipping total）属跨单据聚合（PO + 在途 + 发货 + 付款沿 FK），由后端 ➕ 只读聚合端点出列，段2c 落地后本抽屉自动补段。"
-        />
+        <div style={{ fontWeight: 500, color: '#4e4e4e', margin: '16px 0 8px' }}>
+          在途 / 发货 / 付款段（沿 FK 聚合 shipment + 付款）
+        </div>
+        {aggState === 'ready' ? (
+          <Descriptions column={2} size="small" bordered
+            styles={{ label: { width: 130, color: '#777169' } }}>
+            <Descriptions.Item label="订单数量">{shipPayCell('num', aggRow?.ordered_quantity)}</Descriptions.Item>
+            <Descriptions.Item label="已到货">{shipPayCell('num', aggRow?.received_quantity)}</Descriptions.Item>
+            <Descriptions.Item label="在途数量">{shipPayCell('num', aggRow?.in_transit_quantity)}</Descriptions.Item>
+            <Descriptions.Item label="原厂发货日期">{shipPayCell('date', aggRow?.expected_delivery_date)}</Descriptions.Item>
+            {shipPayPresent.map((f) => (
+              <Descriptions.Item key={f.key} label={f.label}>
+                {shipPayCell(f.type, aggRow?.[f.key])}
+              </Descriptions.Item>
+            ))}
+          </Descriptions>
+        ) : aggState === 'loading' ? (
+          <span style={{ color: '#bfbbb5', fontSize: 13 }}>聚合中…</span>
+        ) : (
+          <Alert
+            type="warning" showIcon style={{ borderRadius: 12 }}
+            title="发货 / 付款段聚合中 · 待后端补段"
+            description="发货日期 / 到库日期 / 发货数量 / 货款到期 / 付款状态 / 应付余额 / 付款日1·2·3 等（源 Shipping total）由后端 /api/purchase/ledger 沿 FK 聚合（shipment + advance_payment/payment_request）出列；后端段2c 补齐对应键后本段自动补全，应付余额等买价口径列对 SALES/SA 由后端遮蔽即不出现。"
+          />
+        )}
       </BizDrawerForm>
     </div>
   );

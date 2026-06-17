@@ -38,6 +38,9 @@ import SupplierInquiryPage from './pages/purchase/SupplierInquiryPage';
 import PurchaseNoticePage from './pages/purchase/PurchaseNoticePage';
 import PurchaseOrderPage from './pages/purchase/PurchaseOrderPage';
 import PurchaseOrderLedgerPage from './pages/purchase/PurchaseOrderLedgerPage';
+import PurchaseInvoicePage from './pages/purchase/PurchaseInvoicePage';
+import PurchaseInTransitPage from './pages/purchase/PurchaseInTransitPage';
+import PaymentRequestPage from './pages/purchase/PaymentRequestPage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -119,9 +122,9 @@ function AppRoutes() {
         <Route path="purchase/stockup" element={PH('备货申请', '采购 / 供应链')} />
         <Route path="purchase/samples" element={PH('样品 SDN', '采购 / 供应链')} />
         <Route path="purchase/rma" element={PH('RMA 退货', '采购 / 供应链')} />
-        <Route path="purchase/invoices" element={PH('进项发票录入 / 审核', '采购 / 供应链')} />
-        <Route path="purchase/intransit" element={PH('采购在途', '采购 / 供应链')} />
-        <Route path="purchase/payments" element={PH('付款申请', '采购 / 供应链')} />
+        <Route path="purchase/invoices" element={<PurchaseInvoicePage />} />
+        <Route path="purchase/intransit" element={<PurchaseInTransitPage />} />
+        <Route path="purchase/payments" element={<PaymentRequestPage />} />
 
         {/* 3 仓储 WMS（入库与库存 03a：干净业务页，走元数据 API；出库/调拨/盘点/委外为后续段） */}
         <Route path="wms/inbound" element={<InboundPage />} />

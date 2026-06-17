@@ -37,6 +37,12 @@ export const getCommandDetail = (id) => api.get(`/commands/logs/${id}`);
 export const getCommandInventoryMovements = (id) => api.get(`/commands/logs/${id}/inventory-movements`);
 export const retryCommandLog = (id) => api.post(`/commands/logs/${id}/retry`);
 
+// 采购台账聚合（段2b/2c 只读端点）
+export const getPurchaseLedger = (params = {}) => api.get('/purchase/ledger', { params });
+export const getPurchaseIntransit = (params = {}) => api.get('/purchase/intransit', { params });
+// 采购在途提醒扫描（手动触发轻量扫描：承诺 ETA 过期且未发货 → 写站内提醒）
+export const scanPurchaseIntransitAlerts = () => api.post('/purchase/intransit/scan-alerts');
+
 // WMS 一期
 export const getWmsSummary = () => api.get('/wms/summary');
 export const getWmsInventory = (params = {}) => api.get('/wms/inventory', { params });

@@ -38,6 +38,9 @@ NUMBER_COLUMN_BY_DOC_TYPE: dict[str, str] = {
     "SALES_INQUIRY": "inquiry_number",
     "PURCHASE_NOTICE": "notice_number",
     "SUPPLIER_INQUIRY": "inquiry_number",
+    # 段2c 采购收尾：进项发票 PI / 付款申请 PAY 业务连号（月度重置补零3）。
+    "PURCHASE_INVOICE": "invoice_number",
+    "PAYMENT_REQUEST": "payment_number",
 }
 
 # 引擎默认兜底号形态：{PREFIX}-{YYMMDD}-{6位HEX}（_auto_fill_required_fields）。

@@ -45,6 +45,8 @@ KINGDEE_FORM_MAP: dict[str, dict] = {
     "STOCK_ADJUSTMENT":    {"form_id": "im_otherinbill",  "url": "/v2/im/im_otherinbill/batchAdd"},
     "ADVANCE_RECEIPT":     {"form_id": "cas_recbill",     "url": "/v2/cas/cas_recbill/addSave"},
     "ADVANCE_PAYMENT":     {"form_id": "cas_paybill",     "url": "/v2/cas/cas_paybill/addSave"},
+    # 段2c 04a-8：付款申请（货后付款执行）→ 金蝶付款单（应付付款执行源，幂等键 payment_number+company）。
+    "PAYMENT_REQUEST":     {"form_id": "cas_paybill",     "url": "/v2/cas/cas_paybill/addSave"},
 }
 
 

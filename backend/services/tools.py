@@ -64,6 +64,10 @@ BUY_PRICE_FIELDS = {
     "unit_price", "total_price", "total_amount", "current_unit_cost", "total_value",
     "unit_cost", "total_cost", "commission",
     "advance_payment_amount", "stock_amount_original", "stock_amount_latest",
+    # 段2c 04a-7/04a-8：进项发票 / 预付 / 付款申请 / 应付的 amount = 采购成本/应付（对销售端隐藏，Q18）。
+    # 仅作用于 BUY_TABLES（purchase_invoice/advance_payment/payment_request/accounts_payable），
+    # 这些表的 amount 即采购进价/应付，不影响 sales 侧（SELL_TABLES 用 SELL_PRICE_FIELDS）。
+    "amount",
 }
 # 需要隐藏卖价的字段（在sales相关表上）
 SELL_PRICE_FIELDS = {"unit_price", "total_price", "total_amount"}
@@ -76,6 +80,8 @@ BUY_TABLES = {
     "inventory", "inventory_movement",
     # 04a-2 对原厂询价明细：unit_price（对原厂单价）/commission（佣金）= 采购进价，对销售端隐藏（Q18）
     "supplier_inquiry_line",
+    # 段2c 04a-8：付款申请金额（采购成本/应付）对销售端隐藏（Q18）。
+    "payment_request",
 }
 SELL_TABLES = {
     "sales_order", "sales_order_line", "sales_inquiry", "sales_inquiry_line",
@@ -147,6 +153,8 @@ ROLE_ALLOWED_TABLES = {
         "sales_order", "sales_order_line",
         "purchase_invoice", "purchase_invoice_line",
         "advance_payment",
+        # 段2c 采购收尾：付款申请（货后付款，PA 发起）+ 采购在途跟踪（PA 录货期/查在途）。
+        "payment_request", "purchase_in_transit",
         "goods_receipt", "goods_receipt_line",
         "accounts_payable",
         "inventory", "inventory_reservation", "inventory_policy", "inventory_count", "inventory_count_line",

@@ -701,6 +701,11 @@ async def create_sales_return_from_shipment(
 async def create_accounts_payable_from_purchase_invoice(
     db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
 ) -> list[str]:
+    # 04a-7 ★审核留痕：财务审核通过这一刻回写 reviewed_by/at（editable_fields 已放行该两列）。
+    if getattr(doc, "reviewed_by_id", None) is None:
+        doc.reviewed_by_id = _actor_id(doc, user)
+    if getattr(doc, "reviewed_at", None) is None:
+        doc.reviewed_at = datetime.now()
     existing = await _one(db, m.AccountsPayable, m.AccountsPayable.company_id == doc.company_id, m.AccountsPayable.invoice_number == doc.invoice_number)
     if existing:
         return [f"accounts payable already exists: {existing.id}"]
@@ -710,7 +715,7 @@ async def create_accounts_payable_from_purchase_invoice(
         invoice_number=doc.invoice_number,
         amount=doc.amount,
         currency=doc.currency,
-        due_date=date.today(),
+        due_date=getattr(doc, "due_date", None) or date.today(),
         company_id=doc.company_id,
         created_by_id=_actor_id(doc, user),
         status="PENDING",
@@ -718,6 +723,40 @@ async def create_accounts_payable_from_purchase_invoice(
     db.add(row)
     await db.flush()
     return [f"created accounts_payable#{row.id} from purchase_invoice#{doc.id}"]
+
+
+@register_transition_effect("finance.confirm_payment_request_settlement", auto=False)
+async def confirm_payment_request_settlement(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """付款申请到账确认（04a-8 决策④）：打到账确认标记 + 应付余额递减。
+
+    本系统只记到账确认 + 台账（做账/付款执行在金蝶）：confirmed=True，并把已审进项发票对应的
+    accounts_payable.paid_amount 累加本次付款额（递减应付余额=amount-paid_amount），结清置 PAID。
+    幂等：confirmed 已为 True 则 no-op（防退回再触发重复递减）。
+    """
+    if getattr(doc, "confirmed", False):
+        return [f"payment_request#{doc.id} already confirmed"]
+    doc.confirmed = True
+    logs = [f"payment_request#{doc.id} confirmed (到账确认)"]
+
+    # 沿 purchase_invoice → invoice_number 定位应付，递减余额（货后付款须关联已审进项发票）。
+    ap = None
+    if getattr(doc, "purchase_invoice_id", None):
+        inv = await _one(db, m.PurchaseInvoice, m.PurchaseInvoice.id == doc.purchase_invoice_id)
+        if inv:
+            ap = await _one(
+                db, m.AccountsPayable,
+                m.AccountsPayable.company_id == doc.company_id,
+                m.AccountsPayable.invoice_number == inv.invoice_number,
+            )
+    if ap is not None:
+        ap.paid_amount = _num(ap.paid_amount) + _num(doc.amount)
+        ap.paid_date = doc.payment_date or date.today()
+        if _num(ap.paid_amount) >= _num(ap.amount):
+            ap.status = "PAID"
+        logs.append(f"accounts_payable#{ap.id} paid_amount={ap.paid_amount} status={ap.status}")
+    return logs
 
 
 @register_transition_effect("erp.mark_purchase_order_invoice_matching", auto=False)

@@ -1424,8 +1424,61 @@ class AdvancePayment(AuditMixin, Base):
     __table_args__ = (UniqueConstraint("company_id", "payment_number"),)
 
 
+class PaymentRequest(AuditMixin, Base):
+    """付款申请（04a-8 货后付款，决策④：发起在采购、执行在财务）。
+
+    预付用 ADVANCE_PAYMENT（PO 下单即付，本无发票）；货后付款用本模型——关联已审进项发票，
+    PA 发起 → ★FINANCE 执行（做账/打款在金蝶）→ 到账确认（confirmed），本系统只记到账确认 + 台账。
+    应付余额递减落在 accounts_payable.paid_amount（confirm effect）。
+    """
+    __tablename__ = "payment_request"
+    __doc_types__ = ("PAYMENT_REQUEST",)
+    id = Column(Integer, primary_key=True)
+    payment_number = Column(String(50), index=True, nullable=False)
+    payment_type = Column(String(20), default="POST_DELIVERY")  # ADVANCE / POST_DELIVERY（货后）
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)
+    purchase_order_id = Column(Integer, ForeignKey("purchase_order.id"), nullable=True)
+    purchase_invoice_id = Column(Integer, ForeignKey("purchase_invoice.id"), nullable=True)  # 货后必填：关联已审进项发票
+    requested_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    approved_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    bank_account = Column(String(50), default="")
+    payee_name = Column(String(100), default="")
+    amount = Column(Numeric(16, 2), nullable=False)
+    currency = Column(String(3), default="CNY")
+    due_date = Column(Date, nullable=True)       # 付款到期日（货款到期日期）
+    payment_date = Column(Date, nullable=True)   # 财务执行回填
+    confirmed = Column(Boolean, default=False)   # 决策④：到账确认标记（财务执行后置）
+    status = Column(String(30), default="DRAFT")
+    notes = Column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("company_id", "payment_number"),)
+
+
+class PurchaseInTransit(AuditMixin, Base):
+    """采购在途跟踪（04a-6，原厂→我方，PA 人工跟踪货期）。
+
+    引擎无在途模型/无定时器。本表存 PA 线下催来的承诺货期/最新预计/跟踪状态（一 PO 一行）；
+    订单/已收/在途数量由 /api/purchase/intransit 聚合 purchase_order_line 实时算（不冗存）。
+    提醒由 notifications.scan_purchase_in_transit_alerts 扫「超期未给货期/未发货」生成（手动/外部调度）。
+    __queryable__：PA 可在台账查看/录入承诺货期。
+    """
+    __tablename__ = "purchase_in_transit"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    purchase_order_id = Column(Integer, ForeignKey("purchase_order.id"), nullable=False)
+    promised_eta = Column(Date, nullable=True)   # 原厂承诺货期（PA 线下催来录入）
+    latest_eta = Column(Date, nullable=True)     # 最新预计到货（PA 更新）
+    # 跟踪状态：PENDING_ACCEPT 待确认接单 / ACCEPTED 已接单待货期 / ETA_GIVEN 已给货期 /
+    # SHIPPED 已发货 / PARTIAL 部分到货 / RECEIVED 已到货
+    track_status = Column(String(20), default="PENDING_ACCEPT")
+    shipped_date = Column(Date, nullable=True)
+    notes = Column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("company_id", "purchase_order_id"),)
+
+
 class PurchaseInvoice(AuditMixin, Base):
-    """采购发票：与外购入库单勾稽后形成采购核算。"""
+    """采购发票：与外购入库单勾稽后形成采购核算（04a-7：PA 录→★FINANCE 审→形成应付）。"""
     __tablename__ = "purchase_invoice"
     __doc_types__ = ("PURCHASE_INVOICE",)
     id = Column(Integer, primary_key=True)
@@ -1437,7 +1490,11 @@ class PurchaseInvoice(AuditMixin, Base):
     currency = Column(String(3), default="CNY")
     tax_rate = Column(Numeric(5, 2), default=0)
     invoice_date = Column(Date, nullable=True)
+    due_date = Column(Date, nullable=True)  # 04a-7：到期日（按付款条件推；货后付款据此发起）
     matched_at = Column(DateTime, nullable=True)
+    # 04a-7 ★进项发票审核：财务核发票号/金额/与入库一致 → 形成应付（FINANCE 审核留痕）。
+    reviewed_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
     status = Column(String(30), default="DRAFT")
     notes = Column(Text, default="")
 
