@@ -89,6 +89,10 @@ def phase1_workflow_definitions(created_by_id=None):
         "bill_to_contact", "bill_to_phone", "end_user", "vendor_code", "ship_via",
         "supplier_contact", "buyer_name", "requires_advance_payment",
         "advance_payment_amount", "notes",
+        # 段2b 04a-3：PO 头扩列（原厂 SO# / PM / PD / 采购通知日期 / 备货金额组 / 是否备货 / 实际发货日）。
+        "factory_so_number", "product_manager_id", "pd_id", "notice_date",
+        "is_stock_order", "stock_amount_original", "stock_amount_latest",
+        "stock_quantity", "stock_reason", "actual_delivery_date",
     ]
     shipment_fields = [
         "sales_order_id", "requested_by_id", "approved_by_id", "warehouse_id",
@@ -132,6 +136,11 @@ def phase1_workflow_definitions(created_by_id=None):
     purchase_notice_to_po_effect = ["erp.create_purchase_order_from_notice"]
     purchase_order_to_goods_receipt_effect = ["wms.create_goods_receipt_from_purchase_order"]
     purchase_order_advance_payment_effect = ["finance.create_advance_payment_from_purchase_order"]
+    # 段2b 04a-3：PO 采购审批通过到 ORDERED → 推金蝶采购订单（应付源，07b·EXPLICIT effect，
+    # 开关默认 OFF 只入 outbox；幂等键 order_number + company_id）。
+    purchase_order_kingdee_effect = ["kingdee.enqueue_push"]
+    # 需预付分支：审批通过下单 + 推金蝶 + 派生预付款申请（requires_advance_payment 时走此边）。
+    purchase_order_ordered_advance_effect = ["kingdee.enqueue_push", "finance.create_advance_payment_from_purchase_order"]
     goods_receipt_stock_effect = ["wms.stock_goods_receipt"]
     goods_receipt_followup_effect = ["erp.complete_purchase_receipt_followup"]
     # 入库审核通过推金蝶外购/其他入库单（07b·EXPLICIT effect，开关默认 OFF 只入 outbox）。
@@ -285,36 +294,56 @@ def phase1_workflow_definitions(created_by_id=None):
         },
         {
             "doc_type": "PURCHASE_ORDER",
-            "name": "ERP-采购订单履约流程",
-            "description": "采购订单审核 -> 预付判断 -> 到货 -> 入库/发票。",
-            "group_name": "ERP",
+            "name": "采购-采购订单主链流程",
+            "description": "段2b 04a-3 聚焦主链（重构自 K3 镜像大流程，蓝图 §5.1 ★财务采购审批）："
+                           "PA 录单 DRAFT → PA 提交 PENDING_APPROVAL → ★财务采购审批 FINANCE_APPROVAL"
+                           "（allowed_roles=[FINANCE]，凡涉钱货出公司必财务审）→ 已下单 ORDERED"
+                           "（推金蝶采购订单+导出发原厂；requires_advance_payment 时派生预付款申请）"
+                           "→ 部分到货 PARTIAL / 已到货 RECEIVED（入库 effect 回填 received_quantity 消在途）→ 关闭 CLOSED。"
+                           "入库/质检/发票/应付已移出本流程：入库=GOODS_RECEIPT（经 purchase_order_id 关联回填）、"
+                           "发票=PURCHASE_INVOICE（04a-7 独立流程）。"
+                           "🔒Q18：PO 头买价（total_amount/advance_payment_amount/stock_amount_*）+ 行（unit_price/total_price）"
+                           "对销售端 SALES+SA 隐藏（字段防火墙）。",
+            "group_name": "采购",
             "states": [
-                _start(["PRODUCT_ASSISTANT", "OPERATIONS"]),
+                # 建单取号：START 挂 numbering effect，建单后同事务内取 PO 月度连号（PO-YYMM-001）。
+                _start(["PRODUCT_ASSISTANT", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
                 _state("DRAFT", "PA 录入采购订单", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
-                    {"to": "SUPPLY_MANAGER_REVIEW", "label": "提交供应经理审核", "editable_fields": purchase_order_fields},
+                    {"to": "PENDING_APPROVAL", "label": "提交采购审批", "editable_fields": purchase_order_fields},
                     {"to": "CANCELLED", "label": "取消采购", "editable_fields": ["notes"]},
-                ]),
-                _state("SUPPLY_MANAGER_REVIEW", "供应经理审核", ["PRODUCT_MANAGER", "OPERATIONS", "BOSS"], [
-                    {"to": "ADVANCE_PAYMENT_REQUIRED", "label": "需要预付款", "editable_fields": ["requires_advance_payment", "advance_payment_amount", "notes"], "effects": purchase_order_advance_payment_effect},
-                    {"to": "ORDERED", "label": "审核通过并下单", "editable_fields": ["expected_delivery_date", "notes"]},
-                    {"to": "DRAFT", "label": "退回修改", "editable_fields": ["notes"]},
-                ]),
-                _state("ADVANCE_PAYMENT_REQUIRED", "待供应商预付", ["PRODUCT_ASSISTANT", "FINANCE", "OPERATIONS"], [
-                    {"to": "ORDERED", "label": "预付已完成并下单", "editable_fields": ["notes"]},
-                ]),
+                ], description="# PA 录入采购订单\n"
+                               "选供应商、按该供应商维度产品代码逐行录型号/数量/单价（手录可改）；"
+                               "填报备 end-customer（PM 定可≠销售客户）、原厂 SO#、是否备货、是否预付。行数量≠0。"),
+                # 待采购审批：PA 提交后在此等待，由 PA/运营正式递交财务审批（进入 ★FINANCE 节点）。
+                _state("PENDING_APPROVAL", "待采购审批", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "FINANCE_APPROVAL", "label": "递交财务采购审批", "editable_fields": ["notes"]},
+                    {"to": "DRAFT", "label": "撤回修改", "editable_fields": ["notes"]},
+                    {"to": "CANCELLED", "label": "取消采购", "editable_fields": ["notes"]},
+                ], description="# 待采购审批\n提交即冻结金额，递交财务采购审批（蓝图 §5.1 ★）。"),
+                # ★财务采购审批（蓝图 §5.1）：FINANCE 审，凡涉钱货出公司必经此关。
+                _state("FINANCE_APPROVAL", "★财务采购审批", ["FINANCE"], [
+                    {"to": "ORDERED", "label": "审核通过并下单", "editable_fields": ["expected_delivery_date", "notes"], "effects": purchase_order_kingdee_effect},
+                    {"to": "ORDERED", "label": "审核通过并下单（需预付）", "editable_fields": ["expected_delivery_date", "requires_advance_payment", "advance_payment_amount", "notes"], "effects": purchase_order_ordered_advance_effect},
+                    {"to": "REJECTED", "label": "驳回", "editable_fields": ["notes"]},
+                ], description="# ★财务采购审批（FINANCE）\n"
+                               "财务采购审批（蓝图 §5.1）。通过→已下单 ORDERED：推金蝶采购订单（应付源，默认 OFF 只入 outbox）+ 导出发原厂；"
+                               "requires_advance_payment 时走「需预付」边派生预付款申请。驳回→退回改单。"),
                 _state("ORDERED", "已下单待到货", ["LOGISTICS", "PRODUCT_ASSISTANT", "OPERATIONS"], [
-                    {"to": "GOODS_RECEIVED", "label": "仓库已收货", "editable_fields": ["actual_delivery_date", "notes"], "effects": purchase_order_to_goods_receipt_effect},
-                ]),
-                _state("GOODS_RECEIVED", "已到货待入库", ["LOGISTICS", "PRODUCT_ASSISTANT", "OPERATIONS"], [
-                    {"to": "STOCKED_IN", "label": "入库完成", "editable_fields": ["notes"]},
-                ]),
-                _state("STOCKED_IN", "已入库待发票", ["FINANCE", "PRODUCT_ASSISTANT", "OPERATIONS"], [
-                    {"to": "INVOICE_MATCHING", "label": "采购发票勾稽", "editable_fields": ["notes"]},
-                ]),
-                _state("INVOICE_MATCHING", "采购核算完成", ["FINANCE", "OPERATIONS"], [
-                    {"to": "COMPLETED", "label": "采购完成", "editable_fields": ["notes"]},
-                ]),
-                _state("COMPLETED", "已完成", [], terminal=True),
+                    # 入库派生（PO→GOODS_RECEIPT，经 purchase_order_id 关联，入库审核后回填 received_quantity 消在途）。
+                    {"to": "PARTIAL", "label": "部分到货", "editable_fields": ["actual_delivery_date", "notes"], "effects": purchase_order_to_goods_receipt_effect},
+                    {"to": "RECEIVED", "label": "已全部到货", "editable_fields": ["actual_delivery_date", "notes"], "effects": purchase_order_to_goods_receipt_effect},
+                    {"to": "CANCELLED", "label": "取消采购", "editable_fields": ["notes"]},
+                ], description="# 已下单待到货\n已推金蝶（应付源）+ 导出发原厂。货期跟踪进采购在途台账（04a-6，段2c）。"),
+                _state("PARTIAL", "部分到货", ["LOGISTICS", "PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "RECEIVED", "label": "剩余到货", "editable_fields": ["actual_delivery_date", "notes"]},
+                ], description="# 部分到货\n入库审核回填 received_quantity 消在途；全部行 received≥订单后转已到货。"),
+                _state("RECEIVED", "已到货", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "CLOSED", "label": "关闭采购订单", "editable_fields": ["notes"]},
+                ], description="# 已到货\n全部行 received≥订单数量；进项发票走 PURCHASE_INVOICE 独立流程（04a-7）。"),
+                _state("CLOSED", "已关闭", [], terminal=True),
+                _state("REJECTED", "已驳回", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "DRAFT", "label": "退回改单", "editable_fields": ["notes"]},
+                ], description="# 已驳回\n财务驳回，退回 DRAFT 改单。"),
                 _state("CANCELLED", "已取消", [], terminal=True),
             ],
         },

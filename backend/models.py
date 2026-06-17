@@ -421,9 +421,19 @@ class PurchaseOrder(AuditMixin, Base):
     po_date = Column(Date, nullable=True)
     supplier_id = Column(Integer, ForeignKey("supplier.id"))
     purchase_assistant_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    # 段2b 04a-3：PO 头扩列（源 PO total sheet）。
+    factory_so_number = Column(String(50), default="")  # 原厂 SO#（原厂回的销售单号）
+    product_manager_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 产品经理（按产线带出）
+    pd_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # PD（四大板块 PD）
+    notice_date = Column(Date, nullable=True)  # 采购通知日期
     related_sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=True)
     purchase_notice_id = Column(Integer, ForeignKey("purchase_notice.id"), nullable=True)
     is_stock_order = Column(Boolean, default=False)
+    # 备货金额组（🔒Q18 对销售端隐藏）：original 备货时定永不变；latest 随消单递减。
+    stock_amount_original = Column(Numeric(16, 2), nullable=True)
+    stock_amount_latest = Column(Numeric(16, 2), nullable=True)
+    stock_quantity = Column(Numeric(12, 2), nullable=True)
+    stock_reason = Column(Text, default="")  # 备货原因及待跟进
     currency = Column(String(3), default="USD")
     total_amount = Column(Numeric(16, 2), default=0)
     expected_delivery_date = Column(Date, nullable=True)

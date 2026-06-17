@@ -59,7 +59,12 @@ def _can_view_sell_price(user: m.UserAccount) -> bool:
 # 表名→模型 映射:统一在 core.registry.table_map() 中从 __queryable__/__doc_types__ 自动生成。
 
 # 需要隐藏买价的字段（commission=对原厂佣金，04a-2 Q18 与对原厂单价同属采购进价）
-BUY_PRICE_FIELDS = {"unit_price", "total_price", "total_amount", "current_unit_cost", "total_value", "unit_cost", "total_cost", "commission"}
+# 段2b 04a-3：PO 头 advance_payment_amount/stock_amount_*（备货金额）也属采购进价，对销售端遮蔽。
+BUY_PRICE_FIELDS = {
+    "unit_price", "total_price", "total_amount", "current_unit_cost", "total_value",
+    "unit_cost", "total_cost", "commission",
+    "advance_payment_amount", "stock_amount_original", "stock_amount_latest",
+}
 # 需要隐藏卖价的字段（在sales相关表上）
 SELL_PRICE_FIELDS = {"unit_price", "total_price", "total_amount"}
 
@@ -133,6 +138,9 @@ ROLE_ALLOWED_TABLES = {
     },
     "PRODUCT_ASSISTANT": _COMMON_TABLES | {
         "supplier",
+        # 04a-3：PO 明细型号选择器按 supplier_id 过滤产品代码（一型号多 code 按供应商分，
+        # 走 /api/query?table=product_code&filters={supplier_id}）；product_line 供产线带出。
+        "product_code", "product_line",
         "supplier_inquiry", "supplier_inquiry_line",  # 04a-2 对原厂询价主责录入，可见全价
         "purchase_notice", "purchase_notice_line",
         "purchase_order", "purchase_order_line",
@@ -147,6 +155,7 @@ ROLE_ALLOWED_TABLES = {
     },
     "PRODUCT_MANAGER": _COMMON_TABLES | {
         "supplier", "customer",
+        "product_code", "product_line",  # 04a-3：按 supplier 过滤产品代码选型
         "sales_inquiry", "sales_inquiry_line",
         "quotation", "quotation_line",
         "supplier_inquiry", "supplier_inquiry_line",  # 04a-2 对原厂询价，可见全价（定利润点）
