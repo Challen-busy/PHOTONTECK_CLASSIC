@@ -133,6 +133,52 @@ async def create_quotation_from_inquiry(
     return [f"created quotation#{quotation.id} from inquiry#{doc.id}"]
 
 
+@register_transition_effect("crm.create_opportunity_from_lead", auto=False)
+async def create_opportunity_from_lead(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """线索「转商机」EXPLICIT 派生（PRD 05 页面3）：建 opportunity 草稿回填客户/产线/干系人。
+
+    幂等：一条线索只派生一个商机（按 lead_id 守卫）。商机落初始 EARLY 态（前期沟通）。
+    业务号 OPP-YYMM-NNN 直接取号（与建单取号 effect 同 util allocate_next_number）；无规则则留 effect 兜底号。
+    业务单元/产线/销售/FAE 从线索回填；customer_id 可空（送样推进时 hard_rule 才强制）。
+    """
+    from services.numbering import allocate_next_number
+
+    existing = await _one(db, m.Opportunity, m.Opportunity.company_id == doc.company_id, m.Opportunity.lead_id == doc.id)
+    if existing:
+        return [f"opportunity already exists: {existing.id}"]
+
+    allocated = await allocate_next_number(db, doc.company_id, "OPPORTUNITY", updated_by_id=user.id)
+    opp_number = allocated["number"] if allocated else f"OPP-L{doc.id}"
+
+    # 事业部由客户带出（若线索已挂客户）。
+    business_unit = ""
+    if doc.customer_id:
+        cust = await _one(db, m.Customer, m.Customer.id == doc.customer_id)
+        if cust:
+            business_unit = cust.business_unit or ""
+
+    opportunity = m.Opportunity(
+        opportunity_number=opp_number,
+        lead_id=doc.id,
+        customer_id=doc.customer_id,
+        product_line_id=doc.product_line_id,
+        project_name=(doc.content or "")[:200],
+        business_unit=business_unit,
+        owner_sales_id=doc.assigned_sales_id,
+        fae_id=doc.assigned_fae_id,
+        next_step=doc.next_step,
+        stage="EARLY",
+        status="EARLY",
+        company_id=doc.company_id,
+        created_by_id=_actor_id(doc, user),
+    )
+    db.add(opportunity)
+    await db.flush()
+    return [f"created opportunity#{opportunity.id} ({opp_number}) from lead#{doc.id}"]
+
+
 @register_transition_effect("crm.create_sales_order_from_quotation", auto=False)
 async def create_sales_order_from_quotation(
     db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None

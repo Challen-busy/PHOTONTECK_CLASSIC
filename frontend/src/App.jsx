@@ -45,6 +45,11 @@ import StockupRequestPage from './pages/purchase/StockupRequestPage';
 import SamplesSdnPage from './pages/purchase/SamplesSdnPage';
 import RmaPage from './pages/purchase/RmaPage';
 
+// 1 客户 / 销售 — CRM 前段（PRD 05-CRM前段 页面3/4/6；台账→抽屉不跳页→动作走 /api/transition）
+import LeadPage from './pages/sales/LeadPage';
+import OpportunityPage from './pages/sales/OpportunityPage';
+import QuotationPage from './pages/sales/QuotationPage';
+
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
   { label: 'A 信任', value: 'A' }, { label: 'B 亲切', value: 'B' },
@@ -103,10 +108,13 @@ function AppRoutes() {
         <Route path="notifications" element={<Notifications />} />
         <Route path="approvals" element={<MyTodos />} />
 
-        {/* 1 客户 / 销售 */}
+        {/* 1 客户 / 销售（CRM 前段：线索 05§3 / 商机 05§4 / 报价 05§6 = 干净业务页，走元数据 API；
+            台账→抽屉不跳页→动作走 /api/transition。报价采购成本由后端 Q18 字段防火墙对销售端遮蔽，
+            利润点对销售端可见；PM「是否报价」门控 + 定价关卡走状态机节点 allowed_roles，本页纯 schema 驱动） */}
         <Route path="sales/customers" element={PH('客户 / 联系人', '客户 / 销售')} />
-        <Route path="sales/leads" element={PH('线索 / 商机 / 跟进', '客户 / 销售')} />
-        <Route path="sales/quotations" element={PH('报价单', '客户 / 销售')} />
+        <Route path="sales/leads" element={<LeadPage />} />
+        <Route path="sales/opportunities" element={<OpportunityPage />} />
+        <Route path="sales/quotes" element={<QuotationPage />} />
         <Route path="sales/orders" element={PH('销售订单 SO', '客户 / 销售')} />
         <Route path="sales/shipments" element={PH('发货申请 / 发货通知', '客户 / 销售')} />
         <Route path="sales/invoices" element={PH('销项发票管理', '客户 / 销售')} />

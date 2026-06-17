@@ -102,6 +102,18 @@ RMA_PA_ONLY_FIELDS = {"supplier_id", "po_number", "supplier_rma_number", "unit_p
 # 样品 SDN 目标价（成本侧）对销售端遮蔽（§00-8）。
 SAMPLE_SDN_COST_FIELDS = {"target_price"}
 
+# ============================================================
+# 段3a ★报价 Q18 字段防火墙（(表×角色) 删列）：采购成本对销售端 SALES+SA 隐藏，利润点对其可见
+# ============================================================
+# 报价头/阶梯子表上的「采购成本」列（产品部给）：对销售端（SALES/SA/SE）遮蔽（PRD 05 页面6、甲方 Q18）。
+# ⚠️ 不能复用 BUY_TABLES：quotation 在 SELL_TABLES，其 unit_price/total_price/total_amount 是卖价、
+# 销售端必须可见；故走 (表×角色) 维度只删 cost/cost_unit 这两列（与决策⑨ RMA 同一原生机制）。
+# 利润点 profit_point/unit_profit_point ★不入此集 → 对 SALES+SA 可见（Q18，报价决策用）。
+QUOTE_COST_FIELDS_BY_TABLE = {
+    "quotation": {"cost"},
+    "quote_tier_line": {"cost_unit"},
+}
+
 
 def _can_view_rma_purchase_side(user: m.UserAccount) -> bool:
     """RMA/样品 采购侧列可见集：销售端（SALES/SALES_ASSISTANT/SALES_ENGINEER）遮蔽，其余给全列。
@@ -112,10 +124,16 @@ def _can_view_rma_purchase_side(user: m.UserAccount) -> bool:
 
 
 def _table_role_field_masked(table_name: str, col_name: str, user: m.UserAccount) -> bool:
-    """(表,角色) 维度的列遮蔽（决策⑨ RMA 双视图 + 样品成本侧）。query 序列化与 schema 两路共用。"""
+    """(表,角色) 维度的列遮蔽（决策⑨ RMA 双视图 + 样品成本侧 + 段3a 报价采购成本）。
+
+    query 序列化（_serialize_row）与 schema（routers/data.py get_schema）两路共用，单一事实源。
+    """
     if table_name == "rma" and col_name in RMA_PA_ONLY_FIELDS and not _can_view_rma_purchase_side(user):
         return True
     if table_name == "sample_sdn" and col_name in SAMPLE_SDN_COST_FIELDS and not _can_view_rma_purchase_side(user):
+        return True
+    # 段3a Q18：报价采购成本 cost/cost_unit 对 SALES+SA 隐藏（利润点不在此集，对其可见）。
+    if col_name in QUOTE_COST_FIELDS_BY_TABLE.get(table_name, ()) and not _can_view_buy_price(user):
         return True
     return False
 
@@ -138,9 +156,11 @@ _COMMON_TABLES = {
 
 ROLE_ALLOWED_TABLES = {
     "SALES": _COMMON_TABLES | {
-        "customer", "framework_contract",
+        "customer", "customer_contact_line", "framework_contract", "product_line",
         "sales_inquiry", "sales_inquiry_line",
         "quotation", "quotation_line",
+        # 段3a CRM 前段：线索/商机/跟进子表/报价阶梯子表（销售看本人线索/商机；★Q18 报价 cost 隐藏、profit_point 可见）。
+        "lead", "opportunity", "opportunity_followup_line", "quote_tier_line",
         "sales_order", "sales_order_line",
         "project", "project_material", "project_activity",
         "inventory", "inventory_reservation",
@@ -155,9 +175,11 @@ ROLE_ALLOWED_TABLES = {
         "rma", "rma_line",
     },
     "SALES_ASSISTANT": _COMMON_TABLES | {
-        "customer", "framework_contract",
+        "customer", "customer_contact_line", "framework_contract", "product_line",
         "sales_inquiry", "sales_inquiry_line",
         "quotation", "quotation_line",
+        # 段3a CRM 前段：SA 制作报价/维护客户主档/录线索；★Q18 报价 cost/cost_unit 隐藏、profit_point 可见（与 SALES 同层）。
+        "lead", "opportunity", "opportunity_followup_line", "quote_tier_line",
         "sales_order", "sales_order_line",
         "purchase_notice", "purchase_notice_line",
         "shipment_request", "shipment_line",
@@ -172,9 +194,11 @@ ROLE_ALLOWED_TABLES = {
         "sample_sdn", "sample_sdn_line",
     },
     "SALES_ENGINEER": _COMMON_TABLES | {
-        "customer", "framework_contract",
+        "customer", "customer_contact_line", "framework_contract", "product_line",
         "sales_inquiry", "sales_inquiry_line",
         "quotation", "quotation_line",
+        # 段3a CRM 前段：FAE(=SE) 是线索/商机干系人（技术配合/规格确认）；★Q18 报价 cost 隐藏、profit_point 可见。
+        "lead", "opportunity", "opportunity_followup_line", "quote_tier_line",
         "sales_order", "sales_order_line",
         "project", "project_material", "project_activity",
         "inventory", "inventory_reservation",
@@ -204,10 +228,12 @@ ROLE_ALLOWED_TABLES = {
         "sample_sdn", "sample_sdn_line",
     },
     "PRODUCT_MANAGER": _COMMON_TABLES | {
-        "supplier", "customer",
+        "supplier", "customer", "customer_contact_line",
         "product_code", "product_line",  # 04a-3：按 supplier 过滤产品代码选型
         "sales_inquiry", "sales_inquiry_line",
         "quotation", "quotation_line",
+        # 段3a CRM 前段：PM ★门控报价（是否报价 + 定利润点），全列可见（cost + profit_point）；产线维度看商机转化率。
+        "lead", "opportunity", "opportunity_followup_line", "quote_tier_line",
         "supplier_inquiry", "supplier_inquiry_line",  # 04a-2 对原厂询价，可见全价（定利润点）
         "purchase_notice", "purchase_notice_line",
         "project", "project_material", "project_activity",

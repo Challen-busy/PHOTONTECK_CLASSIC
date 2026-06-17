@@ -167,6 +167,32 @@ def phase1_workflow_definitions(created_by_id=None):
 
     inquiry_to_quote_effect = ["crm.create_quotation_from_inquiry"]
     quote_to_so_effect = ["crm.create_sales_order_from_quotation"]
+
+    # 段3a CRM 前段（PRD 05 页面3/4/6）。
+    # 线索可编辑字段（DRAFT 录入；lead_number 由建单取号 effect 给）。
+    lead_fields = [
+        "source", "content", "customer_id", "customer_name_raw", "product_line_id",
+        "region", "next_step", "notes",
+    ]
+    # 线索「转商机」EXPLICIT 派生 effect：建 opportunity 草稿回填客户/产线/干系人（PRD 页面3 状态机）。
+    lead_to_opportunity_effect = ["crm.create_opportunity_from_lead"]
+    # 商机可编辑字段（前期沟通 EARLY 录全部基础字段；子表 opportunity_followup_line 走 SubTableEditor）。
+    opportunity_fields = [
+        "customer_id", "product_line_id", "project_name", "product_model", "business_unit",
+        "research_sub_market", "grade", "owner_sales_id", "fae_id", "expected_amount",
+        "expected_close_date", "next_step", "remark",
+    ]
+    # ★科研分流 hard_rule（rules DSL，引擎 04 §4.B）：非科研放行；科研（business_unit=RESEARCH）
+    # 推进阶段时 research_sub_market 必填（PRD 页面4 送样关卡「科研需 research_sub_market」）。
+    opportunity_research_sub_market_rule = (
+        "doc.business_unit != 'RESEARCH' or (doc.research_sub_market or '') != ''"
+    )
+    # 商机推进到送样后 customer_id 必填（PRD 页面4 送样关卡）。
+    opportunity_customer_required_rule = "doc.customer_id != None"
+    # 报价对齐扩字段（PRD 页面6）：草稿录基础字段 + 阶梯子表 quote_tier_line。
+    quote_draft_fields = quotation_fields + [
+        "opportunity_id", "business_unit", "report_header", "lead_time", "trade_term",
+    ]
     sales_order_to_purchase_notice_effect = ["erp.create_purchase_notice_from_sales_order"]
     sales_order_advance_receipt_effect = ["finance.create_advance_receipt_from_sales_order"]
     purchase_notice_sent_effect = ["erp.mark_sales_order_purchase_notice_sent"]
@@ -232,28 +258,134 @@ def phase1_workflow_definitions(created_by_id=None):
         {
             "doc_type": "QUOTATION",
             "name": "CRM-报价单流程",
-            "description": "报价单 -> 客户确认 -> 生成销售订单。",
+            "description": (
+                "段3a 对齐扩（PRD 05 页面6）：报价三方协作定价 + ★PM 门控关卡。\n"
+                "草稿 → 待成本（PM/PA 录成本，对销售隐藏）→ ★待报价决策（PM 选报价/不报价）→\n"
+                "★待定价（PM 设利润点 profit_point 定卖价 unit_price）→ 已报价 → 客户接受（转 SO）/拒绝/过期。\n"
+                "★两个 PM 专属关卡（节点 allowed_roles=[PRODUCT_MANAGER]）：不点报价进不了已报价、没定价进不了已报价。\n"
+                "🔒Q18 防火墙：cost/cost_unit（采购成本）对 SALES+SA 隐藏；profit_point/unit_profit_point（利润点）"
+                "对 SALES+SA 可见（services/tools.py query+schema 两路，非 schema 层）。"
+            ),
             "group_name": "CRM",
             "states": [
-                _start(["SALES_ASSISTANT", "OPERATIONS"]),
-                _state("DRAFT", "制作报价单", ["SALES_ASSISTANT", "OPERATIONS"], [
-                    {"to": "PM_APPROVAL", "label": "提交 PM 审核", "editable_fields": quotation_fields},
+                _start(["SALES_ASSISTANT", "SALES", "OPERATIONS"]),
+                _state("DRAFT", "制作报价单", ["SALES_ASSISTANT", "SALES", "OPERATIONS"], [
+                    {"to": "PENDING_COST", "label": "提交产品部录成本", "editable_fields": quote_draft_fields},
                     {"to": "CANCELLED", "label": "取消报价", "editable_fields": ["notes"]},
-                ]),
-                _state("PM_APPROVAL", "PM 审核报价", ["PRODUCT_MANAGER", "OPERATIONS"], [
-                    {"to": "SENT", "label": "审核通过并发送客户", "editable_fields": ["notes"]},
+                ], description="# 制作报价单\n选客户/型号/币种/有效期/货期/条款 + 阶梯量子表（quote_tier_line）。"),
+                # 待成本：PM/PA（产品部）录采购成本（cost/cost_unit，对销售端隐藏，字段防火墙）。
+                _state("PENDING_COST", "待成本（产品部录入）", ["PRODUCT_MANAGER", "PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "PENDING_QUOTE_DECISION", "label": "成本已录提交 PM 决策", "editable_fields": ["cost", "notes"]},
                     {"to": "DRAFT", "label": "退回修改", "editable_fields": ["notes"]},
-                ]),
-                _state("SENT", "已发客户", ["SALES_ASSISTANT", "OPERATIONS"], [
-                    {"to": "CUSTOMER_CONFIRMED", "label": "客户确认", "editable_fields": ["notes"]},
+                ], description="# 待成本\n产品部/PA 录采购成本（cost / 子表 cost_unit，🔒对销售端隐藏）→ 提交 PM 报价决策。"),
+                # ★PM 门控关卡 1：是否报价（节点级 allowed_roles=[PRODUCT_MANAGER]）。不点报价进不了已报价。
+                _state("PENDING_QUOTE_DECISION", "★待报价决策（PM 门控）", ["PRODUCT_MANAGER"], [
+                    {"to": "PENDING_PRICING", "label": "报价（继续定价）", "editable_fields": ["quote_decision", "report_header", "notes"]},
+                    {"to": "CLOSED_NO_QUOTE", "label": "不报价（直接关闭）", "editable_fields": ["quote_decision", "notes"]},
+                ], description=(
+                    "# ★待报价决策（PM 门控）\nPM 判断是否值得报、用哪个抬头报备（report_header）。\n"
+                    "选「报价」→ 进待定价；选「不报价」→ 关闭未报，不流转给销售。"
+                )),
+                # ★PM 门控关卡 2：定价（节点级 allowed_roles=[PRODUCT_MANAGER]）。没定价进不了已报价。
+                _state("PENDING_PRICING", "★待定价（PM 设利润点）", ["PRODUCT_MANAGER"], [
+                    {"to": "SENT", "label": "定价完成发送客户", "editable_fields": ["profit_point", "total_amount", "notes"]},
+                    {"to": "PENDING_QUOTE_DECISION", "label": "退回重新决策", "editable_fields": ["notes"]},
+                ], description=(
+                    "# ★待定价（PM）\nPM 据成本+利润点（profit_point / 子表 unit_profit_point）定卖价（unit_price）。\n"
+                    "✅利润点对 SALES+SA 可见（Q18，报价决策用）；定完 → 已报价推给销售对客户。"
+                )),
+                _state("SENT", "已报价（已发客户）", ["SALES_ASSISTANT", "SALES", "OPERATIONS"], [
+                    {"to": "CUSTOMER_CONFIRMED", "label": "客户确认", "editable_fields": ["valid_until", "notes"]},
                     {"to": "CUSTOMER_REJECTED", "label": "客户拒绝", "editable_fields": ["notes"]},
-                ]),
-                _state("CUSTOMER_CONFIRMED", "客户已确认", ["SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "EXPIRED", "label": "报价过期", "editable_fields": ["notes"]},
+                ], description="# 已报价\n卖价/利润点锁定（销售看含税卖价 + 利润点，🔒看不到采购成本）→ 报客户。"),
+                _state("CUSTOMER_CONFIRMED", "客户已确认", ["SALES_ASSISTANT", "SALES", "OPERATIONS"], [
                     {"to": "SALES_ORDER_CREATED", "label": "生成销售订单", "editable_fields": [], "effects": quote_to_so_effect},
                 ]),
                 _state("SALES_ORDER_CREATED", "已生成销售订单", [], terminal=True),
                 _state("CUSTOMER_REJECTED", "客户已拒绝", [], terminal=True),
+                _state("CLOSED_NO_QUOTE", "关闭未报（PM 不报价）", [], terminal=True),
+                _state("EXPIRED", "已过期", ["SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "DRAFT", "label": "重新报价", "editable_fields": ["valid_until", "notes"]},
+                ], description="# 已过期\nvalid_until 过期 → 可重开回草稿重新报价。"),
                 _state("CANCELLED", "已取消", [], terminal=True),
+            ],
+        },
+        {
+            # 段3a 线索（PRD 05 页面3）：售前漏斗第一级。承接「飞书群分派」现状。
+            "doc_type": "LEAD",
+            "name": "CRM-线索流程",
+            "description": (
+                "段3a CRM 前段（PRD 05 页面3）：网络/电话咨询登记 → 销售经理分派给销售 → 销售+FAE 跟进 →\n"
+                "转商机（EXPLICIT 派生 opportunity 草稿回填客户/产线/干系人）/ 关闭丢失。\n"
+                "客户可空（询价先于建档）。★无财务关卡（前段不涉钱货）。LD-YYMM-NNN 月度连号。\n"
+                "纯前段不推金蝶。"
+            ),
+            "group_name": "CRM",
+            "states": [
+                # 建单取号 LD-YYMM-001（NumberingRule，月度连号）。
+                _start(["SALES", "SALES_ASSISTANT", "OPERATIONS"], label="开始登记线索", effects=[NUMBERING_EFFECT]),
+                _state("DRAFT", "新建（线索登记）", ["SALES", "SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "ASSIGNED", "label": "提交分派", "editable_fields": lead_fields},
+                    {"to": "CLOSED_LOST", "label": "关闭丢失", "editable_fields": ["close_reason", "notes"]},
+                ], description="# 新建\n录来源/内容（允许一句话）/客户（可空）/产线/区域。content 非空。"),
+                _state("ASSIGNED", "已分派", ["SALES", "SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "FOLLOWING", "label": "开始跟进", "editable_fields": ["assigned_sales_id", "assigned_fae_id", "next_step"]},
+                    {"to": "CLOSED_LOST", "label": "关闭丢失", "editable_fields": ["close_reason", "notes"]},
+                ], description="# 已分派\n销售经理 @ 分派给某销售（assigned_sales_id 必填）+ 配合 FAE。"),
+                _state("FOLLOWING", "跟进中", ["SALES", "SALES_ENGINEER", "OPERATIONS"], [
+                    {"to": "CONVERTED", "label": "转商机", "editable_fields": ["next_step", "notes"], "effects": lead_to_opportunity_effect},
+                    {"to": "CLOSED_LOST", "label": "关闭丢失", "editable_fields": ["close_reason", "notes"]},
+                ], description="# 跟进中\n销售+FAE 跟进、更新下一步。判定可转商机或关闭丢失。"),
+                _state("CONVERTED", "已转商机", [], terminal=True),
+                _state("CLOSED_LOST", "已关闭丢失", [], terminal=True),
+            ],
+        },
+        {
+            # 段3a 商机/项目（PRD 05 页面4）：售前漏斗第二级，核心阶段状态机（科研 vs 光通信分流）。
+            "doc_type": "OPPORTUNITY",
+            "name": "CRM-商机流程",
+            "description": (
+                "段3a CRM 前段（PRD 05 页面4）：核心阶段状态机——\n"
+                "前期沟通 → 送样 → 小批量 → 批量 → 关闭赢/关闭丢/无进展（可回退前期沟通）。\n"
+                "★科研分流：business_unit=RESEARCH 时推进阶段 research_sub_market 必填（hard_rule）；\n"
+                "送样推进时 customer_id 必填。干系人=销售(owner_sales_id)+FAE(fae_id)。\n"
+                "跟进记录子表 opportunity_followup_line（SubTableEditor 网格）。\n"
+                "OPP-YYMM-NNN 月度连号。纯前段不推金蝶（关闭赢仅软信号，SO 在 05b 录）。"
+            ),
+            "group_name": "CRM",
+            "states": [
+                # 建单取号 OPP-YYMM-001（NumberingRule，月度连号）。转商机派生时由 effect 经 execute_transition 建。
+                _start(["SALES", "SALES_ENGINEER", "OPERATIONS"], first_state="EARLY",
+                       label="开始（前期沟通）", effects=[NUMBERING_EFFECT]),
+                _state("EARLY", "前期沟通", ["SALES", "SALES_ENGINEER", "OPERATIONS"], [
+                    {"to": "SAMPLING", "label": "进入送样",
+                     "editable_fields": opportunity_fields,
+                     "hard_rules": [opportunity_customer_required_rule, opportunity_research_sub_market_rule]},
+                    {"to": "CLOSED_LOST", "label": "关闭丢失", "editable_fields": ["close_reason", "remark"]},
+                    {"to": "STALLED", "label": "标记无进展", "editable_fields": ["remark"]},
+                ], description="# 前期沟通\n录客户/产线/项目名/型号/事业部/干系人。project_name 非空；进送样需客户+（科研）细分市场。"),
+                _state("SAMPLING", "送样", ["SALES", "SALES_ENGINEER", "OPERATIONS"], [
+                    {"to": "SMALL_BATCH", "label": "进入小批量",
+                     "editable_fields": ["product_model", "research_sub_market", "next_step", "remark"],
+                     "hard_rules": [opportunity_research_sub_market_rule]},
+                    {"to": "CLOSED_LOST", "label": "关闭丢失", "editable_fields": ["close_reason", "remark"]},
+                ], description="# 送样\n科研在此停留更久（FAE 确认规格 → 问供应商 → PM 报价）；可关联样品 SDN（采购模块）。"),
+                _state("SMALL_BATCH", "小批量", ["SALES", "SALES_ENGINEER", "OPERATIONS"], [
+                    {"to": "MASS", "label": "进入批量", "editable_fields": ["expected_amount", "expected_close_date", "next_step", "remark"]},
+                    {"to": "CLOSED_LOST", "label": "关闭丢失", "editable_fields": ["close_reason", "remark"]},
+                ], description="# 小批量\n小批量验证；录预期金额/成交日。"),
+                _state("MASS", "批量", ["SALES", "OPERATIONS"], [
+                    {"to": "CLOSED_WON", "label": "关闭赢", "editable_fields": ["expected_amount", "remark"]},
+                    {"to": "CLOSED_LOST", "label": "关闭丢失", "editable_fields": ["close_reason", "remark"]},
+                ], description="# 批量\n批量阶段；成交→关闭赢（提示可录 SO，SO 在 05b）。"),
+                # 无进展（可回退前期沟通）：解决「没成交也不关闭、忘记了」的烂尾线索。
+                _state("STALLED", "无进展", ["SALES", "OPERATIONS"], [
+                    {"to": "EARLY", "label": "重新激活", "editable_fields": ["next_step", "remark"]},
+                    {"to": "CLOSED_LOST", "label": "关闭丢失", "editable_fields": ["close_reason", "remark"]},
+                ], description="# 无进展\n长期无进展 → 可回退前期沟通重新激活，或关闭丢失。"),
+                _state("CLOSED_WON", "关闭赢", [], terminal=True),
+                _state("CLOSED_LOST", "关闭丢失", [], terminal=True),
             ],
         },
         {

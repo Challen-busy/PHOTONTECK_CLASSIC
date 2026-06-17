@@ -383,6 +383,19 @@ class Quotation(AuditMixin, Base):
     barcode_requirements = Column(Text, default="")
     status = Column(String(30), default="DRAFT")
     notes = Column(Text, default="")
+    # --- 段3a CRM 前段：报价单 PM 门控 + 字段防火墙扩列（PRD 05 页面6）---
+    # 商机勾稽（报价由商机派生回填，前段漏斗第三级）。
+    opportunity_id = Column(Integer, ForeignKey("opportunity.id"), nullable=True)
+    business_unit = Column(String(40), default="")      # 事业部（光通信/科研SIO）——驱动分流
+    # 🔒Q18 采购成本（产品部/PA 给）：对销售端 SALES+SA 隐藏（入 BUY_PRICE_FIELDS/BUY_TABLES）。
+    cost = Column(Numeric(16, 4), nullable=True)
+    # ✅Q18 利润点（PM 设定）：对 SALES+SA 可见（不入隐藏集，引擎现状本就未覆盖 profit_point）。
+    profit_point = Column(Numeric(8, 4), nullable=True)
+    # PM「是否报价」门控决策（待定 PENDING / 报价 QUOTE / 不报价 NO_QUOTE）。
+    quote_decision = Column(String(12), default="PENDING")
+    report_header = Column(String(120), default="")     # PM 报备抬头（决定签单公司，蓝图 §2）
+    lead_time = Column(String(60), default="")          # 货期（产线带出/手填）
+    trade_term = Column(String(10), default="")         # 贸易条件（EXW/FCA/CFR/…）
 
     customer = relationship("Customer")
     __table_args__ = (UniqueConstraint("company_id", "quotation_number"),)
@@ -406,6 +419,27 @@ class QuotationLine(Base):
     __table_args__ = (UniqueConstraint("quotation_id", "line_number"),)
 
     material = relationship("Material")
+
+
+class QuoteTierLine(Base):
+    """报价单阶梯价子表（PRD 05 页面6 quote_tier_line）：阶梯起订量 × 单价。
+
+    名含 `_line` + 指向 quotation 的 FK → 引擎自动识别为子表，DocEditor 渲 SubTableEditor 网格。
+    🔒Q18 字段防火墙（query+schema 两路，services/tools.py）：
+      - cost_unit（该阶梯采购成本）入 BUY_PRICE_FIELDS/BUY_TABLES → 对 SALES+SA 隐藏；
+      - unit_profit_point（该阶梯利润点）不入隐藏集 → 对 SALES+SA 可见（PM 设定，销售端据此报价）。
+    """
+    __tablename__ = "quote_tier_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    quotation_id = Column(Integer, ForeignKey("quotation.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    min_quantity = Column(Integer, nullable=False, default=1)  # 阶梯起订量
+    unit_price = Column(Numeric(12, 4), nullable=True)         # 该阶梯卖价（PM 定价后），对客户/销售可见
+    cost_unit = Column(Numeric(12, 4), nullable=True)          # 🔒该阶梯采购成本，对 SALES+SA 隐藏
+    unit_profit_point = Column(Numeric(8, 4), nullable=True)   # ✅该阶梯利润点，对 SALES+SA 可见
+    remark = Column(String(200), default="")
+    __table_args__ = (UniqueConstraint("quotation_id", "line_number"),)
 
 
 # ============================================================
@@ -2243,3 +2277,91 @@ class UnitOfMeasure(Base):
     is_package_unit = Column(Boolean, default=False)  # 包/盘 vs 计件 PCS
     pcs_per_unit = Column(Numeric(16, 4), nullable=True)  # 换算（如 200K=200000，显示倍率）
     is_active = Column(Boolean, default=True)
+
+
+# ============================================================
+# 段3a · CRM 前段（线索 → 商机 → 报价，PRD 05-客户销售-CRM前段）
+# 线索/商机是售前漏斗一/二级，纯前段（不推金蝶）；报价（QUOTATION）已有，本段对齐扩。
+# ============================================================
+
+class Lead(AuditMixin, Base):
+    """线索（PRD 05 页面3 lead）：售前漏斗第一级。
+
+    承接「飞书群分派」现状：网络/电话咨询 → 线索登记 → 销售经理分派 → 销售+FAE 跟进 →
+    转商机 / 关闭丢失。客户可空（询价先于建档，访谈 09:172-196）。
+    «转商机» EXPLICIT effect 派生 opportunity 草稿并回填客户/产线/干系人（crm.create_opportunity_from_lead）。
+    纯前段不推金蝶。lead_number 月度连号 LD-YYMM-NNN（numbering effect）。
+    """
+    __tablename__ = "lead"
+    __doc_types__ = ("LEAD",)
+    id = Column(Integer, primary_key=True)
+    lead_number = Column(String(30), index=True, nullable=False)
+    source = Column(String(20), default="BAIDU")        # 百度/电话/网询/展会/转介
+    content = Column(Text, default="")                  # 内容（允许一句话，容笼统需求）
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)  # 可空（询价先于建档）
+    customer_name_raw = Column(String(120), default="")  # 未建档时的原始客户名（「北京客户」）
+    product_line_id = Column(Integer, ForeignKey("product_line.id"), nullable=True)  # 初判所属产线
+    assigned_sales_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 分派目标销售
+    assigned_fae_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)    # 配合的产品工程师(FAE=SE)
+    region = Column(String(20), default="")             # 华北/华南等
+    next_step = Column(String(200), default="")         # 下一步（与跟进记录呼应）
+    close_reason = Column(String(200), default="")      # 关闭丢失原因
+    status = Column(String(30), default="DRAFT")
+    notes = Column(Text, default="")
+
+    customer = relationship("Customer")
+    __table_args__ = (UniqueConstraint("company_id", "lead_number"),)
+
+
+class Opportunity(AuditMixin, Base):
+    """商机/项目（PRD 05 页面4 opportunity）：售前漏斗第二级，核心阶段状态机。
+
+    阶段=状态机：前期沟通→送样→小批量→批量→关闭赢/关闭丢/无进展（可回退前期沟通）。
+    科研 vs 光通信分流（business_unit 驱动）：科研推进阶段时 research_sub_market 必填（hard_rule）。
+    干系人=销售(owner_sales_id)+FAE(fae_id)。跟进记录子表 opportunity_followup_line。
+    纯前段不推金蝶。opportunity_number 月度连号 OPP-YYMM-NNN。
+    """
+    __tablename__ = "opportunity"
+    __doc_types__ = ("OPPORTUNITY",)
+    id = Column(Integer, primary_key=True)
+    opportunity_number = Column(String(30), index=True, nullable=False)
+    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=True)  # 来源线索（转商机派生回填）
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)  # 推进到送样后必填（hard_rule）
+    product_line_id = Column(Integer, ForeignKey("product_line.id"), nullable=True)  # 原厂=产线=供应商
+    project_name = Column(String(200), default="")      # 项目名称
+    product_model = Column(String(120), default="")     # 产品型号（科研早期可无型号，允许手填占位）
+    business_unit = Column(String(40), default="")      # 事业部（光通信/科研SIO）——驱动分流
+    research_sub_market = Column(String(60), default="")  # 科研细分市场（科研推进时必填，hard_rule）
+    grade = Column(String(20), default="")              # 项目等级
+    owner_sales_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 干系人-销售
+    fae_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)          # 干系人-FAE(SE)
+    expected_amount = Column(Numeric(16, 2), nullable=True)  # 预期金额
+    expected_close_date = Column(Date, nullable=True)        # 预期成交日
+    stage = Column(String(30), default="EARLY")         # 冗余阶段镜像（status 为权威，前端展示用）
+    next_step = Column(String(200), default="")         # 下一步计划
+    close_reason = Column(String(200), default="")      # 关闭丢失原因
+    status = Column(String(30), default="DRAFT")
+    remark = Column(Text, default="")
+
+    customer = relationship("Customer")
+    __table_args__ = (UniqueConstraint("company_id", "opportunity_number"),)
+
+
+class OpportunityFollowupLine(Base):
+    """商机跟进记录子表（PRD 05 页面5 opportunity_followup_line）：网格追加。
+
+    名含 `_line` + 指向 opportunity 的 FK → 引擎自动识别为子表，DocEditor 渲 SubTableEditor 网格。
+    对应销售周报模板「按周更新」列群（日期/类型/联系人/内容/下一步/负责人）。
+    """
+    __tablename__ = "opportunity_followup_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    opportunity_id = Column(Integer, ForeignKey("opportunity.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    activity_date = Column(Date, nullable=True)         # 日期
+    activity_type = Column(String(20), default="")      # 电话/邮件/拜访/送样/报价/其他
+    contact_id = Column(Integer, ForeignKey("customer_contact_line.id"), nullable=True)  # 联系人（限本客户）
+    content = Column(Text, default="")                  # 内容（周报周更正文）
+    next_step = Column(String(200), default="")         # 下一步（可回写商机 next_step）
+    owner_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 负责人
+    __table_args__ = (UniqueConstraint("opportunity_id", "line_number"),)

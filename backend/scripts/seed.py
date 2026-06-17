@@ -82,6 +82,9 @@ async def seed():
             # / RMA-YYMM-NNN（月度连号补零3，04b-3/04b-5）。
             ("SAMPLE_SDN", "SDN", "MONTH"),
             ("RMA",        "RMA", "MONTH"),
+            # 段3a CRM 前段：线索 LD-YYMM-NNN / 商机 OPP-YYMM-NNN（月度连号补零3，PRD 05 页面3/4）。
+            ("LEAD",        "LD",  "MONTH"),
+            ("OPPORTUNITY", "OPP", "MONTH"),
         ]
         # 有编号规则的 doc_type 集合：用于给 START 状态挂建单取号 effect（取业务连号）。
         numbering_doc_types = {doc_type for doc_type, _, _ in numbering_seed}

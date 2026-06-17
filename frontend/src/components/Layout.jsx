@@ -49,8 +49,9 @@ const buildMenuItems = (todoCount, isAdmin) => {
       label: '客户 / 销售',
       children: [
         { key: '/sales/customers', label: '客户 / 联系人' },
-        { key: '/sales/leads', label: '线索 / 商机 / 跟进' },
-        { key: '/sales/quotations', label: '报价单' },
+        { key: '/sales/leads', label: '线索' },
+        { key: '/sales/opportunities', label: '商机 / 项目' },
+        { key: '/sales/quotes', label: '报价单' },
         { key: '/sales/orders', label: '销售订单 SO' },
         { key: '/sales/shipments', label: '发货申请 / 通知' },
         { key: '/sales/invoices', label: '销项发票' },

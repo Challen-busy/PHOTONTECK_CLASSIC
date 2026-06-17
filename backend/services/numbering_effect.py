@@ -46,6 +46,10 @@ NUMBER_COLUMN_BY_DOC_TYPE: dict[str, str] = {
     # 段2d-2 RMA：RMA-YYMM-NNN（月度连号，04b-5）。样品 SDN 走专属 effect
     # sample.assign_sdn_number（号中含供应商线字母 C/L，§00-7），不在此通用映射。
     "RMA": "rma_number",
+    # 段3a CRM 前段：线索 LD / 商机 OPP 月度连号（PRD 05 页面3/4）。商机派生时由
+    # crm.create_opportunity_from_lead 直接取号（同 util），手建商机走此 START 取号。
+    "LEAD": "lead_number",
+    "OPPORTUNITY": "opportunity_number",
 }
 
 # 引擎默认兜底号形态：{PREFIX}-{YYMMDD}-{6位HEX}（_auto_fill_required_fields）。
