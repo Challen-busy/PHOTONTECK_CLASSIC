@@ -58,6 +58,12 @@ import QualificationPage from './pages/sales/QualificationPage';
 import ForecastPage from './pages/sales/ForecastPage';
 import SpecialShipmentPage from './pages/sales/SpecialShipmentPage';
 
+// 4 报关 — 报关单 / 退运 180 监控 / 报关费补录 / 进出口证台账（PRD 06；台账→抽屉不跳页→动作走 /api/transition）
+import CustomsDeclarationPage from './pages/customs/CustomsDeclarationPage';
+import CustomsReturnMonitorPage from './pages/customs/CustomsReturnMonitorPage';
+import CustomsFeePage from './pages/customs/CustomsFeePage';
+import CustomsLicensePage from './pages/customs/CustomsLicensePage';
+
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
   { label: 'A 信任', value: 'A' }, { label: 'B 亲切', value: 'B' },
@@ -168,10 +174,13 @@ function AppRoutes() {
         } />
         <Route path="wms/labels" element={<LabelsPage />} />
 
-        {/* 4 报关 */}
-        <Route path="customs/declarations" element={PH('报关单（进口 / 出口 / 退运）', '报关')} />
-        <Route path="customs/return-monitor" element={PH('退运监控（180天预警）', '报关')} />
-        <Route path="customs/fees" element={PH('报关费 / 进出口证补录', '报关')} />
+        {/* 4 报关（PRD 06：报关单进/出/退三方向 + 合规五件套申报硬拦；退运 180 监控；报关费分摊回写到岸成本；
+            进出口证台账。动作一律由引擎流程边渲染 → /api/transition 唯一写入路径，不写死状态码；
+            报关单据默认不推金蝶。物流 API 货物进度（顺丰）属段5「接好等配置」，本段留占位） */}
+        <Route path="customs/declarations" element={<CustomsDeclarationPage />} />
+        <Route path="customs/return-monitor" element={<CustomsReturnMonitorPage />} />
+        <Route path="customs/fees" element={<CustomsFeePage />} />
+        <Route path="customs/licenses" element={<CustomsLicensePage />} />
         <Route path="customs/logistics" element={PH('物流 API 货物进度', '报关')} />
 
         {/* 5 财务视图 / 单据中心 */}

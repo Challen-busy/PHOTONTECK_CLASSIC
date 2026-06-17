@@ -2627,3 +2627,173 @@ class FeatureFlag(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     __table_args__ = (UniqueConstraint("company_id", "flag_key", name="ux_feature_flag_company_key"),)
+
+
+# ============================================================
+# 段4a · 报关域（PRD 06-报关）
+#
+# 全新建域（引擎当前无任何报关脚手架）。三类对象：
+#   1) CustomsDeclaration（报关单 doc_type）+ customs_declaration_line（商品明细子表）
+#      + customs_fee_line（费用子表）：进口/出口/退运三方向。
+#   2) CustomsLicense（进出口证台账，__queryable__ 主数据，不挂 __doc_types__）。
+#   3) ShipmentTracking（+ _node 子表，__queryable__ 轨迹台账，非审批单，同 kingdee_outbox 范式）。
+# 引擎五条不破坏：仅加表 + WorkflowDefinition states JSONB + 注册扩展点
+# （@register_command / @register_transition_effect / @register_transition_validator），
+# 不动 execute_transition / 命令框架 / registry 核心语义。
+# ============================================================
+
+class CustomsDeclaration(AuditMixin, Base):
+    """报关单（PRD 06-1）：进口/出口/退运三方向，direction 区分。
+
+    一张报关单 = 一票报关；商品明细子表从关联出入库批次聚合为真相（进口/出口聚合，退运手补）。
+    报关动作自己做（决策⑪），系统只建单/聚合/合规拦截/退运倒计时/费用回写，不接海关单一窗口。
+    """
+    __tablename__ = "customs_declaration"
+    __doc_types__ = ("CUSTOMS_DECLARATION",)
+    id = Column(Integer, primary_key=True)
+    declaration_number = Column(String(30), nullable=False)  # CD{YYMM}-{seq} 月度连号
+    direction = Column(String(12), default="IMPORT")         # IMPORT 进口 / EXPORT 出口 / RE_EXPORT 退运出口
+    customs_region = Column(String(5), default="HK")         # HK 香港码口径 / CN 内地码口径（决定 HS 取数）
+    broker_mode = Column(String(10), default="SELF")         # SELF 自报 / BROKER 委托报关行
+    broker_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)  # 报关行/货代（往来单位，BROKER 时必填）
+    trade_term = Column(String(10), default="")              # 贸易条款 FOB/CIF/CFR/FCA/EXW（出口自 SO 带、进口自 PO 带）
+    # 来源单据关联：进口关联入库单、出口关联出库单（多张合并经子表 source 行级承载，头记主关联）。
+    goods_receipt_id = Column(Integer, ForeignKey("goods_receipt.id"), nullable=True)  # 进口主关联入库单
+    shipment_id = Column(Integer, ForeignKey("shipment_request.id"), nullable=True)    # 出口主关联出库单
+    source_invoice_number = Column(String(50), default="")   # 关联发票号（出口侧，放行后被报关单号替换回写）
+    origin_declaration_id = Column(Integer, ForeignKey("customs_declaration.id"), nullable=True)  # 退运必填：原进口报关单（自引用，限本公司已放行）
+    customs_approval_no = Column(String(50), default="")     # 海关批文号（退运 180 起算可改）
+    customs_approval_date = Column(Date, nullable=True)      # 海关批文日期
+    import_release_date = Column(Date, nullable=True)        # 原进口放行日（退运 180 倒排基准；进口放行时回填本单）
+    return_deadline = Column(Date, nullable=True)            # 退运截止日（默认原进口放行日 + 180，退运必填）
+    declared_port = Column(String(100), default="")          # 申报口岸
+    currency = Column(String(3), default="USD")              # 申报币种 HKD/USD/CNY
+    total_declared_value = Column(Numeric(16, 2), default=0)  # 申报总值 = Σ行金额（禁手改，对 SALES 隐藏）
+    declared_fx_rate = Column(Numeric(16, 6), nullable=True)  # 申报汇率（P1，可空）
+    status = Column(String(15), default="DRAFT")             # 见 WorkflowDefinition CUSTOMS_DECLARATION
+    notes = Column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("company_id", "declaration_number", name="ux_customs_declaration_number"),)
+
+
+class CustomsDeclarationLine(Base):
+    """报关单商品明细子表（PRD 06-1 网格录入，自动聚合 + 可改）。
+
+    合规五件套（hs_code_cn / origin_country / cn_name / eccn[+ hs_code_origin]）申报态硬拦，
+    任一缺失 → DRAFT→SUBMITTED 被 customs.validate_compliance_pack 拒绝并返回 rule_failures。
+    """
+    __tablename__ = "customs_declaration_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    customs_declaration_id = Column(Integer, ForeignKey("customs_declaration.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=True)  # 型号（聚合带；退运手补）
+    cn_name = Column(String(300), default="")                # 中文品名（合规五件套，主数据带出）
+    hs_code_cn = Column(String(50), default="")              # HS 中国码（合规五件套；按 customs_region 取中国/香港口径）
+    hs_code_origin = Column(String(50), default="")          # 原产 HS 参考码（与报关码前 6 位不一致软警告）
+    origin_country = Column(String(50), default="")          # 原产国（合规五件套）
+    eccn = Column(String(30), default="")                    # ECCN 出口管制号（合规五件套；退运方向可放宽）
+    quantity = Column(Numeric(12, 2), default=0)
+    uom = Column(String(20), default="")
+    unit_value = Column(Numeric(16, 4), nullable=True)       # 单价（进口取批次采购价/出口取发票价，对 SALES 隐藏）
+    declared_amount = Column(Numeric(16, 2), nullable=True)  # 申报金额 = 数量×单价（对 SALES 隐藏）
+    currency = Column(String(3), default="USD")              # 随头
+    source_doc_number = Column(String(50), default="")       # PO# / INV#（聚合带）
+    source_line_ref = Column(String(60), default="")         # 来源出入库行引用（退运溯源；goods_receipt_line/shipment_line.id）
+    license_id = Column(Integer, ForeignKey("customs_license.id"), nullable=True)  # 挂接进出口证（受管制行）
+    remark = Column(Text, default="")
+    __table_args__ = (UniqueConstraint("customs_declaration_id", "line_number", name="ux_customs_declaration_line"),)
+
+
+class CustomsFeeLine(Base):
+    """报关费/运费费用子表（PRD 06-3 网格录入）。
+
+    仅进口已放行单可登记；customs.allocate_fee_to_landed_cost effect 按占比分摊回写关联批次到岸成本，
+    并 enqueue 金蝶增量推送（随入库单，不写真实 HTTP）。amount 对 SALES 隐藏（利润防火墙）。
+    """
+    __tablename__ = "customs_fee_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    customs_declaration_id = Column(Integer, ForeignKey("customs_declaration.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    fee_type = Column(String(20), default="CUSTOMS_FEE")     # CUSTOMS_FEE 报关费 / DUTY 关税 / VAT 增值税 / INSPECTION 查验费 / FREIGHT 运费 / OTHER
+    amount = Column(Numeric(16, 2), default=0)               # 金额（对 SALES 隐藏）
+    currency = Column(String(3), default="USD")
+    payee = Column(String(100), default="")                  # 付款对象（货代/海关）
+    bill_number = Column(String(50), default="")             # 货代账单号
+    incurred_date = Column(Date, nullable=True)              # 发生日期
+    allocation_basis = Column(String(20), default="AMOUNT")  # AMOUNT 申报金额占比 / QUANTITY 数量占比
+    allocation_detail = Column(JSONB, default=dict)          # 分摊明细（回写 effect 产出，分摊合计=费用合计）
+    __table_args__ = (UniqueConstraint("customs_declaration_id", "line_number", name="ux_customs_fee_line"),)
+
+
+class CustomsLicense(Base):
+    """进出口证（许可证）台账（PRD 06-4，__queryable__ 主数据，不挂 doc_type）。
+
+    LIC{YYMM}-{seq} 月度连号。受管制（ECCN）行报关时挂证留痕；效期预警（失效 <60 天前端标）。
+    行级 _company_filter 天然限本公司。LOGISTICS_LEAD/PA/报关角色可查，对纯销售隐藏（导航/角色门控）。
+    """
+    __tablename__ = "customs_license"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False, index=True)
+    license_number = Column(String(30), nullable=False)      # LIC{YYMM}-{seq}（系统连号）
+    license_no = Column(String(80), default="")              # 证号（官方原始证号，(company,license_no) 唯一）
+    license_type = Column(String(40), default="")            # 进出口证/战略物资进口证/战略物资出口证/两用物项出口许可证/其他
+    issuer = Column(String(100), default="")                 # 签发机关
+    broker_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)  # 持证报关行（往来单位）
+    scope = Column(Text, default="")                         # 关联产品/HS 范围（文字台账）
+    valid_from = Column(Date, nullable=True)                 # 生效日（≤失效日）
+    valid_to = Column(Date, nullable=True)                   # 失效日（效期预警基准）
+    is_active = Column(Boolean, default=True)                # 已挂报关单的证不可删，改停用
+    notes = Column(Text, default="")
+    created_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    updated_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    __table_args__ = (
+        UniqueConstraint("company_id", "license_number", name="ux_customs_license_number"),
+        UniqueConstraint("company_id", "license_no", name="ux_customs_license_no"),
+    )
+
+
+class ShipmentTracking(Base):
+    """物流轨迹快照头（PRD 06-5，__queryable__ 台账，非审批单，同 kingdee_outbox 范式）。
+
+    一个运单号一行；轨迹节点为子行（ShipmentTrackingNode）。current_status 为最新节点派生展示值，
+    由 sf_query_tracking / webhook 写入，非 execute_transition 推进 → 不挂 WorkflowDefinition。
+    SF 集成默认 OFF（FeatureFlag SF_EXPRESS_SYNC）→ 命令短路占位，前端退化手填兜底。
+    """
+    __tablename__ = "shipment_tracking"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False, index=True)
+    tracking_number = Column(String(100), nullable=False, index=True)  # 运单号（出入库/报关单带入；(company,tracking_number) 唯一）
+    carrier = Column(String(20), default="SF")               # SF 顺丰 / FEDEX / DHL / LOCAL（首期仅 SF 走 API）
+    direction = Column(String(10), default="OUTBOUND")       # OUTBOUND 出库 / INBOUND 入库
+    ref_doc_type = Column(String(30), default="")            # SHIPMENT / GOODS_RECEIPT / CUSTOMS_DECLARATION（联动锚点）
+    ref_doc_number = Column(String(50), default="")          # 关联单号
+    current_status = Column(String(15), default="UNKNOWN")   # UNKNOWN/PICKED_UP/IN_TRANSIT/DELIVERING/DELIVERED/EXCEPTION
+    last_event_time = Column(DateTime, nullable=True)
+    source = Column(String(12), default="MANUAL")            # SF_API / SF_WEBHOOK / MANUAL（区分 API 拉取 vs 手填兜底）
+    is_subscribed = Column(Boolean, default=False)
+    synced_at = Column(DateTime, nullable=True)
+    manual_note = Column(Text, default="")                   # 手填进度备注（无 API 时兜底）
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    __table_args__ = (UniqueConstraint("company_id", "tracking_number", name="ux_shipment_tracking_number"),)
+
+
+class ShipmentTrackingNode(Base):
+    """物流轨迹节点子表（PRD 06-5 时间轴录入）。"""
+    __tablename__ = "shipment_tracking_node"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    tracking_id = Column(Integer, ForeignKey("shipment_tracking.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    event_time = Column(DateTime, nullable=True)
+    event_type = Column(String(20), default="")             # 揽收/运输中/到件/派送/已签收/异常（映射顺丰 opcode）
+    location = Column(String(100), default="")
+    description = Column(String(300), default="")           # API 原文 remark
+    raw_opcode = Column(String(20), default="")             # 顺丰原始码（溯源/重映射用）
+    __table_args__ = (UniqueConstraint("tracking_id", "line_number", name="ux_shipment_tracking_node"),)

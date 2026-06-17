@@ -60,6 +60,8 @@ _EXTENSION_MODULES = (
     "services.notifications",
     # 段0b·1：建单取号 effect（把引擎默认 UUID 号换成业务连号）
     "services.numbering_effect",
+    # 段4a：报关域 validator/effect（合规五件套硬拦 / 香港退香港 / 单号回写 / 报关费分摊回写到岸成本）
+    "services.customs",
 )
 _loaded = False
 

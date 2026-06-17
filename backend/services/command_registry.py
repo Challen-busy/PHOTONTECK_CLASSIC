@@ -72,6 +72,8 @@ def load_commands() -> None:
     import services.notifications  # noqa: F401
     # 段0c 标签/单据模板渲染命令
     import services.template_render  # noqa: F401
+    # 段4a 报关域命令（顺丰物流框架壳 OFF / 资料清单导出壳）
+    import services.customs_commands  # noqa: F401
 
     _loaded = True
 

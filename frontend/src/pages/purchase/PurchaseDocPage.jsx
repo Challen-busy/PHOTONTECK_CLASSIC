@@ -44,6 +44,7 @@ export default function PurchaseDocPage({
   primaryToStates = [],   // 哪些 to_state 用 primary 按钮高亮
   noLines = false,   // 无子表单据（如付款申请 ADVANCE_PAYMENT）：跳过明细加载/网格，仅头 + 动作
   derivedColumns = [],  // ➕ 前端派生只读列（引擎无原生计算列，如样品超期天数 = 今天-基准日），插在操作列前
+  domain = '采购 / 供应链',  // 页眉域名标签（复用本壳的他域单据可覆盖，如报关）
 }) {
   const { message } = App.useApp();
   const [schema, setSchema] = useState(null);
@@ -224,7 +225,7 @@ export default function PurchaseDocPage({
         {title}
       </h2>
       <span style={{ color: '#777169', fontSize: 13 }}>
-        采购 / 供应链 · 引擎单据 <code>{docType}</code>{subtitle ? ` · ${subtitle}` : ''}
+        {domain} · 引擎单据 <code>{docType}</code>{subtitle ? ` · ${subtitle}` : ''}
       </span>
     </div>
   );

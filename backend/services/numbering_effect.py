@@ -57,6 +57,10 @@ NUMBER_COLUMN_BY_DOC_TYPE: dict[str, str] = {
     "SERVICE_TICKET": "ticket_number",
     "CUSTOMER_FORECAST": "forecast_number",
     "SPECIAL_SHIPMENT": "shipment_number",
+    # 段4a 报关：报关单 CD-YYMM-NNN（月度连号）。建单进 DRAFT 取号。
+    # 注：CUSTOMS_LICENSE 进出口证为 __queryable__ 主数据台账（无 START 流程），
+    #     其 LIC-YYMM-NNN 取号在主数据写路径调 allocate_next_number，不挂此 START effect。
+    "CUSTOMS_DECLARATION": "declaration_number",
 }
 
 # 引擎默认兜底号形态：{PREFIX}-{YYMMDD}-{6位HEX}（_auto_fill_required_fields）。

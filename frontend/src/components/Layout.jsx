@@ -110,7 +110,8 @@ const buildMenuItems = (todoCount, isAdmin) => {
       children: [
         { key: '/customs/declarations', label: '报关单' },
         { key: '/customs/return-monitor', label: '退运监控（180天）' },
-        { key: '/customs/fees', label: '报关费 / 进出口证' },
+        { key: '/customs/fees', label: '报关费补录' },
+        { key: '/customs/licenses', label: '进出口证台账' },
         { key: '/customs/logistics', label: '物流 API 货物进度' },
       ],
     },

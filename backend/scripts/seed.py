@@ -92,6 +92,9 @@ async def seed():
             ("SERVICE_TICKET",         "ST",   "MONTH"),
             ("CUSTOMER_FORECAST",      "FC",   "MONTH"),
             ("SPECIAL_SHIPMENT",       "SS",   "MONTH"),
+            # 段4a 报关：报关单 CD-YYMM-NNN / 进出口证 LIC-YYMM-NNN（月度连号补零3，PRD 06）。
+            ("CUSTOMS_DECLARATION",    "CD",   "MONTH"),
+            ("CUSTOMS_LICENSE",        "LIC",  "MONTH"),
         ]
         # 有编号规则的 doc_type 集合：用于给 START 状态挂建单取号 effect（取业务连号）。
         numbering_doc_types = {doc_type for doc_type, _, _ in numbering_seed}
@@ -110,6 +113,11 @@ async def seed():
             db.add(m.FeatureFlag(
                 company_id=comp.id, flag_key="feature.special_batch_shipment",
                 is_enabled=False, notes="特批发货先发后补单（可隐藏模块），默认 OFF",
+            ))
+            # 段4a 报关：顺丰物流 API 同步开关（PRD 06-5「接好等配置」），默认 OFF（命令短路占位）。
+            db.add(m.FeatureFlag(
+                company_id=comp.id, flag_key="SF_EXPRESS_SYNC",
+                is_enabled=False, notes="顺丰物流轨迹同步，默认 OFF，待顺丰 OpenAPI 配置开通",
             ))
         await db.flush()
 

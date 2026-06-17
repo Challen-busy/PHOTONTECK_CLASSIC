@@ -306,6 +306,23 @@ def phase1_workflow_definitions(created_by_id=None):
     special_shipment_reconcile_rule = "doc.reorder_sales_order_id != None"
     special_shipment_reconcile_effect = ["special_shipment.reconcile_with_sales_order"]
 
+    # === 段4a 报关单（PRD 06-1 报关单 doc_type）===
+    # DRAFT 备单可录头部全字段（declaration_number 由建单取号 effect 给；total_declared_value=Σ行禁手改；
+    # 子表 customs_declaration_line / customs_fee_line 走 SubTableEditor 不进 editable）。
+    customs_declaration_draft_fields = [
+        "direction", "customs_region", "broker_mode", "broker_id", "trade_term",
+        "goods_receipt_id", "shipment_id", "source_invoice_number", "origin_declaration_id",
+        "customs_approval_no", "customs_approval_date", "import_release_date", "return_deadline",
+        "declared_port", "currency", "declared_fx_rate", "notes",
+    ]
+    # ★合规五件套申报硬拦（DRAFT→SUBMITTED validator，逐行查 HS中国码/原产国/中文品名/ECCN，退运放宽 ECCN）
+    # + 香港退香港公司一致性硬校验（退运原进口单限本公司）。逐行跨表判空 + 派 PA 补录 → 走注册器（非 DSL）。
+    customs_submit_effect = ["customs.dispatch_pa_compliance_todo"]
+    # RELEASED 放行 effect：报关单号回写来源出入库/装箱单（换发票号，进口回填放行日供退运 180 倒排）。
+    customs_release_effect = ["customs.writeback_declaration_number"]
+    # RELEASED 报关费分摊回写到岸成本 + 金蝶增量 enqueue（auto=False，登记费用后显式触发；仅进口）。
+    customs_allocate_fee_effect = ["customs.allocate_fee_to_landed_cost"]
+
     defs = [
         {
             "doc_type": "SALES_INQUIRY",
@@ -1203,6 +1220,64 @@ def phase1_workflow_definitions(created_by_id=None):
                     "强制事后勾稽闸：补单 SO 号非空才能进本态（hard_rule）。"
                 )),
                 _state("CLOSED", "已关闭", [], terminal=True),
+                _state("CANCELLED", "已取消", [], terminal=True),
+            ],
+        },
+        {
+            "doc_type": "CUSTOMS_DECLARATION",
+            "name": "报关-报关单（进口/出口/退运）",
+            "description": (
+                "06-1 报关单（进口 IMPORT / 出口 EXPORT / 退运 RE_EXPORT，direction 区分；报关自己做决策⑪）：\n"
+                "DRAFT 备单（物流主任建单+聚合明细，建单取号 CD-YYMM-NNN；退运手补明细+挂原进口单）→\n"
+                "★SUBMITTED 已申报（申报闸：合规五件套 HS中国码/原产国/中文品名/ECCN 逐行硬拦，退运放宽 ECCN；\n"
+                "  缺则拒绝并返回 rule_failures 指出哪行缺哪项 + 自动派 PA 补录；退运另校原进口单限本公司=香港退香港）→\n"
+                "RELEASED 已放行（effect：报关单号回写来源出入库单换发票号；进口回填放行日供退运 180 倒排；\n"
+                "  进口可「登记费用」分摊回写批次到岸成本 + 金蝶增量）→ CLOSED 关闭；\n"
+                "REJECTED 退单（海关退回，来源行释放）→ 改资料 SUBMITTED 重新申报。\n"
+                "节点级 allowed_roles 分 LOGISTICS_LEAD 建单/PA 补合规缺口/FINANCE 核费用（规避 D-02e 边级坑）。\n"
+                "报关单据默认不推金蝶（仅报关费随入库单增量、HS/原产地随出入库单流转，§00-6.3）。"
+            ),
+            "group_name": "CUSTOMS",
+            "states": [
+                # 建单取号 CD-YYMM-NNN（标准 numbering effect）。物流主任跨境货到/发出/退运时建单。
+                _start(["LOGISTICS_LEAD", "LOGISTICS", "OPERATIONS"], label="开始备单",
+                       effects=[NUMBERING_EFFECT]),
+                _state("DRAFT", "草拟备单", ["LOGISTICS_LEAD", "LOGISTICS", "OPERATIONS"], [
+                    # ★申报闸：合规五件套逐行硬拦 + 香港退香港一致性（validator）；过则派 PA 补录待办（effect）。
+                    {"to": "SUBMITTED", "label": "申报", "editable_fields": customs_declaration_draft_fields,
+                     "effects": customs_submit_effect},
+                    {"to": "CANCELLED", "label": "取消报关", "editable_fields": ["notes"]},
+                ], description=(
+                    "# 草拟备单\n物流主任建报关单（方向=进口/出口/退运），选关联出入库单聚合明细（退运手补行+挂原进口单）。\n"
+                    "草拟态合规五件套可空可改；点「申报」才触发硬拦（与 SOP §四-3「点申报时缺 HS 码被卡死」一致）。"
+                )),
+                # 已申报：明细只读（仅草拟可改）；PA 在缺合规时补录主数据后退单重申报。
+                _state("SUBMITTED", "已申报", ["LOGISTICS_LEAD", "PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "RELEASED", "label": "海关放行", "editable_fields": ["notes"],
+                     "effects": customs_release_effect},
+                    {"to": "REJECTED", "label": "海关退单", "editable_fields": ["notes"]},
+                ], description=(
+                    "# 已申报\n报关行/海关受理；明细只读。放行→回写报关单号；退回→退单改资料重新申报。\n"
+                    "合规缺口由 PA 补主数据五件套（自动派单）后，退单→重申报通过。"
+                )),
+                _state("RELEASED", "已放行", ["LOGISTICS_LEAD", "FINANCE", "OPERATIONS"], [
+                    # 进口已放行登记报关费 → 分摊回写批次到岸成本 + 金蝶增量（auto=False，显式触发）。
+                    {"to": "RELEASED", "label": "登记费用（仅进口·分摊回写到岸成本）",
+                     "editable_fields": ["notes"], "effects": customs_allocate_fee_effect},
+                    {"to": "CLOSED", "label": "关闭报关单", "editable_fields": ["notes"]},
+                ], description=(
+                    "# 已放行\n报关单号已回写来源出入库单/装箱单（换发票号）。进口方向货代账单后到→「登记费用」\n"
+                    "按申报金额/数量占比分摊回写各批次到岸成本 + 金蝶增量推送（随入库单，不做账）。出口无此动作。"
+                )),
+                _state("CLOSED", "已关闭", [], terminal=True),
+                _state("REJECTED", "已退单", ["LOGISTICS_LEAD", "PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "SUBMITTED", "label": "重新申报", "editable_fields": customs_declaration_draft_fields,
+                     "effects": customs_submit_effect},
+                    {"to": "DRAFT", "label": "退回改单", "editable_fields": ["notes"]},
+                ], description=(
+                    "# 已退单\n海关退回（资料缺/合规缺）；来源行释放可被别张报关单再引用。\n"
+                    "改齐资料后「重新申报」回已申报态（再过申报闸），或退回草拟改单。"
+                )),
                 _state("CANCELLED", "已取消", [], terminal=True),
             ],
         },
