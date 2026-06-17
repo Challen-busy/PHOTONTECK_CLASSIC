@@ -330,6 +330,14 @@ class SalesInquiry(AuditMixin, Base):
     packaging_requirements = Column(Text, default="")
     barcode_requirements = Column(Text, default="")
     payment_requirement = Column(String(100), default="")
+    # 04a-1 内部询价扩列（源《内部询价表.doc》：销售提供 end-customer 决策上下文）。
+    home_page = Column(String(200), default="")          # 客户主页 Home Page
+    application = Column(String(200), default="")         # 应用 Application
+    # 项目阶段：预算评估/项目切换/研发/样品/小批量验证/批量（阶梯价 vs 样品报价区分）。
+    project_phase = Column(String(20), default="")
+    demand_forecast = Column(String(200), default="")     # 需求用量 Demand/Forecast
+    competitor = Column(String(200), default="")          # 竞争对手 Competitor
+    competitor_price = Column(Numeric(16, 2), nullable=True)  # 竞品价格（对原厂可见，对外报价由防火墙处理）
     status = Column(String(30), default="DRAFT")
     notes = Column(Text, default="")
 
@@ -497,6 +505,62 @@ class PurchaseNoticeLine(Base):
     __table_args__ = (UniqueConstraint("purchase_notice_id", "line_number"),)
 
     material = relationship("Material")
+
+
+class SupplierInquiry(AuditMixin, Base):
+    """对原厂询价登记（04a-2）：PA 据内部询价/销售邮件向 1~N 家原厂询价并记录报价。
+
+    引擎此前无对原厂询价模型（只有 CRM 侧 SALES_INQUIRY）。子表 supplier_inquiry_line
+    自动渲为 SubTableEditor 网格。轻量状态机 INQUIRING→QUOTED→ADOPTED→CLOSED。
+    🔒Q18 防火墙：line.unit_price/commission 属采购进价，对销售端 SALES+SA 隐藏
+    （services/tools.py BUY_TABLES + BUY_PRICE_FIELDS + _can_view_buy_price）。
+    """
+    __tablename__ = "supplier_inquiry"
+    __doc_types__ = ("SUPPLIER_INQUIRY",)
+    id = Column(Integer, primary_key=True)
+    inquiry_number = Column(String(30), index=True, nullable=False)
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)
+    sales_inquiry_id = Column(Integer, ForeignKey("sales_inquiry.id"), nullable=True)  # 关联内部询价（04a-1）
+    product_manager_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    status = Column(String(30), default="INQUIRING")
+    notes = Column(Text, default="")
+
+    supplier = relationship("Supplier")
+    sales_inquiry = relationship("SalesInquiry")
+    __table_args__ = (UniqueConstraint("company_id", "inquiry_number"),)
+
+
+class SupplierInquiryLine(Base):
+    """对原厂询价明细（04a-2 字段表，源《（找原厂）询价登记表.xls》OSI sheet 15 列）。
+
+    🔒unit_price（对原厂单价）/commission（佣金）= 采购进价，对销售端 SALES+SA 隐藏。
+    """
+    __tablename__ = "supplier_inquiry_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    supplier_inquiry_id = Column(Integer, ForeignKey("supplier_inquiry.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=True)   # 型号 P/N
+    description = Column(Text, default="")                # 描述 Description
+    unit_price = Column(Numeric(12, 4), nullable=True)    # 对原厂单价 U/P 🔒对 SALES/SA 隐藏
+    currency = Column(String(3), default="USD")           # 货币
+    quantity = Column(Numeric(12, 2), nullable=True)      # 数量 QTY
+    uom = Column(String(20), default="pcs")               # 计量单位
+    lead_time = Column(String(50), default="")            # 货期 Lead time（如 25周/n.a.）
+    shipment_terms = Column(String(100), default="")      # 贸易条件（FOB HK / CIF…）
+    payment_terms = Column(String(100), default="")       # 付款条件（T/T in advance / Net 30…）
+    inquiry_date = Column(Date, nullable=True)            # 询价日期 Date
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)  # 此价为哪个客户问的
+    sales = Column(String(100), default="")               # 负责销售
+    remarks = Column(Text, default="")                    # 备注（MOQ=MPQ=680 等）
+    mode = Column(String(30), default="Resell")           # 业务模式 Resell/Sample…
+    commission = Column(String(50), default="")           # 佣金 Commission 🔒对 SALES/SA 隐藏
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)  # 原厂（显式化 Excel 隐含的 sheet/文件夹）
+
+    material = relationship("Material")
+    customer = relationship("Customer")
+    supplier = relationship("Supplier")
+    __table_args__ = (UniqueConstraint("supplier_inquiry_id", "line_number"),)
 
 
 # ============================================================

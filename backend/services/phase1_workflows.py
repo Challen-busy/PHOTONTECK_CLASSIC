@@ -49,6 +49,17 @@ def phase1_workflow_definitions(created_by_id=None):
         "customer_id", "sales_assistant_id", "product_manager_id", "source",
         "target_price", "currency", "required_delivery_date", "delivery_address",
         "packaging_requirements", "barcode_requirements", "payment_requirement", "notes",
+        # 04a-1 内部询价扩列（销售提供 end-customer 决策上下文）。
+        "home_page", "application", "project_phase", "demand_forecast",
+        "competitor", "competitor_price",
+    ]
+    # 04a-2 对原厂询价：头可编辑字段（子表 supplier_inquiry_line 走 SubTableEditor）。
+    supplier_inquiry_fields = [
+        "supplier_id", "sales_inquiry_id", "product_manager_id", "notes",
+    ]
+    # 已回价边 PA 可改的报价字段（QUOTED 收原厂回价）。
+    supplier_inquiry_quote_fields = [
+        "supplier_id", "product_manager_id", "notes",
     ]
     quotation_fields = [
         "inquiry_id", "customer_id", "sales_assistant_id", "product_manager_id",
@@ -148,7 +159,7 @@ def phase1_workflow_definitions(created_by_id=None):
             "description": "客户询价 -> PM 授权 -> 生成报价单。",
             "group_name": "CRM",
             "states": [
-                _start(["SALES_ASSISTANT", "SALES_ENGINEER", "OPERATIONS"]),
+                _start(["SALES_ASSISTANT", "SALES_ENGINEER", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
                 _state("DRAFT", "客户询价", ["SALES_ASSISTANT", "SALES_ENGINEER", "OPERATIONS"], [
                     {"to": "PM_REVIEW", "label": "提交 PM 授权", "editable_fields": sales_inquiry_fields},
                     {"to": "CANCELLED", "label": "取消询价", "editable_fields": ["notes"]},
@@ -230,11 +241,13 @@ def phase1_workflow_definitions(created_by_id=None):
         {
             "doc_type": "PURCHASE_NOTICE",
             "name": "ERP-采购通知流程",
-            "description": "SA 发起采购通知 -> PA 接收 -> 生成采购订单。",
+            "description": "SA 发起采购通知（或 PA 手建）-> PA 接收 -> 生成采购订单。"
+                           "SO 审核派生 effect 待段3 SO 就绪后接（register_transition_effect SALES_ORDER 审核→本单）。",
             "group_name": "ERP",
             "states": [
-                _start(["SALES_ASSISTANT", "OPERATIONS"]),
-                _state("DRAFT", "SA 发起采购通知", ["SALES_ASSISTANT", "OPERATIONS"], [
+                # 04a-5：PA/SA 均可经 execute_transition 手建采购通知（PA 缺 SO 时直接录需求）。
+                _start(["SALES_ASSISTANT", "PRODUCT_ASSISTANT", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
+                _state("DRAFT", "SA/PA 发起采购通知", ["SALES_ASSISTANT", "PRODUCT_ASSISTANT", "OPERATIONS"], [
                     {"to": "PA_ACCEPTED", "label": "提交 PA 接收", "editable_fields": purchase_notice_fields, "effects": purchase_notice_sent_effect},
                     {"to": "CANCELLED", "label": "取消通知", "editable_fields": ["notes"]},
                 ]),
@@ -243,6 +256,31 @@ def phase1_workflow_definitions(created_by_id=None):
                 ]),
                 _state("PURCHASE_ORDER_CREATED", "已生成采购订单", [], terminal=True),
                 _state("CANCELLED", "已取消", [], terminal=True),
+            ],
+        },
+        {
+            # 04a-2 对原厂询价登记：PA 据内部询价向 1~N 家原厂询价，记录原厂报价。
+            # 子表 supplier_inquiry_line 自动渲为 SubTableEditor 网格（一单多供应商报价行）。
+            "doc_type": "SUPPLIER_INQUIRY",
+            "name": "采购-对原厂询价流程",
+            "description": "PA 据内部询价向原厂询价 -> 已回价 -> 已采用 -> 关闭。"
+                           "🔒进价（unit_price/commission）对销售端 SALES+SA 隐藏（Q18 字段防火墙）。",
+            "group_name": "采购",
+            "states": [
+                _start(["PRODUCT_ASSISTANT", "PRODUCT_MANAGER", "OPERATIONS"], first_state="INQUIRING",
+                       label="开始对原厂询价", effects=[NUMBERING_EFFECT]),
+                _state("INQUIRING", "询价中", ["PRODUCT_ASSISTANT", "PRODUCT_MANAGER", "OPERATIONS"], [
+                    {"to": "QUOTED", "label": "原厂已回价", "editable_fields": supplier_inquiry_fields},
+                    {"to": "CLOSED", "label": "关闭询价", "editable_fields": ["notes"]},
+                ], description="# 询价中\n录原厂/供应商、关联内部询价；子表逐行录型号/对原厂单价/数量/货期/条款。"),
+                _state("QUOTED", "已回价", ["PRODUCT_ASSISTANT", "PRODUCT_MANAGER", "OPERATIONS"], [
+                    {"to": "ADOPTED", "label": "采用此报价", "editable_fields": supplier_inquiry_quote_fields},
+                    {"to": "CLOSED", "label": "关闭询价", "editable_fields": ["notes"]},
+                ], description="# 已回价\n原厂回价后逐行补 unit_price/lead_time/terms（子表）；可采用或关闭。"),
+                _state("ADOPTED", "已采用", ["PRODUCT_ASSISTANT", "PRODUCT_MANAGER", "OPERATIONS"], [
+                    {"to": "CLOSED", "label": "关闭", "editable_fields": ["notes"]},
+                ], description="# 已采用\n被 PO 或对客户报价引用后置位；供报价单引用最低价/采用价。"),
+                _state("CLOSED", "已关闭", [], terminal=True),
             ],
         },
         {

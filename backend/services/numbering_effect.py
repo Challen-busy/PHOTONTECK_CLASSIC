@@ -34,6 +34,10 @@ NUMBER_COLUMN_BY_DOC_TYPE: dict[str, str] = {
     "STOCK_TRANSFER": "transfer_number",
     "STOCK_ADJUSTMENT": "adjustment_number",
     "INVENTORY_COUNT": "count_number",
+    # 段2a 采购主链：内部询价 / 采购通知 / 对原厂询价业务连号（IQ/PN/SQ，月度重置）。
+    "SALES_INQUIRY": "inquiry_number",
+    "PURCHASE_NOTICE": "notice_number",
+    "SUPPLIER_INQUIRY": "inquiry_number",
 }
 
 # 引擎默认兜底号形态：{PREFIX}-{YYMMDD}-{6位HEX}（_auto_fill_required_fields）。

@@ -58,8 +58,8 @@ def _can_view_sell_price(user: m.UserAccount) -> bool:
 
 # 表名→模型 映射:统一在 core.registry.table_map() 中从 __queryable__/__doc_types__ 自动生成。
 
-# 需要隐藏买价的字段
-BUY_PRICE_FIELDS = {"unit_price", "total_price", "total_amount", "current_unit_cost", "total_value", "unit_cost", "total_cost"}
+# 需要隐藏买价的字段（commission=对原厂佣金，04a-2 Q18 与对原厂单价同属采购进价）
+BUY_PRICE_FIELDS = {"unit_price", "total_price", "total_amount", "current_unit_cost", "total_value", "unit_cost", "total_cost", "commission"}
 # 需要隐藏卖价的字段（在sales相关表上）
 SELL_PRICE_FIELDS = {"unit_price", "total_price", "total_amount"}
 
@@ -69,6 +69,8 @@ BUY_TABLES = {
     "purchase_invoice", "purchase_invoice_line", "advance_payment",
     "accounts_payable", "supplier_credit", "inventory_valuation", "inventory_transaction",
     "inventory", "inventory_movement",
+    # 04a-2 对原厂询价明细：unit_price（对原厂单价）/commission（佣金）= 采购进价，对销售端隐藏（Q18）
+    "supplier_inquiry_line",
 }
 SELL_TABLES = {
     "sales_order", "sales_order_line", "sales_inquiry", "sales_inquiry_line",
@@ -105,6 +107,8 @@ ROLE_ALLOWED_TABLES = {
         "sales_order", "sales_order_line",
         "project", "project_material", "project_activity",
         "inventory", "inventory_reservation",
+        # 对原厂询价：可见行（采用价勾稽报价），但 unit_price/commission 由字段防火墙遮蔽（Q18）
+        "supplier_inquiry", "supplier_inquiry_line",
     },
     "SALES_ASSISTANT": _COMMON_TABLES | {
         "customer", "framework_contract",
@@ -116,6 +120,8 @@ ROLE_ALLOWED_TABLES = {
         "sales_return", "sales_return_line",
         "advance_receipt", "accounts_receivable", "sales_invoice", "sales_invoice_line",
         "inventory", "inventory_reservation",  # 承诺发货前查库存/预留
+        # 对原厂询价：可见行，但 unit_price/commission 由字段防火墙遮蔽（Q18，与 SALES 同隐藏层）
+        "supplier_inquiry", "supplier_inquiry_line",
     },
     "SALES_ENGINEER": _COMMON_TABLES | {
         "customer", "framework_contract",
@@ -127,6 +133,7 @@ ROLE_ALLOWED_TABLES = {
     },
     "PRODUCT_ASSISTANT": _COMMON_TABLES | {
         "supplier",
+        "supplier_inquiry", "supplier_inquiry_line",  # 04a-2 对原厂询价主责录入，可见全价
         "purchase_notice", "purchase_notice_line",
         "purchase_order", "purchase_order_line",
         "sales_order", "sales_order_line",
@@ -142,6 +149,7 @@ ROLE_ALLOWED_TABLES = {
         "supplier", "customer",
         "sales_inquiry", "sales_inquiry_line",
         "quotation", "quotation_line",
+        "supplier_inquiry", "supplier_inquiry_line",  # 04a-2 对原厂询价，可见全价（定利润点）
         "purchase_notice", "purchase_notice_line",
         "project", "project_material", "project_activity",
         "purchase_order", "sales_order",

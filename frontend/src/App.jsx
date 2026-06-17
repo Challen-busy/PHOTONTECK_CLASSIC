@@ -32,6 +32,11 @@ import StockTransferPage from './pages/wms/StockTransferPage';
 import StockAdjustmentPage from './pages/wms/StockAdjustmentPage';
 import SubcontractPage from './pages/wms/SubcontractPage';
 
+// 2 采购 / 供应链 — 采购询价主链（PRD 04a-1/04a-2/04a-5；台账→抽屉→动作，走元数据 API）
+import InternalInquiryPage from './pages/purchase/InternalInquiryPage';
+import SupplierInquiryPage from './pages/purchase/SupplierInquiryPage';
+import PurchaseNoticePage from './pages/purchase/PurchaseNoticePage';
+
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
   { label: 'A 信任', value: 'A' }, { label: 'B 亲切', value: 'B' },
@@ -101,8 +106,12 @@ function AppRoutes() {
         <Route path="sales/qualification" element={PH('客户认证 / 标书', '客户 / 销售')} />
         <Route path="sales/forecast" element={PH('Forecast 接单', '客户 / 销售')} />
 
-        {/* 2 采购 / 供应链 */}
-        <Route path="purchase/inquiries" element={PH('询价', '采购 / 供应链')} />
+        {/* 2 采购 / 供应链（询价主链：内部询价 04a-1 / 对原厂询价 04a-2 / 采购通知 04a-5
+            干净业务页，走元数据 API；台账→抽屉不跳页→动作走 /api/transition。
+            对原厂单价由后端 Q18 字段防火墙对销售端遮蔽，本页纯 schema 驱动不写死价格列） */}
+        <Route path="purchase/inquiries" element={<InternalInquiryPage />} />
+        <Route path="purchase/supplier-inquiries" element={<SupplierInquiryPage />} />
+        <Route path="purchase/notices" element={<PurchaseNoticePage />} />
         <Route path="purchase/orders" element={PH('PO 总表 / 采购订单', '采购 / 供应链')} />
         <Route path="purchase/stockup" element={PH('备货申请', '采购 / 供应链')} />
         <Route path="purchase/samples" element={PH('样品 SDN', '采购 / 供应链')} />

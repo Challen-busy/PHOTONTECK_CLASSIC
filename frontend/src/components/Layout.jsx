@@ -64,7 +64,9 @@ const buildMenuItems = (todoCount, isAdmin) => {
       icon: <ShoppingOutlined />,
       label: '采购 / 供应链',
       children: [
-        { key: '/purchase/inquiries', label: '询价' },
+        { key: '/purchase/inquiries', label: '内部询价' },
+        { key: '/purchase/supplier-inquiries', label: '对原厂询价' },
+        { key: '/purchase/notices', label: '采购通知' },
         { key: '/purchase/orders', label: 'PO 总表 / 采购订单' },
         { key: '/purchase/stockup', label: '备货申请' },
         { key: '/purchase/samples', label: '样品 SDN' },

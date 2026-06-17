@@ -69,6 +69,10 @@ async def seed():
             ("STOCK_TRANSFER",   "TR", "MONTH"),
             ("STOCK_ADJUSTMENT", "AJ", "MONTH"),
             ("INVENTORY_COUNT",  "PC", "MONTH"),
+            # 段2a 采购主链：内部询价 IQ / 采购通知 PN / 对原厂询价 SQ（月度连号补零3，6 公司各一条）。
+            ("SALES_INQUIRY",    "IQ", "MONTH"),
+            ("PURCHASE_NOTICE",  "PN", "MONTH"),
+            ("SUPPLIER_INQUIRY", "SQ", "MONTH"),
         ]
         # 有编号规则的 doc_type 集合：用于给 START 状态挂建单取号 effect（取业务连号）。
         numbering_doc_types = {doc_type for doc_type, _, _ in numbering_seed}
