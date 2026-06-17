@@ -87,6 +87,11 @@ async def seed():
             # 段3a CRM 前段：线索 LD-YYMM-NNN / 商机 OPP-YYMM-NNN（月度连号补零3，PRD 05 页面3/4）。
             ("LEAD",        "LD",  "MONTH"),
             ("OPPORTUNITY", "OPP", "MONTH"),
+            # 段3c 客户/销售收尾：认证 QUAL / 售后工单 ST / Forecast FC / 特批发货 SS（月度连号补零3，PRD 05）。
+            ("CUSTOMER_QUALIFICATION", "QUAL", "MONTH"),
+            ("SERVICE_TICKET",         "ST",   "MONTH"),
+            ("CUSTOMER_FORECAST",      "FC",   "MONTH"),
+            ("SPECIAL_SHIPMENT",       "SS",   "MONTH"),
         ]
         # 有编号规则的 doc_type 集合：用于给 START 状态挂建单取号 effect（取业务连号）。
         numbering_doc_types = {doc_type for doc_type, _, _ in numbering_seed}
@@ -97,6 +102,15 @@ async def seed():
                     reset_period=reset, seq_padding=3, separator="-", period_format="%y%m",
                     current_period="", current_seq=0, is_active=True,
                 ))
+        await db.flush()
+
+        # === 段3c 功能开关（per-company）：特批发货可隐藏模块默认 OFF（PRD 05 页面4b）===
+        # feature.special_batch_shipment 上线默认隐藏入口/创建权，按甲方反馈再 per-company 启用。
+        for comp in companies.values():
+            db.add(m.FeatureFlag(
+                company_id=comp.id, flag_key="feature.special_batch_shipment",
+                is_enabled=False, notes="特批发货先发后补单（可隐藏模块），默认 OFF",
+            ))
         await db.flush()
 
         # === 用户：admin + 各角色 demo（决策A 含 FINANCE_DIRECTOR）===

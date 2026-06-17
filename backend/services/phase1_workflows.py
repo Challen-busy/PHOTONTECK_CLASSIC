@@ -244,6 +244,68 @@ def phase1_workflow_definitions(created_by_id=None):
     #   （总览 §6.2；EXPLICIT effect，开关默认 OFF 只入 outbox；幂等键 invoice_number + company_id）。
     sales_invoice_ar_effect = ["finance.create_accounts_receivable_from_sales_invoice", "kingdee.enqueue_push"]
 
+    # ========================================================
+    # 段3c 客户/销售收尾（PRD 05）字段表 / effect 引用
+    # ========================================================
+    # 客户认证（薄+并行会签复用 cosign 标准件，cosign_group=CERTIFICATION）。
+    # DRAFT 录认证头 + 资料清单子表 + 风险审查子表（提交前必备资料齐 + 风险项均已判 hard_rule）。
+    qualification_draft_fields = [
+        "customer_id", "qualification_type", "qualified_code", "risk_summary", "notes",
+    ]
+    # 提交进会签态：必备资料齐（is_required→is_ready）+ 风险项均已判（presence != PENDING）。
+    # ★两张子表时 `lines` 上下文键会被任一子表覆盖（rules._build_subtables_context_sync，不确定），
+    #   故按子表名显式引用 qualification_doc_line / qualification_risk_line（rules DSL 按表名注入子表行）。
+    qualification_docs_ready_rule = (
+        "all(line.is_ready for line in qualification_doc_line if line.is_required)"
+    )
+    qualification_risks_judged_rule = (
+        "all(line.presence != 'PENDING' for line in qualification_risk_line if (line.risk_type or '') != '')"
+    )
+    # 进 UNDER_COSIGN auto effect：预生成 PA+FINANCE+BOSS 三行待签（cosign 标准件，复用 generate_cosign_lines）。
+    qualification_open_cosign_effect = ["qualification.open_certification_cosign"]
+    # APPROVED auto effect：写有效期 + 回写 customer.qualified_code（已认证供应商码）。
+    qualification_approve_effect = ["qualification.write_qualified_code"]
+    # 会签子表（UNDER_COSIGN self-loop 各签自己行）：editable_fields 限 cosign_line 子表。
+    qualification_cosign_fields = ["cosign_line"]
+
+    # 售后技术工单（薄）：节点级 allowed_roles 分 SALES/SA/FAE/PM/PA 控权（规避 D-02e 边级坑）。
+    service_ticket_open_fields = [
+        "reported_by_id", "report_channel", "customer_id", "material_id", "serial_lot_number",
+        "sales_order_id", "issue_type", "issue_summary", "usage_context", "urgency",
+        "assignee_id", "product_line", "notes",
+    ]
+    service_ticket_progress_fields = [
+        "resolution_type", "resolution_notes", "quality_verdict", "repair_advice",
+    ]
+    service_ticket_rma_fields = ["rma_id", "resolution_type", "repair_advice"]
+    service_ticket_resolve_fields = ["closure_note", "resolution_notes"]
+    # 关闭前 resolution_type + resolution_notes + closure_note 必填（处理过程/结论留痕）。
+    service_ticket_close_rule = (
+        "(doc.resolution_type or '') != '' and (doc.resolution_notes or '') != '' and (doc.closure_note or '') != ''"
+    )
+
+    # 客户 Forecast 滚动预测（占位薄）：DRAFT 录头 + 滚动月份子表 → CONFIRMED 存档 → SUPERSEDED 被新版替代。
+    customer_forecast_fields = [
+        "customer_id", "forecast_version", "source_system", "product_line", "notes",
+    ]
+
+    # 特批发货（可隐藏模块，决策⑫）：DRAFT 录无 SO 特批头 + 入仓编号明细 → ★财务特批审 → 出库 → 待补单 → 勾稽。
+    special_shipment_draft_fields = [
+        "customer_id", "special_reason", "special_reason_note", "risk_commitment",
+        "authorized_by_id", "expected_reorder_date", "price_term", "notes",
+    ]
+    # DRAFT 提交校验：特批理由 + 风险承诺 + 预计补单期限必填（无 SO 例外，必关联 SO 硬规则不挂本单）。
+    special_shipment_submit_rule = (
+        "(doc.special_reason or '') != '' and (doc.risk_commitment or '') != '' and doc.expected_reorder_date != None"
+    )
+    # ★财务特批审通过 → APPROVED：置特批放行标志。
+    special_shipment_approve_effect = ["special_shipment.mark_approved"]
+    # APPROVED → SHIPPED_PENDING_SO auto effect：通知 03b 出库（特批来源标记）+ 挂「待补单」债务（pending_so=true）。
+    special_shipment_ship_effect = ["special_shipment.mark_shipped_pending_so"]
+    # SHIPPED_PENDING_SO → RECONCILED：补单 SO 号非空（强制事后勾稽闸 hard_rule）+ 回链/抵减在途 effect。
+    special_shipment_reconcile_rule = "doc.reorder_sales_order_id != None"
+    special_shipment_reconcile_effect = ["special_shipment.reconcile_with_sales_order"]
+
     defs = [
         {
             "doc_type": "SALES_INQUIRY",
@@ -954,6 +1016,194 @@ def phase1_workflow_definitions(created_by_id=None):
                 ], description="# 退客户（SA 视图）\n货回来后告诉对应 SA 退/换给客户；退完 PA/SA 关闭 RMA。"),
                 _state("CLOSED", "已关闭", [], terminal=True),
                 _state("REJECTED", "已驳回", [], terminal=True),
+            ],
+        },
+        {
+            "doc_type": "CUSTOMER_QUALIFICATION",
+            "name": "客户-客户认证（薄+并行会签）",
+            "description": (
+                "05 客户认证（薄版，供应商准入审核）：系统只管认证状态+资料清单勾选+协议风险审查留痕+附件。\n"
+                "DRAFT 备资料/填风险审查（建单 START 取号 QUAL-YYMM-NNN）→ 提交（必备资料齐+风险项均已判 hard_rule）→\n"
+                "★UNDER_COSIGN 并行会签：进态 auto effect 预生成 PA+FINANCE+BOSS 三行待签（复用 cosign 标准件）；\n"
+                "  三方各往自己 cosign_line 行 sign_cosign 填同意/驳回（self-loop 编辑，并行任意顺序）；\n"
+                "  集齐三方 AGREE 才放行 APPROVED（cosign.customer_certification 校验器把关），任一 REJECT → REJECTED。\n"
+                "APPROVED auto effect 写有效期 + 回写 customer.qualified_code；EXPIRED 到期失效重认。本单不推金蝶。"
+            ),
+            "group_name": "CRM",
+            "states": [
+                _start(["SALES", "SALES_ASSISTANT", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
+                _state("DRAFT", "备资料/填风险审查", ["SALES", "SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "UNDER_COSIGN", "label": "提交会签（PA+财务+BOSS）",
+                     "editable_fields": qualification_draft_fields,
+                     "effects": qualification_open_cosign_effect,
+                     "hard_rules": [qualification_docs_ready_rule, qualification_risks_judged_rule]},
+                    {"to": "EXPIRED", "label": "作废", "editable_fields": ["notes"]},
+                ], description=(
+                    "# 备资料/填风险审查\n销售/SA 录客户/认证类型，勾资料清单（qualification_doc_line 必备项须齐）、"
+                    "判协议风险审查项（qualification_risk_line 违约/索赔/质保期冲突均须判有/无+说明）。\n"
+                    "提交即进并行会签态，自动预生成 PA+财务+BOSS 三行待签。"
+                )),
+                # ★并行会签态（self-loop 各签自己行）：三方都能进来推进，但「通过」由 cosign 校验器把关
+                # （集齐 PA+FINANCE+BOSS AGREE 才过 APPROVED，任一 REJECT 打回 REJECTED）。
+                _state("UNDER_COSIGN", "★并行会签中（PA+财务+BOSS）",
+                       ["PRODUCT_ASSISTANT", "FINANCE", "BOSS", "OPERATIONS"], [
+                    {"to": "UNDER_COSIGN", "label": "我签字（同意/驳回自己那行）",
+                     "editable_fields": qualification_cosign_fields},
+                    {"to": "APPROVED", "label": "通过（集齐三方同意）", "editable_fields": ["valid_until", "notes"],
+                     "effects": qualification_approve_effect},
+                    {"to": "REJECTED", "label": "驳回（任一方驳回）", "editable_fields": ["notes"]},
+                ], description=(
+                    "# ★并行会签（05 §3 标准件复用）\nPA（供应/质量可行性）+ 财务（账期/信用/索赔风险）+ "
+                    "BOSS（准入决策）三方并行各签一票（往自己 cosign_line 行 sign_cosign）。\n"
+                    "集齐三方同意才可「通过」（cosign.customer_certification 校验器：任一驳回→REJECTED，未集齐→留会签态）。"
+                )),
+                _state("APPROVED", "已通过", ["SALES", "SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "EXPIRED", "label": "到期/被取消失效", "editable_fields": ["notes"]},
+                ], description="# 已通过\n写认证有效期；回写客户「已认证供应商码」（customer.qualified_code）。到期→失效重认。"),
+                _state("REJECTED", "已驳回", ["SALES", "SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "UNDER_COSIGN", "label": "整改后重新提交会签",
+                     "editable_fields": qualification_draft_fields,
+                     "effects": qualification_open_cosign_effect},
+                ], description="# 已驳回\n整改资料/风险项后可重新提交会签（保留各方意见留痕）。"),
+                _state("EXPIRED", "已失效", ["SALES", "SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "DRAFT", "label": "重新认证", "editable_fields": ["notes"]},
+                ], description="# 已失效\n到期或被客户取消→可重新认证（回 DRAFT 重备资料）。"),
+            ],
+        },
+        {
+            "doc_type": "SERVICE_TICKET",
+            "name": "客户-售后技术工单",
+            "description": (
+                "05c 售后技术工单（薄）：客户报技术问题/质量故障 → FAE 处理（答疑/判定/维修建议）→ 关闭。\n"
+                "OPEN（SALES/SA/FAE/PM 提报，建单取号 ST-YYMM-NNN）→ IN_PROGRESS（FAE/PM 处理）→\n"
+                "  RESOLVED（已解决，关闭前 resolution_type/notes/closure_note 必填 hard_rule）→ CLOSED；\n"
+                "旁路 ESCALATED_RMA（需实物退换报原厂→关联 04b RMA，rma_id 回链）→ 回 RESOLVED；\n"
+                "OPEN→CLOSED 直关（无效/误报）；RESOLVED→IN_PROGRESS 重开（客户反馈未解决）。\n"
+                "节点级 allowed_roles 控权（规避 D-02e 边级坑）。本单不推金蝶（内部技术服务单，无财务关卡）。"
+            ),
+            "group_name": "CRM",
+            "states": [
+                _start(["SALES", "SALES_ASSISTANT", "PRODUCT_MANAGER", "OPERATIONS"], first_state="OPEN",
+                       effects=[NUMBERING_EFFECT]),
+                _state("OPEN", "提报（待 FAE 接单）",
+                       ["SALES", "SALES_ASSISTANT", "PRODUCT_MANAGER", "OPERATIONS"], [
+                    {"to": "IN_PROGRESS", "label": "FAE 接单处理", "editable_fields": service_ticket_open_fields},
+                    {"to": "CLOSED", "label": "无效/误报直接关闭", "editable_fields": ["closure_note"]},
+                ], description=(
+                    "# 提报建单\nSALES/SA 录客户/型号/SN/问题描述/问题类型/紧急度/负责 FAE/产线（必填客户/型号/问题描述/FAE）。\n"
+                    "多型号用 service_ticket_line 子表（多 SN 多行）。指派给本产线 FAE 接单。"
+                )),
+                _state("IN_PROGRESS", "FAE 处理中", ["PRODUCT_MANAGER", "OPERATIONS", "SALES_ENGINEER"], [
+                    {"to": "RESOLVED", "label": "答疑/处理完成", "editable_fields": service_ticket_progress_fields},
+                    {"to": "ESCALATED_RMA", "label": "需实物退换报原厂（转 RMA）",
+                     "editable_fields": service_ticket_rma_fields},
+                ], description=(
+                    "# FAE 处理\n据型号/客户/SN 判断：远程答疑→直接 RESOLVED；需技术判定→质量判定(良/不良)+维修建议；\n"
+                    "需实物退换/报原厂→ESCALATED_RMA 派生/关联 04b RMA（实物流转在 RMA，技术结论沉淀本工单）。"
+                )),
+                _state("ESCALATED_RMA", "升级转 RMA（旁路）",
+                       ["PRODUCT_MANAGER", "PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "RESOLVED", "label": "RMA 处理完/客户问题解决", "editable_fields": ["rma_id", "resolution_notes"]},
+                ], description=(
+                    "# 升级转 RMA（旁路）\n关联 04b RMA 单（rma_id），实物退运/货回入库/退客户全在 RMA；\n"
+                    "RMA 处理完、客户问题解决后回 RESOLVED（弱联动，不强绑定双向状态机）。"
+                )),
+                _state("RESOLVED", "已解决（待确认关单）", ["PRODUCT_MANAGER", "OPERATIONS", "SALES_ENGINEER"], [
+                    {"to": "CLOSED", "label": "确认关单", "editable_fields": service_ticket_resolve_fields,
+                     "hard_rules": [service_ticket_close_rule]},
+                    {"to": "IN_PROGRESS", "label": "客户反馈未解决（重开）", "editable_fields": ["resolution_notes"]},
+                ], description=(
+                    "# 已解决\nFAE/PM 确认结论无误→CLOSED（关闭前处理方式/处理过程/关闭结论必填，留痕）；\n"
+                    "客户反馈未解决→IN_PROGRESS 重开（售后可能反复）。"
+                )),
+                _state("CLOSED", "已关闭", [], terminal=True),
+            ],
+        },
+        {
+            "doc_type": "CUSTOMER_FORECAST",
+            "name": "客户-Forecast 滚动预测（占位薄）",
+            "description": (
+                "05d Forecast 接单（占位薄版）：把客户系统里的滚动预测抄录留痕，可联动备货/SO。\n"
+                "范围待定→薄实现（头 + 滚动月份子表网格），直连客户系统列后期 ➕（开关默认 OFF）。\n"
+                "DRAFT（SA 录客户×型号×多月预测网格，建单取号 FC-YYMM-NNN）→ CONFIRMED（确认存档，可起备货建议）→\n"
+                "SUPERSEDED（被新版滚动替代）。预测无财务凭证含义→财务无关卡、不推金蝶。"
+            ),
+            "group_name": "CRM",
+            "states": [
+                _start(["SALES_ASSISTANT", "SALES", "PRODUCT_MANAGER", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
+                _state("DRAFT", "录滚动预测", ["SALES_ASSISTANT", "SALES", "OPERATIONS"], [
+                    {"to": "CONFIRMED", "label": "确认存档", "editable_fields": customer_forecast_fields},
+                ], description=(
+                    "# 录滚动预测\nSA 把客户系统/Excel/邮件里的滚动需求预测抄成 customer_forecast（客户×型号×多月网格，\n"
+                    "customer_forecast_line 子表）。占位薄：交叉应答/接单转 SO/起备货建议留 TODO（范围待定）。"
+                )),
+                _state("CONFIRMED", "已确认存档", ["SALES_ASSISTANT", "PRODUCT_MANAGER", "OPERATIONS"], [
+                    {"to": "SUPERSEDED", "label": "被新版滚动替代", "editable_fields": ["notes"]},
+                ], description="# 已确认\n预测存档可当备货前瞻依据（PM 看本产线）；月初滚动更新→旧版置 SUPERSEDED。"),
+                _state("SUPERSEDED", "已被替代", [], terminal=True),
+            ],
+        },
+        {
+            "doc_type": "SPECIAL_SHIPMENT",
+            "name": "客户-特批发货（先发后补单·可隐藏）",
+            "description": (
+                "05 页面4b 特批发货（先发后补单，可隐藏模块，决策⑫）：客户未下单先经★财务特批审出货→事后补录\n"
+                "SO 勾稽补推金蝶。是「发货必关联 SO」硬规则的唯一受控例外（独立 doc_type 隔离，必关联硬规则不挂本单）。\n"
+                "DRAFT（SALES/SA 发起无 SO 特批头+入仓编号明细，建单取号 SS-YYMM-NNN；必填特批理由/风险承诺/补单期限）→\n"
+                "★FINANCE_SPECIAL_APPROVAL（财务特批审：核风险/授信/资质，节点级 allowed_roles=[FINANCE]，财务不批货不出仓）→\n"
+                "APPROVED（特批放行，置 special_approved）→ SHIPPED_PENDING_SO（已发货·待补单，pending_so=true，逾期升级）→\n"
+                "RECONCILED（补录 SO 勾稽：补单 SO 号非空 hard_rule + 抵减在途/补推金蝶销售源）→ CLOSED；CANCELLED 终态。\n"
+                "feature.special_batch_shipment per-company 默认 OFF（前端隐藏入口/创建权）。"
+            ),
+            "group_name": "CRM",
+            "states": [
+                _start(["SALES", "SALES_ASSISTANT", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
+                _state("DRAFT", "特批发起（无 SO）", ["SALES", "SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "FINANCE_SPECIAL_APPROVAL", "label": "提交财务特批审",
+                     "editable_fields": special_shipment_draft_fields,
+                     "hard_rules": [special_shipment_submit_rule]},
+                    {"to": "CANCELLED", "label": "作废", "editable_fields": ["notes"]},
+                ], description=(
+                    "# 特批发起（无 SO）\n录客户/特批理由/风险承诺/授权人/预计补单期限（默认+30天）/入仓编号明细网格\n"
+                    "（special_shipment_line 逐行指定批次，串货隔离）。本单无 SO（与正常发货根本区别）。"
+                )),
+                # ★财务特批审（节点级 allowed_roles=[FINANCE]，规避 D-02e 边级坑；ADMIN/BOSS 绕过）。
+                _state("FINANCE_SPECIAL_APPROVAL", "★财务特批审（未下单先发货风险）",
+                       ["FINANCE", "OPERATIONS"], [
+                    {"to": "APPROVED", "label": "特批放行", "editable_fields": ["notes"],
+                     "effects": special_shipment_approve_effect},
+                    {"to": "DRAFT", "label": "退回（货坚决不出仓）", "editable_fields": ["notes"]},
+                ], description=(
+                    "# ★财务特批审（最硬关卡）\n核未下单先发货的风险/授信/客户资质/特批理由/补单期限合理性；\n"
+                    "通过=承担「无 SO 先出货」财务例外责任（置特批放行标志）；财务不批→货坚决不出仓（同页面4铁律）。"
+                )),
+                # 特批放行→通知 03b 出库（特批来源标记）+ 挂「待补单」债务（auto effect）。
+                _state("APPROVED", "已特批放行→通知出库", ["LOGISTICS", "OPERATIONS"], [
+                    {"to": "SHIPPED_PENDING_SO", "label": "仓库出库（特批来源/待补单标记）",
+                     "editable_fields": ["notes"], "effects": special_shipment_ship_effect},
+                ], description=(
+                    "# 已特批放行\n通知 03b 出库（复用出库作业：互检+扣库存+标签，挂 source_type=SPECIAL_BATCH/pending_so=true）；\n"
+                    "出库后进「已发货·待补单」。"
+                )),
+                _state("SHIPPED_PENDING_SO", "已发货·待补单（债务）",
+                       ["SALES_ASSISTANT", "SALES", "OPERATIONS"], [
+                    {"to": "RECONCILED", "label": "补录 SO 勾稽（回填/抵减在途/补推金蝶）",
+                     "editable_fields": ["reorder_sales_order_id", "notes"],
+                     "effects": special_shipment_reconcile_effect,
+                     "hard_rules": [special_shipment_reconcile_rule]},
+                    {"to": "CANCELLED", "label": "已出库后取消（须财务，涉冲销）", "editable_fields": ["notes"]},
+                ], description=(
+                    "# 已发货·待补单\n金蝶以「特批出库来源/待补 SO」标记先推；挂「待补单」债务，超预计补单期限未勾稽→红标升级催办。\n"
+                    "客户正式下单→SA 补录 SO（页面2）→把本特批出库勾稽进该 SO。"
+                )),
+                _state("RECONCILED", "已补单勾稽", ["SALES_ASSISTANT", "OPERATIONS"], [
+                    {"to": "CLOSED", "label": "闭环关闭", "editable_fields": ["notes"]},
+                ], description=(
+                    "# 已补单勾稽\n回填补单 SO 号、抵减该 SO 在途、补推/改推金蝶销售源（pending_so=false）；\n"
+                    "强制事后勾稽闸：补单 SO 号非空才能进本态（hard_rule）。"
+                )),
+                _state("CLOSED", "已关闭", [], terminal=True),
+                _state("CANCELLED", "已取消", [], terminal=True),
             ],
         },
     ]

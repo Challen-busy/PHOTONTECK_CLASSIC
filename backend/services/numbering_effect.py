@@ -52,6 +52,11 @@ NUMBER_COLUMN_BY_DOC_TYPE: dict[str, str] = {
     # crm.create_opportunity_from_lead 直接取号（同 util），手建商机走此 START 取号。
     "LEAD": "lead_number",
     "OPPORTUNITY": "opportunity_number",
+    # 段3c 客户/销售收尾：认证 QUAL / 售后工单 ST / Forecast FC / 特批发货 SS（月度连号，PRD 05）。
+    "CUSTOMER_QUALIFICATION": "qualification_number",
+    "SERVICE_TICKET": "ticket_number",
+    "CUSTOMER_FORECAST": "forecast_number",
+    "SPECIAL_SHIPMENT": "shipment_number",
 }
 
 # 引擎默认兜底号形态：{PREFIX}-{YYMMDD}-{6位HEX}（_auto_fill_required_fields）。

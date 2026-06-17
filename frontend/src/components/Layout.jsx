@@ -11,6 +11,7 @@ import {
 import { useAuth } from '../auth';
 import { getMyTodos } from '../api';
 import CompanySwitcher from './CompanySwitcher';
+import { FEATURE_SPECIAL_BATCH_SHIPMENT } from '../pages/sales/SpecialShipmentPage';
 
 const { Header, Sider, Content } = AntLayout;
 
@@ -55,6 +56,11 @@ const buildMenuItems = (todoCount, isAdmin) => {
         { key: '/sales/orders', label: '销售订单 SO' },
         { key: '/sales/orders-ledger', label: 'SO 签单大表 / 销售台账' },
         { key: '/sales/shipment-requests', label: '发货申请 / 通知' },
+        // 特批发货（先发后补单）= 可隐藏模块（决策⑫）：feature.special_batch_shipment 默认 OFF →
+        // 导航不出此入口（条件渲染）。开关 ON 时显示。待后端 ➕ per-company /api/features 后改读后端。
+        ...(FEATURE_SPECIAL_BATCH_SHIPMENT
+          ? [{ key: '/sales/special-shipment', label: '特批发货（先发后补单）' }]
+          : []),
         { key: '/sales/invoices', label: '销项发票' },
         { key: '/sales/tickets', label: '售后技术工单' },
         { key: '/sales/qualification', label: '客户认证 / 标书' },

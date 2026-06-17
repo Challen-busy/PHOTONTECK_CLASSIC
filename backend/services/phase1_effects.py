@@ -1220,3 +1220,144 @@ async def rma_create_return_inbound(
         await db.flush()
         logs.append(f"RMA 货回入库 batch={batch_number} status={inv.status} source={marker['rma_source']}/{marker['quality']}")
     return logs
+
+
+# ============================================================
+# 段3c 客户/销售收尾 domain effects（PRD 05）
+#   - 客户认证：进会签态预生成三行待签（复用 cosign 标准件）+ 通过回写 customer.qualified_code
+#   - 特批发货：财务特批放行标志 / 出库待补单标志 / 补单勾稽抵减在途
+# 全部经唯一写入路径（这里在 phase1_effects 内 db.add/写字段，arch 边界允许）。
+# ============================================================
+
+@register_transition_effect(
+    "qualification.open_certification_cosign",
+    doc_type="CUSTOMER_QUALIFICATION",
+    to_state="UNDER_COSIGN",
+)
+async def open_certification_cosign(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """进会签态（UNDER_COSIGN）时预生成 PA+FINANCE+BOSS 三行待签（并行会签标准件复用）。
+
+    集齐放行校验器由 services/cosign.register_cosign_checkpoint 注册（UNDER_COSIGN→APPROVED 前跑）。
+    幂等：generate_cosign_lines 对已存在的角色行跳过（重提/重新会签不重复建行）。
+    """
+    from services.cosign import generate_cosign_lines
+
+    created = await generate_cosign_lines(
+        db,
+        doc_type="CUSTOMER_QUALIFICATION",
+        doc_id=doc.id,
+        company_id=doc.company_id,
+        required_roles=["PRODUCT_ASSISTANT", "FINANCE", "BOSS"],
+        cosign_group="CERTIFICATION",
+        created_by_id=_actor_id(doc, user),
+    )
+    return [f"客户认证会签预生成待签行 {len(created)} 条（PA+FINANCE+BOSS）"]
+
+
+@register_transition_effect(
+    "qualification.write_qualified_code",
+    doc_type="CUSTOMER_QUALIFICATION",
+    to_state="APPROVED",
+)
+async def write_qualified_code(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """认证通过（APPROVED）→ 写有效期（缺省 +1 年）+ 回写客户「已认证供应商码」customer.qualified_code。
+
+    幂等：仅当客户存在且本认证单填了 qualified_code 时回写；valid_until 缺省补一年。
+    """
+    from datetime import timedelta
+
+    logs: list[str] = []
+    if doc.valid_until is None:
+        doc.valid_until = date.today() + timedelta(days=365)
+        logs.append(f"认证有效期缺省置 {doc.valid_until}")
+    if doc.customer_id and (doc.qualified_code or ""):
+        customer = await _one(db, m.Customer, m.Customer.id == doc.customer_id)
+        if customer is not None:
+            customer.qualified_code = doc.qualified_code
+            logs.append(f"回写 customer#{customer.id} qualified_code={doc.qualified_code}")
+    await db.flush()
+    return logs or ["认证通过（无 qualified_code 回写）"]
+
+
+@register_transition_effect(
+    "special_shipment.mark_approved",
+    doc_type="SPECIAL_SHIPMENT",
+    to_state="APPROVED",
+)
+async def special_shipment_mark_approved(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """★财务特批审通过（APPROVED）→ 置特批放行标志 special_approved=True。"""
+    doc.special_approved = True
+    await db.flush()
+    return [f"特批发货 {doc.shipment_number} 财务已特批放行（special_approved=True）"]
+
+
+@register_transition_effect(
+    "special_shipment.mark_shipped_pending_so",
+    doc_type="SPECIAL_SHIPMENT",
+    to_state="SHIPPED_PENDING_SO",
+)
+async def special_shipment_mark_shipped_pending_so(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """特批放行→仓库出库（SHIPPED_PENDING_SO）→ 挂「待补单」债务 pending_so=True。
+
+    出库实物作业（互检+扣库存+标签，source_type=SPECIAL_BATCH）复用 03b 出库链 —— 本段薄实现只置
+    「待补单」债务标志（debt 可视化）；实物出库单生成/扣库存与金蝶推送接 03b/07b（留 TODO 占位）。
+    """
+    doc.pending_so = True
+    await db.flush()
+    return [f"特批发货 {doc.shipment_number} 已出库挂待补单债务（pending_so=True，TODO: 接 03b 出库 + 金蝶特批来源推送）"]
+
+
+@register_transition_effect(
+    "special_shipment.reconcile_with_sales_order",
+    doc_type="SPECIAL_SHIPMENT",
+    to_state="RECONCILED",
+)
+async def special_shipment_reconcile_with_sales_order(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """补录 SO 勾稽（RECONCILED）→ 回填补单 SO、抵减该 SO 在途、清「待补单」债务。
+
+    勾稽口径（薄、可解释）：本特批每行入仓明细按 material_id 匹配补单 SO 明细，把已发数量回填明细行
+    reconciled_so_line_id 并抵减该 SO 明细在途（shipped_quantity 累加，视同该 SO 的一次发货）。
+    强制事后勾稽闸（补单 SO 号非空）由边级 hard_rule 把关；本 effect 只做回链与在途抵减。
+    补推/改推金蝶销售源接 07b（留 TODO）。pending_so 置假（债务清账）。
+    """
+    logs: list[str] = []
+    so_id = doc.reorder_sales_order_id
+    if not so_id:
+        return ["特批补单勾稽：未填补单 SO（应被 hard_rule 拦截）"]
+    so_lines = await _all(
+        db, m.SalesOrderLine, m.SalesOrderLine.sales_order_id == so_id,
+        order_by=m.SalesOrderLine.line_number,
+    )
+    so_line_by_material: dict[int, m.SalesOrderLine] = {}
+    for sl in so_lines:
+        so_line_by_material.setdefault(sl.material_id, sl)
+    ship_lines = await _all(
+        db, m.SpecialShipmentLine, m.SpecialShipmentLine.special_shipment_id == doc.id,
+        order_by=m.SpecialShipmentLine.line_number,
+    )
+    for sl in ship_lines:
+        if not sl.material_id:
+            continue
+        target = so_line_by_material.get(sl.material_id)
+        if target is None:
+            logs.append(f"特批明细 material#{sl.material_id} 在补单 SO 无匹配明细（勾稽一致性 gap，留 TODO）")
+            continue
+        sl.reconciled_so_line_id = target.id
+        target.shipped_quantity = _num(target.shipped_quantity) + _num(sl.quantity)
+        logs.append(
+            f"特批明细 material#{sl.material_id} 勾稽 SO 明细#{target.id}，抵减在途 {_num(sl.quantity)}"
+        )
+    doc.pending_so = False
+    await db.flush()
+    logs.append(f"特批发货 {doc.shipment_number} 已补单勾稽 SO#{so_id}（pending_so=False，TODO: 补推金蝶销售源）")
+    return logs

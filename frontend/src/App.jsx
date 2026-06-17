@@ -53,6 +53,10 @@ import SalesOrderPage from './pages/sales/SalesOrderPage';
 import SalesOrderLedgerPage from './pages/sales/SalesOrderLedgerPage';
 import ShipmentRequestPage from './pages/sales/ShipmentRequestPage';
 import SalesInvoicePage from './pages/sales/SalesInvoicePage';
+import ServiceTicketPage from './pages/sales/ServiceTicketPage';
+import QualificationPage from './pages/sales/QualificationPage';
+import ForecastPage from './pages/sales/ForecastPage';
+import SpecialShipmentPage from './pages/sales/SpecialShipmentPage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -124,9 +128,10 @@ function AppRoutes() {
         <Route path="sales/shipment-requests" element={<ShipmentRequestPage />} />
         <Route path="sales/shipments" element={<ShipmentRequestPage />} />
         <Route path="sales/invoices" element={<SalesInvoicePage />} />
-        <Route path="sales/tickets" element={PH('售后技术工单', '客户 / 销售')} />
-        <Route path="sales/qualification" element={PH('客户认证 / 标书', '客户 / 销售')} />
-        <Route path="sales/forecast" element={PH('Forecast 接单', '客户 / 销售')} />
+        <Route path="sales/tickets" element={<ServiceTicketPage />} />
+        <Route path="sales/qualification" element={<QualificationPage />} />
+        <Route path="sales/forecast" element={<ForecastPage />} />
+        <Route path="sales/special-shipment" element={<SpecialShipmentPage />} />
 
         {/* 2 采购 / 供应链（询价主链：内部询价 04a-1 / 对原厂询价 04a-2 / 采购通知 04a-5
             干净业务页，走元数据 API；台账→抽屉不跳页→动作走 /api/transition。

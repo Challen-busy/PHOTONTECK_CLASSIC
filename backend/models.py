@@ -2398,3 +2398,232 @@ class OpportunityFollowupLine(Base):
     next_step = Column(String(200), default="")         # 下一步（可回写商机 next_step）
     owner_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 负责人
     __table_args__ = (UniqueConstraint("opportunity_id", "line_number"),)
+
+
+# ============================================================
+# 段3c 客户/销售收尾（PRD 05）：客户认证（薄+并行会签复用）/ 售后技术工单 /
+# Forecast 接单（占位薄）/ 特批发货（可隐藏模块）+ 功能开关 FeatureFlag。
+# 引擎排除「退货/售后」类业务（引擎 02 §2.9）→ 全新增 doc_type + 子表 + WorkflowDefinition。
+# 会签复用 services/cosign 标准件（CosignLine 子表 + register_cosign_checkpoint），不另造。
+# ============================================================
+
+class CustomerQualification(AuditMixin, Base):
+    """客户认证单（薄版，PRD 05-客户认证与会签 页面1）：大客户准入审核，
+    系统只管认证状态 + 资料清单勾选 + 协议风险审查项留痕 + 附件，不写协议正文。
+
+    ★审核 = 并行会签（复用 services/cosign 标准件，cosign_group=CERTIFICATION）：
+      DRAFT 备资料/填风险审查 → UNDER_COSIGN（进态 auto effect 预生成 PA+FINANCE+BOSS 三行待签）
+      → 各方往自己 cosign_line 行 sign（self-loop 编辑）→ 集齐三方 AGREE 才 APPROVED（cosign 校验器把关），
+      任一 REJECT → REJECTED（打回整改可重提）→ EXPIRED（到期失效重认）。
+    APPROVED auto effect 回写 customer.qualified_code（已认证供应商码）。
+    认证单号 QUAL-YYMM-NNN 月度连号（NumberingRule + 建单取号 effect）。本单不推金蝶（内部准入单）。
+    """
+    __tablename__ = "customer_qualification"
+    __doc_types__ = ("CUSTOMER_QUALIFICATION",)
+    id = Column(Integer, primary_key=True)
+    qualification_number = Column(String(30), index=True, nullable=False)  # QUAL-YYMM-NNN
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)
+    qualification_type = Column(String(30), default="NEW_SUPPLIER")  # 新供应商认证/年度复审/体系认证
+    valid_until = Column(Date, nullable=True)            # 有效期至（通过时写）
+    qualified_code = Column(String(50), default="")      # 客户给的已认证供应商码（通过回写 customer.qualified_code）
+    risk_summary = Column(Text, default="")              # 风险审查总评（违约/索赔/质保期冲突摘要）
+    notes = Column(Text, default="")
+    status = Column(String(30), default="DRAFT")
+
+    customer = relationship("Customer")
+
+    __table_args__ = (UniqueConstraint("company_id", "qualification_number", name="ux_customer_qualification_number"),)
+
+
+class QualificationDocLine(Base):
+    """认证资料清单子表（PRD 05 §2.3 qualification_doc_line）：营业执照/质量体系/产品资料/银行信息…，
+    标「必备」的项须齐才能提交（提交 hard_rule）。名含 `_line` → 前端 SubTableEditor 网格。"""
+    __tablename__ = "qualification_doc_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    qualification_id = Column(Integer, ForeignKey("customer_qualification.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    doc_item = Column(String(60), default="")            # 资料项（营业执照/质量体系/产品资料/银行信息…）
+    is_required = Column(Boolean, default=True)          # 是否必备（必备项须齐）
+    is_ready = Column(Boolean, default=False)            # 是否齐备
+    attachment_ref = Column(Text, default="")            # 附件引用（占位，附件域跨模块共用）
+    __table_args__ = (UniqueConstraint("qualification_id", "line_number"),)
+
+
+class QualificationRiskLine(Base):
+    """协议风险审查项子表（PRD 05 §2.3 qualification_risk_line）：违约金/索赔/质保期冲突/其他，
+    三项均须判（有/无+说明）才能提交（提交 hard_rule）。"""
+    __tablename__ = "qualification_risk_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    qualification_id = Column(Integer, ForeignKey("customer_qualification.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    risk_type = Column(String(20), default="")           # 违约金/索赔/质保期冲突/其他
+    presence = Column(String(10), default="PENDING")     # PRESENT 有 / ABSENT 无 / PENDING 待定
+    note = Column(Text, default="")                      # 说明（「有」时建议填）
+    __table_args__ = (UniqueConstraint("qualification_id", "line_number"),)
+
+
+class ServiceTicket(AuditMixin, Base):
+    """售后技术工单（薄，PRD 05-售后技术工单 05c-2）：客户报技术问题/质量故障 → FAE 处理 → 关闭。
+
+    引擎排除「售后」业务（引擎 02 §2.9）→ 全新增 doc_type + 可选子表 service_ticket_line。
+    轻量四态主干 + RMA 升级旁路（节点级 allowed_roles 分 SALES/SA/FAE/PM/PA 控权，规避 D-02e 边级坑）：
+      OPEN（提报）→ IN_PROGRESS（FAE 处理：答疑/判定/维修建议）→ RESOLVED（已解决）→ CLOSED；
+      旁路 ESCALATED_RMA（需实物退换报原厂→关联 04b RMA，rma_id 回链）→ 回 RESOLVED；
+      OPEN→CLOSED 直关（无效/误报）；RESOLVED→IN_PROGRESS 重开（客户反馈未解决）。
+    工单号 ST-YYMM-NNN 月度连号。本单不推金蝶（内部技术服务单，无财务关卡）。
+    """
+    __tablename__ = "service_ticket"
+    __doc_types__ = ("SERVICE_TICKET",)
+    id = Column(Integer, primary_key=True)
+    ticket_number = Column(String(30), index=True, nullable=False)  # ST-YYMM-NNN
+    reported_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 提报人（创建态自动置）
+    report_channel = Column(String(20), default="PHONE")  # 电话/邮件/微信/客户系统/其他
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=True)  # 故障型号（单型号；多型号走子表）
+    serial_lot_number = Column(String(100), default="")  # SN/LOT（倒查发货/批次，扫码兜底手填可 NA）
+    sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=True)  # 关联 SO（哪一单售出，可选）
+    issue_type = Column(String(20), default="QUALITY")   # 答疑咨询/质量故障/使用指导/其他
+    issue_summary = Column(Text, default="")             # 失效现象/问题描述（客户报来）
+    usage_context = Column(Text, default="")             # 使用场景/失效位置（辅助 FAE 判定）
+    urgency = Column(String(10), default="MEDIUM")       # 高/中/低（轻量优先级，非 SLA 硬卡）
+    assignee_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 负责 FAE（指派/流转）
+    product_line = Column(String(40), default="")        # 产线/事业部（数据范围 + 统计维度）
+    resolution_type = Column(String(20), default="")     # 远程答疑/国内维修/寄原厂维修/报原厂换退/内部消化
+    resolution_notes = Column(Text, default="")          # 处理过程/答疑内容（RESOLVED 前必填）
+    quality_verdict = Column(String(12), default="PENDING")  # 良品/不良/待判定/NA（与 04b RMA 好坏标记同源）
+    repair_advice = Column(Text, default="")             # 维修建议（国内修/寄原厂修）
+    rma_id = Column(Integer, ForeignKey("rma.id"), nullable=True)  # 关联 RMA（转实物退换时，04b）
+    closure_note = Column(Text, default="")              # 关闭结论（CLOSED 前必填）
+    status = Column(String(30), default="OPEN")
+
+    customer = relationship("Customer")
+    material = relationship("Material")
+
+    __table_args__ = (UniqueConstraint("company_id", "ticket_number", name="ux_service_ticket_number"),)
+
+
+class ServiceTicketLine(Base):
+    """售后工单可选明细子表（PRD 05 05c-2 service_ticket_line）：一型号/一 SN 一行，多型号时启用。"""
+    __tablename__ = "service_ticket_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    service_ticket_id = Column(Integer, ForeignKey("service_ticket.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=False)
+    serial_lot_number = Column(String(100), default="")  # 多 SN 多行（扫码兜底）
+    quantity = Column(Numeric(12, 2), nullable=True)
+    line_issue = Column(Text, default="")                # 单项失效现象
+    line_verdict = Column(String(12), default="PENDING")  # 单项质量判定 良品/不良/待判定
+    __table_args__ = (UniqueConstraint("service_ticket_id", "line_number"),)
+
+
+class CustomerForecast(AuditMixin, Base):
+    """客户 Forecast 滚动预测单（占位薄版，PRD 05-Forecast接单 05d-2）：把客户系统里的滚动预测
+    抄录留痕，可联动备货/SO。范围待定 → 薄实现（头 + 滚动月份子表网格），直连客户系统列后期 ➕。
+
+    引擎无现成 Forecast 模型（引擎 08 §8.8）→ 新增轻量 doc_type + 子表 customer_forecast_line。
+    薄流程：DRAFT（SA 录客户×型号×多月预测网格）→ CONFIRMED（确认存档，可起备货建议）→ SUPERSEDED（被新版滚动替代）。
+    预测/接单无财务凭证含义 → 财务无关卡、不推金蝶。预测单号 FC-YYMM-NNN 月度连号。
+    """
+    __tablename__ = "customer_forecast"
+    __doc_types__ = ("CUSTOMER_FORECAST",)
+    id = Column(Integer, primary_key=True)
+    forecast_number = Column(String(30), index=True, nullable=False)  # FC-YYMM-NNN
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)
+    forecast_version = Column(String(40), default="")    # 滚动版本/期次（如「2026-06 滚动」）
+    source_system = Column(String(60), default="")       # 客户系统名（烽火多系统/通用一套…，手录留痕）
+    product_line = Column(String(40), default="")        # 产线（数据范围 + 统计维度）
+    notes = Column(Text, default="")
+    status = Column(String(30), default="DRAFT")
+
+    customer = relationship("Customer")
+
+    __table_args__ = (UniqueConstraint("company_id", "forecast_number", name="ux_customer_forecast_number"),)
+
+
+class CustomerForecastLine(Base):
+    """客户预测滚动月份子表（PRD 05 05d-2 customer_forecast_line）：客户×型号×月份×预测量网格。
+    薄版：一行 = 一型号一月份的预测量（多月多行）。"""
+    __tablename__ = "customer_forecast_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    customer_forecast_id = Column(Integer, ForeignKey("customer_forecast.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=True)
+    forecast_month = Column(String(7), default="")       # 预测月份（YYYY-MM）
+    forecast_qty = Column(Numeric(12, 2), nullable=True)  # 预测量
+    note = Column(Text, default="")                      # 交叉应答 gap/动作（提拉/推迟/正常）备注
+    __table_args__ = (UniqueConstraint("customer_forecast_id", "line_number"),)
+
+
+class SpecialShipment(AuditMixin, Base):
+    """特批发货单（先发后补单，可隐藏模块，PRD 05-订单与履约 页面4b，决策⑫）：客户未下单先经
+    ★财务特批审出货 → 事后补录 SO 勾稽补推金蝶。是「发货必关联 SO」硬规则的唯一受控例外（独立 doc_type 隔离）。
+
+    引擎排除此类例外业务 → 全新增 doc_type + 入仓编号明细子表 special_shipment_line。流程：
+      DRAFT（SALES/SA 发起：客户+特批理由+风险承诺+预计补单期限+入仓编号明细，无 SO）→
+      ★FINANCE_SPECIAL_APPROVAL（财务特批审：核风险/授信/资质）→ APPROVED（特批放行，通知 03b 出库）→
+      SHIPPED_PENDING_SO（已发货·待补单，挂「待补单」债务，逾期升级）→
+      RECONCILED（补录 SO 勾稽：回填 SO 号、抵减 SO 在途、补推金蝶销售源）→ CLOSED；CANCELLED 终态。
+    feature_flag feature.special_batch_shipment 默认 OFF（前端按开关隐藏入口/创建权）。
+    特批单号 SS-YYMM-NNN 月度连号。
+    """
+    __tablename__ = "special_shipment"
+    __doc_types__ = ("SPECIAL_SHIPMENT",)
+    id = Column(Integer, primary_key=True)
+    shipment_number = Column(String(30), index=True, nullable=False)  # SS-YYMM-NNN
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)
+    special_reason = Column(String(20), default="")      # 紧急订单/口头确认/战略客户/样机急发/其他
+    special_reason_note = Column(Text, default="")       # 「其他」须填说明
+    risk_commitment = Column(Text, default="")           # 风险承诺/授权人（替代邮件特批的责任人）
+    authorized_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 授权人
+    expected_reorder_date = Column(Date, nullable=True)  # 预计补单期限（默认 +30 天，逾期升级催办）
+    price_term = Column(String(10), default="")          # 贸易条件 CFR/FCA/EXW/CIF（补单后随 SO 对齐）
+    reorder_sales_order_id = Column(Integer, ForeignKey("sales_order.id"), nullable=True)  # 关联补单 SO（补单时填，强制事后勾稽）
+    special_approved = Column(Boolean, default=False)    # 特批放行标志（财务特批审置位）
+    pending_so = Column(Boolean, default=False)          # 待补单标志（出库即置真、勾稽置假，债务可视化）
+    notes = Column(Text, default="")
+    status = Column(String(30), default="DRAFT")
+
+    customer = relationship("Customer")
+
+    __table_args__ = (UniqueConstraint("company_id", "shipment_number", name="ux_special_shipment_number"),)
+
+
+class SpecialShipmentLine(Base):
+    """特批发货入仓编号明细子表（PRD 05 页面4b special_shipment_line）：逐行指定要发的批次（串货隔离），
+    勾稽时回填补单 SO 明细行、抵减补单 SO 在途。"""
+    __tablename__ = "special_shipment_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    special_shipment_id = Column(Integer, ForeignKey("special_shipment.id"), nullable=False)
+    line_number = Column(SmallInteger, nullable=False)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=True)
+    inbound_code = Column(String(100), default="")       # 入仓编号（批次，串货匹配键）
+    serial_lot_number = Column(String(100), default="")  # SN/LOT
+    quantity = Column(Numeric(12, 2), nullable=True)     # 发货数量（≤批次结存；勾稽时抵减补单 SO 在途）
+    reconciled_so_line_id = Column(Integer, ForeignKey("sales_order_line.id"), nullable=True)  # 已勾稽到补单 SO 明细行（勾稽回填）
+    __table_args__ = (UniqueConstraint("special_shipment_id", "line_number"),)
+
+
+class FeatureFlag(Base):
+    """功能开关（per-company，PRD 05 页面4b feature.special_batch_shipment）：引擎无原生「per-company
+    功能开关隐藏 doc_type/导航」→ ➕扩展。一行 = 一个 (company_id, flag_key) 的开关。
+
+    特批发货 feature.special_batch_shipment 默认 OFF（隐藏入口 + 隐藏 doc_type 创建权，历史只读可查）；
+    关时前端按本表过滤，创建权由命令/effect 读本表受控。__queryable__（配置台账）。
+    """
+    __tablename__ = "feature_flag"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False, index=True)
+    flag_key = Column(String(60), nullable=False, index=True)  # feature.special_batch_shipment ...
+    is_enabled = Column(Boolean, nullable=False, default=False)  # 默认 OFF
+    notes = Column(Text, default="")
+    created_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    updated_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    __table_args__ = (UniqueConstraint("company_id", "flag_key", name="ux_feature_flag_company_key"),)

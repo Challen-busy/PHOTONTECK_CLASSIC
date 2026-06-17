@@ -248,11 +248,14 @@ async def sign_cosign(ctx: CommandContext, payload: dict) -> dict:
 # 备货 ≥20 万会审等关卡复用 register_cosign_checkpoint，角色待甲方（05 gap）。
 # ============================================================
 
-# 客户认证：进入 APPROVED（通过）态前，集齐 PA+财务+BOSS 三方同意；任一驳回走 REJECTED。
+# 客户认证（段3c CUSTOMER_QUALIFICATION）：进入 APPROVED（通过）态前，集齐 PA+财务+BOSS 三方同意；
+# 任一驳回走 REJECTED（自循环签字态 UNDER_COSIGN→APPROVED 边前跑本校验器）。
+# required_roles 用引擎角色码 PRODUCT_ASSISTANT/FINANCE/BOSS（与 user_account.role 一致，sign_cosign 比对）。
+# 进 UNDER_COSIGN 时预生成三行待签的 effect 见 phase1_effects.qualification.open_certification_cosign。
 register_cosign_checkpoint(
-    doc_type="CUSTOMER",
+    doc_type="CUSTOMER_QUALIFICATION",
     trigger_state="APPROVED",
-    required_roles=["PA", "FINANCE", "BOSS"],
+    required_roles=["PRODUCT_ASSISTANT", "FINANCE", "BOSS"],
     cosign_group="CERTIFICATION",
     name="cosign.customer_certification",
 )
