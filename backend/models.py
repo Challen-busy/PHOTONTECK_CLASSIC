@@ -1477,6 +1477,43 @@ class PurchaseInTransit(AuditMixin, Base):
     __table_args__ = (UniqueConstraint("company_id", "purchase_order_id"),)
 
 
+class StockUpRequest(AuditMixin, Base):
+    """备货申请单（04b-1 StockUpRequest）：销售/PM 主动提议囤货，金额阈值分流审批。
+
+    引擎排除「备货」业务（引擎 02 §2.9）→ 全新增 doc_type。流程：
+      DRAFT →[阈值分流]→ PENDING_PM（<20万 PM 单批）/ PENDING_REVIEW（★≥20万 PM+FINANCE 会审）
+      → APPROVED → TRACKING（消单中）→ CLOSED ；REJECTED / CANCELLED 终态。
+    ≥20万会审复用并行会签标准件（services/cosign，cosign_group=STOCK_REVIEW，PM+FINANCE 都签才放行）。
+    建单 START effect 拍下当时库存/在途快照（只读列）；request_number 月度连号 SU-YYMM-001。
+    字段防火墙（§00-8）：amount 按含税报价口径，对 SALES 可见（单上无成本/买价列）。
+    """
+    __tablename__ = "stock_up_request"
+    __doc_types__ = ("STOCK_UP_REQUEST",)
+    id = Column(Integer, primary_key=True)
+    request_number = Column(String(30), index=True, nullable=False)  # SU-YYMM-001 月度连号
+    requested_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 发起人（创建态自动置）
+    requester_role = Column(String(30), default="")  # 发起角色（SALES / PRODUCT_MANAGER，区分谁提议）
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=True)  # 型号
+    stockup_quantity = Column(Numeric(12, 2), nullable=True)  # 原始备货数量（永不改，消单基准）
+    stock_on_hand = Column(Numeric(12, 2), nullable=True)     # 当时库存（只读快照，建单 effect 拍下）
+    in_transit_qty = Column(Numeric(12, 2), nullable=True)    # 当时在途（只读快照，采购在途投影）
+    intended_customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)  # 意向客户（给谁备）
+    signing_company_id = Column(Integer, ForeignKey("company.id"), nullable=True)  # 签单公司（=company_id，绝不跨公司）
+    customer_arrears = Column(Numeric(16, 2), nullable=True)  # 客户欠款情况（应收视图带出 + 可补注）
+    reason = Column(Text, default="")        # 备货原因
+    risk_notes = Column(Text, default="")    # 风险点（会审前必填）
+    amount = Column(Numeric(16, 2), nullable=True)  # 备货金额（含税报价口径，驱动阈值分流；对 SALES 可见）
+    currency = Column(String(3), default="USD")
+    draft_po_id = Column(Integer, ForeignKey("purchase_order.id"), nullable=True)  # 关联 PO（草稿，先做单给会审看）
+    consumed_quantity = Column(Numeric(12, 2), default=0)  # 已消数量（SO 成交累加，段3 派生；≤备货数量）
+    status = Column(String(30), default="DRAFT")
+    notes = Column(Text, default="")
+
+    material = relationship("Material")
+
+    __table_args__ = (UniqueConstraint("company_id", "request_number", name="ux_stock_up_request_number"),)
+
+
 class PurchaseInvoice(AuditMixin, Base):
     """采购发票：与外购入库单勾稽后形成采购核算（04a-7：PA 录→★FINANCE 审→形成应付）。"""
     __tablename__ = "purchase_invoice"

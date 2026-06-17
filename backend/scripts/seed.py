@@ -76,6 +76,8 @@ async def seed():
             # 段2c 采购收尾：进项发票 PI / 付款申请 PAY（月度连号补零3）。
             ("PURCHASE_INVOICE", "PI",  "MONTH"),
             ("PAYMENT_REQUEST",  "PAY", "MONTH"),
+            # 段2d-1 备货申请：备货单号 SU-YYMM-001（月度连号补零3，04b-1）。
+            ("STOCK_UP_REQUEST", "SU",  "MONTH"),
         ]
         # 有编号规则的 doc_type 集合：用于给 START 状态挂建单取号 effect（取业务连号）。
         numbering_doc_types = {doc_type for doc_type, _, _ in numbering_seed}

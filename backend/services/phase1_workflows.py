@@ -116,6 +116,17 @@ def phase1_workflow_definitions(created_by_id=None):
     stock_adjustment_fields = [
         "adjustment_number", "inventory_count_id", "notes",
     ]
+    # 段2d-1 备货申请（04b-1）：DRAFT 可录业务字段（库存/在途快照为只读列，由 START effect 拍，
+    # 不进 editable；已消数量为 SO 派生列，不进 editable；request_number 由建单取号 effect 给）。
+    stock_up_request_fields = [
+        "requested_by_id", "requester_role", "material_id", "stockup_quantity",
+        "intended_customer_id", "signing_company_id", "customer_arrears",
+        "reason", "risk_notes", "amount", "currency", "draft_po_id", "notes",
+    ]
+    # 金额阈值分流（决策⑤，04b-1）：DRAFT 两条出边带边级 hard_rules（rules DSL 算术比较，引擎 04 §4.B；
+    # next_entry.hard_rules 在 execute_transition 推进路径被校验，已勘）。<20万→PENDING_PM，≥20万→PENDING_REVIEW。
+    stock_up_under_threshold_rule = "doc.amount < 200000"
+    stock_up_over_threshold_rule = "doc.amount >= 200000"
     # 调拨完成边 effect：移库位 + 写两条 TRANSFER_OUT/IN 流水（同公司 hard_rule 兜底）。
     stock_transfer_done_effect = ["wms.apply_stock_transfer"]
     # 同公司硬规则（lookup DSL，引擎 04 §4.B）：源/目标库位经各自仓库 company_id 比对相等。
@@ -584,6 +595,66 @@ def phase1_workflow_definitions(created_by_id=None):
                     {"to": "DRAFT", "label": "退回修改", "editable_fields": ["notes"]},
                 ]),
                 _state("POSTED", "已过账", [], terminal=True),
+                _state("CANCELLED", "已取消", [], terminal=True),
+            ],
+        },
+        {
+            "doc_type": "STOCK_UP_REQUEST",
+            "name": "采购-备货申请流程",
+            "description": (
+                "04b-1 备货申请（StockUpRequest，销售/PM 提议囤货，谁提议谁担风险）：\n"
+                "DRAFT 录型号/备货数量/意向客户/欠款/风险/金额（建单 START 取号 SU-YYMM-001\n"
+                "+ 拍当时库存/在途快照）→ 金额阈值分流（边级 hard_rules）：\n"
+                "  <20万 → PENDING_PM（PM/PD 单批）→ APPROVED；\n"
+                "  ★≥20万 → PENDING_REVIEW（PM+FINANCE 并行会签，集齐 AGREE 才放行，任一驳回打回）→ APPROVED。\n"
+                "APPROVED → PA 据此下正式 PO → TRACKING（消单中，原始数量不变、consumed 随 SO 累加）→ CLOSED。\n"
+                "未通过 → REJECTED；可 CANCELLED。备货申请单本身不推金蝶（内部决策单），批后下的 PO 才推。"
+            ),
+            "group_name": "ERP",
+            "states": [
+                # 建单取号 SU-YYMM-001（NumberingRule）；snapshot 快照 effect 自动在 START 触发（auto=True）。
+                _start(["SALES", "PRODUCT_MANAGER", "OPERATIONS"], effects=[NUMBERING_EFFECT]),
+                _state("DRAFT", "备货申请录入", ["SALES", "PRODUCT_MANAGER", "OPERATIONS"], [
+                    # 金额阈值分流：边级 hard_rules 自动选边（<20万 PM 单批 / ≥20万会审）。
+                    {"to": "PENDING_PM", "label": "提交 PM 单批（<20万）", "editable_fields": stock_up_request_fields,
+                     "hard_rules": [stock_up_under_threshold_rule]},
+                    {"to": "PENDING_REVIEW", "label": "提交备货会审（≥20万）", "editable_fields": stock_up_request_fields,
+                     "hard_rules": [stock_up_over_threshold_rule]},
+                    {"to": "CANCELLED", "label": "取消申请", "editable_fields": ["notes"]},
+                ], description=(
+                    "# 备货申请录入\n填型号/备货数量/意向客户/签单公司/欠款/原因/风险点/金额；"
+                    "风险点/金额/意向客户必填才能提交。系统自动带当时库存+在途快照。\n"
+                    "金额 <20万 走 PM/PD 单批；★≥20万 走备货会审（PM+FINANCE 都签）。"
+                )),
+                # <20万 单批：仅 PM/PD（节点级 allowed_roles=[PRODUCT_MANAGER]）。
+                _state("PENDING_PM", "PM 单批（<20万）", ["PRODUCT_MANAGER"], [
+                    {"to": "APPROVED", "label": "PM 批准", "editable_fields": ["notes"]},
+                    {"to": "REJECTED", "label": "驳回", "editable_fields": ["notes"]},
+                ], description="# PM/PD 单批\n金额<20万由直属领导单批；批了即可下单（访谈 07:2196）。"),
+                # ★≥20万会审：PM+FINANCE 并行会签（cosign 标准件）。节点 allowed_roles 含两方都能进来推进，
+                # 但「放行」由 cosign.stock_up_review 校验器把关：集齐 PM+FINANCE AGREE 才过 APPROVED，
+                # 任一 REJECT 打回（cosign_failures）。进态时 stockup.open_review_cosign 预生成两行待签。
+                _state("PENDING_REVIEW", "★备货会审（PM+FINANCE 会签）", ["PRODUCT_MANAGER", "FINANCE"], [
+                    {"to": "APPROVED", "label": "会审通过（集齐 PM+FINANCE 签）", "editable_fields": ["draft_po_id", "notes"]},
+                    {"to": "REJECTED", "label": "会审驳回", "editable_fields": ["notes"]},
+                ], description=(
+                    "# ★备货会审（≥20万）\nPM+FINANCE 并行会签（各往自己那行 sign_cosign 填同意/驳回）；"
+                    "集齐两方同意才放行 APPROVED，任一驳回整单打回（财务关注欠款/资金占用）。"
+                )),
+                # 批准 → PA 据此下正式 PO（PO 主流程在 04a），进消单跟踪。
+                _state("APPROVED", "已批准待下单", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "TRACKING", "label": "已下 PO 进入消单跟踪", "editable_fields": ["draft_po_id", "notes"]},
+                ], description="# 已批准\nPA 据此下正式 PO（是否备货=是、关联销售订单空）→ 进入消单跟踪。"),
+                # 消单中：consumed_quantity 由 SO 成交消单派生（段3 自动 effect，本段留接口；PA 可手动录）。
+                _state("TRACKING", "消单跟踪中", ["PRODUCT_ASSISTANT", "OPERATIONS"], [
+                    {"to": "CLOSED", "label": "已消化完毕关闭", "editable_fields": ["notes"]},
+                    {"to": "CANCELLED", "label": "撤销备货", "editable_fields": ["notes"]},
+                ], description=(
+                    "# 消单跟踪\n原始备货数量不变，consumed_quantity 随匹配 SO 累加（段3 派生）；"
+                    "剩余=备货数量-已消，挂太久持续提醒。已消=备货数量 → 关闭。"
+                )),
+                _state("CLOSED", "已关闭", [], terminal=True),
+                _state("REJECTED", "已驳回", [], terminal=True),
                 _state("CANCELLED", "已取消", [], terminal=True),
             ],
         },

@@ -120,6 +120,9 @@ ROLE_ALLOWED_TABLES = {
         "inventory", "inventory_reservation",
         # 对原厂询价：可见行（采用价勾稽报价），但 unit_price/commission 由字段防火墙遮蔽（Q18）
         "supplier_inquiry", "supplier_inquiry_line",
+        # 段2d-1 备货申请（04b-1）：销售可发起/查看本人备货单。amount=含税报价口径对 SALES 可见
+        # （§00-8：单上无成本/买价列 → 不进 BUY_TABLES，不遮 amount）。
+        "stock_up_request",
     },
     "SALES_ASSISTANT": _COMMON_TABLES | {
         "customer", "framework_contract",
@@ -160,6 +163,8 @@ ROLE_ALLOWED_TABLES = {
         "inventory", "inventory_reservation", "inventory_policy", "inventory_count", "inventory_count_line",
         "supplier_sn_rule", "wms_attachment", "inventory_valuation", "inventory_transaction", "inventory_movement",
         "warehouse", "warehouse_location",
+        # 段2d-1 备货申请（04b-1）：PA 批后下 PO + 原始 vs 最新消单跟踪（谁买谁跟到底）。
+        "stock_up_request",
     },
     "PRODUCT_MANAGER": _COMMON_TABLES | {
         "supplier", "customer",
@@ -171,6 +176,8 @@ ROLE_ALLOWED_TABLES = {
         "project", "project_material", "project_activity",
         "purchase_order", "sales_order",
         "inventory", "inventory_reservation", "inventory_policy", "supplier_sn_rule", "inventory_movement",
+        # 段2d-1 备货申请（04b-1）：PM 发起/单批/会审参与。
+        "stock_up_request",
     },
     "LOGISTICS": _COMMON_TABLES | {
         "shipment_request", "shipment_line",

@@ -7,7 +7,7 @@ run inside the surrounding workflow command transaction and must be idempotent.
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import models as m
@@ -807,3 +807,82 @@ async def create_accounts_receivable_from_sales_invoice(
     db.add(row)
     await db.flush()
     return [f"created accounts_receivable#{row.id} from sales_invoice#{doc.id}"]
+
+
+# ============================================================
+# 段2d-1 备货申请（04b-1 STOCK_UP_REQUEST）domain effects
+# ============================================================
+
+@register_transition_effect(
+    "stockup.snapshot_stock_and_transit",
+    doc_type="STOCK_UP_REQUEST",
+    to_state="START",
+)
+async def snapshot_stock_and_transit(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """建单（进 START）时拍下当时库存 + 在途快照（只读列，04b-1 字段表）。
+
+    - stock_on_hand = Σ inventory.quantity（按 material + company 聚合，全状态结存）。
+    - in_transit_qty = Σ(PO 明细 quantity − received_quantity)（同 material+company 的未到货在途，
+      口径对齐 routers/purchase.py 在途 = 订单数量 − 已收）。
+    幂等守卫：仅在快照列为空时拍（防退回初态/再触发覆盖原始快照）。material_id 缺则 no-op。
+    """
+    if doc.material_id is None or doc.company_id is None:
+        return []
+    if doc.stock_on_hand is not None or doc.in_transit_qty is not None:
+        return []  # 已有快照，跳过
+
+    on_hand = (await db.execute(
+        select(func.coalesce(func.sum(m.Inventory.quantity), 0)).where(
+            m.Inventory.material_id == doc.material_id,
+            m.Inventory.company_id == doc.company_id,
+        )
+    )).scalar() or 0
+
+    # 在途 = Σ(订单数量 − 已收)，按 PO→明细 沿 material+company 关联（只算 material 命中的明细行）。
+    in_transit = (await db.execute(
+        select(
+            func.coalesce(
+                func.sum(m.PurchaseOrderLine.quantity - m.PurchaseOrderLine.received_quantity), 0
+            )
+        )
+        .select_from(m.PurchaseOrderLine)
+        .join(m.PurchaseOrder, m.PurchaseOrderLine.purchase_order_id == m.PurchaseOrder.id)
+        .where(
+            m.PurchaseOrderLine.material_id == doc.material_id,
+            m.PurchaseOrder.company_id == doc.company_id,
+        )
+    )).scalar() or 0
+
+    doc.stock_on_hand = _num(on_hand)
+    doc.in_transit_qty = max(_num(in_transit), Decimal("0"))
+    await db.flush()
+    return [f"备货快照 material#{doc.material_id} 库存={doc.stock_on_hand} 在途={doc.in_transit_qty}"]
+
+
+@register_transition_effect(
+    "stockup.open_review_cosign",
+    doc_type="STOCK_UP_REQUEST",
+    to_state="PENDING_REVIEW",
+)
+async def open_review_cosign(
+    db: AsyncSession, doc_type: str, doc, to_state: str | None, user: m.UserAccount, command_log_id: int | None
+) -> list[str]:
+    """≥20万进会审态（PENDING_REVIEW）时预生成 PM+FINANCE 待签行（并行会签标准件）。
+
+    集齐放行校验器由 services/cosign.register_cosign_checkpoint 注册（PENDING_REVIEW→APPROVED 前跑）。
+    幂等：generate_cosign_lines 对已存在的角色行跳过。
+    """
+    from services.cosign import generate_cosign_lines
+
+    created = await generate_cosign_lines(
+        db,
+        doc_type="STOCK_UP_REQUEST",
+        doc_id=doc.id,
+        company_id=doc.company_id,
+        required_roles=["PRODUCT_MANAGER", "FINANCE"],
+        cosign_group="STOCK_REVIEW",
+        created_by_id=_actor_id(doc, user),
+    )
+    return [f"备货会审预生成待签行 {len(created)} 条（PM+FINANCE）"]

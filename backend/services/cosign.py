@@ -256,3 +256,36 @@ register_cosign_checkpoint(
     cosign_group="CERTIFICATION",
     name="cosign.customer_certification",
 )
+
+
+# ============================================================
+# 段2d-1 备货 ≥20 万会审（04b-1）：PM + FINANCE 都签才放行。
+#
+# 备货 APPROVED 有两条来源边：PENDING_PM（<20万 PM 单批，无会签）/ PENDING_REVIEW（≥20万会审）。
+# 通用 register_cosign_checkpoint 的校验器对「进 APPROVED」一律跑集齐校验，会误伤 <20万 单批边
+# （那条没有签字行 → 报「角色未就位」拦住）。故这里**手写一个 scoped 校验器**，复用标准件的
+# cosign_failures() 积木，仅当单据当前态 = PENDING_REVIEW 时才强制集齐（验证器跑在状态推进前，
+# doc.status 仍是来源态 → 可据此判来源边）。<20万 经 PENDING_PM 进 APPROVED 不受影响。
+# 进 PENDING_REVIEW 时预生成 PM+FINANCE 待签行的 effect 见 phase1_effects.stockup.open_review_cosign。
+# ============================================================
+
+STOCK_REVIEW_ROLES = ["PRODUCT_MANAGER", "FINANCE"]
+
+
+@register_transition_validator(
+    "cosign.stock_up_review",
+    doc_type="STOCK_UP_REQUEST",
+    to_state="APPROVED",
+    auto=True,
+)
+async def _stock_up_review_cosign(db, _doc_type, doc, _to_state, _user) -> list[str]:
+    # 仅 ≥20万会审来源边（当前态 PENDING_REVIEW）强制集齐；<20万 PM 单批边放行。
+    if getattr(doc, "status", None) != "PENDING_REVIEW":
+        return []
+    return await cosign_failures(
+        db,
+        doc_type="STOCK_UP_REQUEST",
+        doc_id=doc.id,
+        required_roles=STOCK_REVIEW_ROLES,
+        cosign_group="STOCK_REVIEW",
+    )
