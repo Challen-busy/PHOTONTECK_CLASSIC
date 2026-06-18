@@ -345,13 +345,26 @@ async def check_voucher_gaps(ctx: CommandContext, payload: dict) -> dict:
     gaps: list[dict] = []
     group_summaries: list[dict] = []
     pad = 3  # PZ-YYMM-NNN 默认补零 3；缺口号按现存最大序号宽度补零。
+    MAX_SPAN = 100_000   # 单前缀连号扫描跨度上限：超出视为非连续编号(时间戳/混合号)，不枚举缺口防 OOM。
+    MAX_GAPS = 2_000     # 缺口明细总封顶：超出只给计数，避免巨量返回。
     for prefix, seqs in sorted(groups.items()):
         seqs_sorted = sorted(set(seqs))
         width = max(pad, max(len(str(s)) for s in seqs_sorted))
         lo, hi = seqs_sorted[0], seqs_sorted[-1]
         present = set(seqs_sorted)
+        span = hi - lo + 1
+        if span > MAX_SPAN:
+            # 号段跨度过大（疑似非连续编号，如时间戳号/手工号）→ 跳过缺口枚举，仅汇总，防内存爆。
+            group_summaries.append({
+                "prefix": prefix, "min_seq": lo, "max_seq": hi,
+                "count": len(seqs_sorted), "missing_count": None,
+                "note": f"号段跨度 {span} 过大（疑似非连续编号），已跳过缺口枚举",
+            })
+            continue
         missing = [s for s in range(lo, hi + 1) if s not in present]
         for ms in missing:
+            if len(gaps) >= MAX_GAPS:
+                break
             gaps.append({
                 "prefix": prefix,
                 "missing_seq": ms,

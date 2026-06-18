@@ -4,7 +4,7 @@
 import asyncio
 from datetime import datetime
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete as sa_delete
 
 from core.database import get_session_factory
 import models as m
@@ -42,6 +42,9 @@ async def main():
     for dt, fields, model, code in cases:
         async with factory() as db:
             user = await _u(db, "finance")  # home company 1
+            # execute_transition 会 commit，固定测试码 ZZ 跨 run 残留 → 先删保幂等
+            await db.execute(sa_delete(model).where(model.company_id == 1, model.code == code))
+            await db.commit()
             try:
                 r = await execute_transition(db, dt, None, user, to_state="ACTIVE", field_updates=fields)
                 row = (await db.execute(select(model).where(model.company_id == 1, model.code == code))).scalars().first()
