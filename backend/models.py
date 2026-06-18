@@ -1402,6 +1402,43 @@ class CashflowItem(Base):
     __table_args__ = (UniqueConstraint("company_id", "code"),)
 
 
+class AccountMappingRule(AuditMixin, Base):
+    """业财映射规则（总账·第二波 finance-gl wave-2，模块 C：业务单 → 凭证分录模板）。
+
+    一条 = 「某业务单类型在某触发动作下，自动生成凭证的第 line_seq 行分录」的取数+科目规则。
+    HK/CAS 准则差异（如 HK 6401=Selling expenses≠主营成本，CAS 6401=主营业务成本）按 company_id
+    隔离落到各家自己的规则上——业财 effect 按公司取本家规则，不在代码里硬编码科目码。
+    引擎五条不破坏：纯配置主数据（AuditMixin + __queryable__），写仍走 execute_transition；
+    业财 effect（phase1_effects / finance_posting 扩展点）读本表生成 Voucher/VoucherEntry。
+    """
+    __tablename__ = "account_mapping_rule"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    # source_doc_type=业务单 doc_type（如 SALES_INVOICE / PURCHASE_INVOICE / SHIPMENT_REQUEST），
+    # 与 __doc_types__ 对齐；trigger_action=触发动作 label（如 POSTED / CONFIRMED，对齐流程目标状态）。
+    source_doc_type = Column(String(30), nullable=False)
+    trigger_action = Column(String(30), nullable=False)
+    line_seq = Column(SmallInteger, nullable=False, default=1)  # 生成分录的行序
+    dr_cr = Column(String(2), nullable=False)  # DR 借方增 / CR 贷方增（分录借贷语义）
+    # account_source 决定 account_code 如何取：FIXED=直接用 account_code；CUSTOMER/SUPPLIER=
+    # 按往来对象主数据上的科目；MATERIAL_DEFAULT=按物料默认科目。account_code 为 FIXED 时的目标科目码。
+    account_code = Column(String(20), default="")
+    account_source = Column(String(20), nullable=False, default="FIXED")  # FIXED/CUSTOMER/SUPPLIER/MATERIAL_DEFAULT
+    amount_formula = Column(String(200), default="")  # 取数表达式（如 "amount" / "amount*tax_rate" / "amount/(1+tax_rate)"）
+    tax_handling = Column(String(10), default="NONE")  # NONE 不含税 / INCLUSIVE 价税合计 / EXCLUSIVE 不含税额 / TAX_ONLY 仅税额
+    memo_template = Column(String(200), default="")  # 摘要模板（可含占位符）
+    date_source = Column(String(10), default="BIZ")  # CREATE 建单日 / BIZ 业务日（凭证日期取数来源）
+    effective_date = Column(Date, nullable=False)  # 规则生效日（同 key 多版本按生效日切换）
+    is_active = Column(Boolean, default=True)
+    confirmed_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 甲方签字确认人（占位待确认）
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "source_doc_type", "trigger_action", "line_seq", "effective_date",
+            name="ux_account_mapping_rule_key",
+        ),
+    )
+
+
 class AccountsReceivable(AuditMixin, Base):
     __tablename__ = "accounts_receivable"
     __doc_types__ = ("ACCOUNTS_RECEIVABLE",)

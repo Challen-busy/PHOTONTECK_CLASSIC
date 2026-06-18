@@ -485,6 +485,53 @@ async def _seed_company_master_data(db, company):
     }
 
 
+# ============================================================
+# 期末段（finance-gl wave-2 模块 B 追加）：期末汇率种子。
+#   期末调汇 finance.fx_revaluation 按「外币→本位币」ExchangeRate 取期末汇率重估。
+#   为可 smoke 调汇，按各家本位币种入常用外币对当前年各期末日(月末)的参考汇率（幂等 upsert）。
+#   仅当公司本位币为 HKD/CNY 时种入；汇率为占位参考值，正式值由财务维护。
+# ============================================================
+# (from_currency, to_currency) → 参考汇率（月末统一值，足够 smoke 验调汇差额；正式值财务维护）。
+_FX_REFERENCE = {
+    ("USD", "HKD"): "7.800000",
+    ("CNY", "HKD"): "1.080000",
+    ("EUR", "HKD"): "8.500000",
+    ("USD", "CNY"): "7.200000",
+    ("HKD", "CNY"): "0.925000",
+    ("EUR", "CNY"): "7.850000",
+}
+
+
+async def _seed_period_end_exchange_rates(db, companies):
+    """按各公司本位币种入「外币→本位币」期末参考汇率（当前年每个月末日，幂等）。
+
+    唯一键 (from_currency, to_currency, effective_date)，已存在跳过。返回新增条数。
+    """
+    base_ccys = {(c.currency or ("HKD" if c.region == "HK" else "CNY")) for c in companies}
+    year = date.today().year
+    month_ends = [date(year, mth, monthrange(year, mth)[1]) for mth in range(1, 13)]
+    new = 0
+    for (frm, to), rate in _FX_REFERENCE.items():
+        if to not in base_ccys:
+            continue
+        for eff in month_ends:
+            exists = (await db.execute(
+                select(m.ExchangeRate).where(
+                    m.ExchangeRate.from_currency == frm,
+                    m.ExchangeRate.to_currency == to,
+                    m.ExchangeRate.effective_date == eff,
+                )
+            )).scalars().first()
+            if exists is None:
+                db.add(m.ExchangeRate(
+                    from_currency=frm, to_currency=to,
+                    rate=rate, effective_date=eff,
+                ))
+                new += 1
+    await db.flush()
+    return new
+
+
 async def seed_finance():
     factory = get_session_factory()
     async with factory() as db:
@@ -501,6 +548,9 @@ async def seed_finance():
         for company in companies:
             stats = await _seed_company_master_data(db, company)
             per_company.append((company, stats))
+
+        # 期末段：期末参考汇率（供期末调汇 finance.fx_revaluation smoke）。
+        fx_new = await _seed_period_end_exchange_rates(db, companies)
 
         # === VOUCHER 工作流（全局一份，按 (doc_type, version) upsert：覆盖 seed.py 旧 K3 参考流程）===
         wf_def = voucher_workflow_definition(created_by_id)
@@ -533,6 +583,7 @@ async def seed_finance():
                 f"辅助核算+{s['aux_new']} / 现金流量+{s['cf_new']} / 期间+{s['period_new']} / 编号规则+{s['nr_new']}"
             )
         print(f"  VOUCHER 工作流: {wf_action}")
+        print(f"  期末参考汇率（外币→本位币，月末日）: 新增 {fx_new} 条（供期末调汇 finance.fx_revaluation）")
         print("  ★用户 home 公司（PTK #1，HK/HKFRS/HKD）已具备完整财务数据，可直接记账。")
 
 

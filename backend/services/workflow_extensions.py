@@ -64,6 +64,8 @@ _EXTENSION_MODULES = (
     "services.customs",
     # 总账·第一波（finance-gl）：过账/反过账 effect + 借贷平衡/期间锁/职责分离 validator + 红冲命令
     "services.finance_posting",
+    # 总账·第二波（finance-gl wave-2）：业财映射 effect（业务单→凭证，销售开票自动生成并过账）
+    "services.finance_mapping",
 )
 _loaded = False
 

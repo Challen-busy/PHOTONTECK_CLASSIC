@@ -67,6 +67,8 @@ import CustomsLicensePage from './pages/customs/CustomsLicensePage';
 // 5 财务 / 总账（finance-gl wave-1b：凭证录入屏 + 账表查询；走引擎唯一写入路径 /api/transition VOUCHER）
 import VoucherEntryPage from './pages/finance/VoucherEntryPage';
 import LedgerReportPage from './pages/finance/LedgerReportPage';
+import PeriodClosePage from './pages/finance/PeriodClosePage';
+import ARPage from './pages/finance/ARPage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -190,7 +192,8 @@ function AppRoutes() {
         {/* 5 财务视图 / 单据中心（+ 总账 finance-gl：凭证录入 / 账表查询，走引擎 VOUCHER 唯一写入路径） */}
         <Route path="finance/voucher" element={<VoucherEntryPage />} />
         <Route path="finance/ledger-report" element={<LedgerReportPage />} />
-        <Route path="finance/ar" element={PH('应收视图（只读）', '财务视图 / 单据中心')} />
+        <Route path="finance/period-close" element={<PeriodClosePage />} />
+        <Route path="finance/ar" element={<ARPage />} />
         <Route path="finance/ap" element={PH('应付视图（只读）', '财务视图 / 单据中心')} />
         <Route path="finance/advance" element={PH('预收 / 预付到账确认', '财务视图 / 单据中心')} />
         <Route path="finance/credit-note" element={PH('Credit Note', '财务视图 / 单据中心')} />
