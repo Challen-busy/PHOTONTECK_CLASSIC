@@ -1249,7 +1249,10 @@ class AccountingPeriod(Base):
 
 class Account(Base):
     __tablename__ = "account"
-    __queryable__ = True
+    # 总账·第三波（finance-gl wave-3）：会计科目可建档/改档（基础资料维护 UI）。
+    # 挂轻量单状态机 ACCOUNT（单态 ACTIVE 自环编辑，照 master_data 范式），前端 MasterDataPage
+    # 经 execute_transition 建/改；既有列不动（parent_id 自引用支持树形）。
+    __doc_types__ = ("ACCOUNT",)
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
     code = Column(String(20), nullable=False, index=True)
@@ -1345,7 +1348,8 @@ class AccountBalance(Base):
 
 class ExchangeRate(Base):
     __tablename__ = "exchange_rate"
-    __queryable__ = True
+    # wave-3：汇率可建档/改档（基础资料维护 UI）。轻量单状态机 EXCHANGE_RATE。
+    __doc_types__ = ("EXCHANGE_RATE",)
     id = Column(Integer, primary_key=True)
     from_currency = Column(String(3), nullable=False)
     to_currency = Column(String(3), nullable=False)
@@ -1364,7 +1368,8 @@ class VoucherWord(Base):
     """凭证字（记/收/付/转）。code 如「记」「收」「付」「转」；restrict_multi_dc=收付字
     限制借贷只一方（如「收」字限借方现金/「付」字限贷方银行），转账字不限。"""
     __tablename__ = "voucher_word"
-    __queryable__ = True
+    # wave-3：凭证字可建档/改档（基础资料维护 UI）。轻量单状态机 VOUCHER_WORD。
+    __doc_types__ = ("VOUCHER_WORD",)
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
     code = Column(String(10), nullable=False)  # 记/收/付/转
@@ -1378,7 +1383,8 @@ class AuxiliaryDimension(Base):
     """辅助核算维度主数据（往来对象/部门/项目等）。source_type=CUSTOMER/SUPPLIER/EMPLOYEE/DEPT/PROJECT；
     VoucherEntry.aux_party_type/aux_dept_id/aux_project_id 引用对应业务主键（弱引用，多态）。"""
     __tablename__ = "auxiliary_dimension"
-    __queryable__ = True
+    # wave-3：辅助核算维度可建档/改档（基础资料维护 UI）。轻量单状态机 AUX_DIMENSION。
+    __doc_types__ = ("AUX_DIMENSION",)
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
     code = Column(String(30), nullable=False)
@@ -1391,7 +1397,9 @@ class AuxiliaryDimension(Base):
 class CashflowItem(Base):
     """现金流量项目（如「销售商品收到的现金」）。direction=IN 流入 / OUT 流出；parent_id 自引用建分类树。"""
     __tablename__ = "cashflow_item"
-    __queryable__ = True
+    # wave-3：现金流量项目可建档/改档（基础资料维护 UI）。轻量单状态机 CASHFLOW_ITEM；
+    # parent_id 自引用支持树形（经营/投资/筹资 分类树）。
+    __doc_types__ = ("CASHFLOW_ITEM",)
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
     code = Column(String(20), nullable=False)
@@ -1437,6 +1445,151 @@ class AccountMappingRule(AuditMixin, Base):
             name="ux_account_mapping_rule_key",
         ),
     )
+
+
+# ============================================================
+# 总账·第三波（finance-gl wave-3）配账主数据：币别 / 结算方式 / 会计政策 / 会计核算体系 /
+#   摘要库 / 模式凭证（+ 行子表）/ 核算维度数据。
+# 全部 AuditMixin + __queryable__ + __doc_types__ + company_id 隔离 + (company_id, code) 唯一，
+# 与 AccountMappingRule 同款：纯配置主数据，写走 execute_transition（MasterDataPage 唯一写入）。
+# 引擎五条不破坏：只新建实体 + 挂轻量单状态机（seed_master_gl 种 WorkflowDefinition）。
+# ============================================================
+
+class Currency(AuditMixin, Base):
+    """币别（基础资料：币种字典）。is_base=本位币标记（一家公司只应有一条 True，软约束）；
+    decimal_places=金额小数位（HKD/CNY/USD 多为 2）。被凭证/汇率/单据的 currency 字段引用（弱引用按 code）。"""
+    __tablename__ = "currency"
+    __doc_types__ = ("CURRENCY",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(3), nullable=False)          # ISO 货币码：HKD/CNY/USD/EUR
+    name = Column(String(50), nullable=False)         # 港币 / 人民币 / 美元
+    symbol = Column(String(10), default="")           # $ / ¥ / HK$
+    is_base = Column(Boolean, default=False)          # 是否本位币（本公司账簿记账货币）
+    decimal_places = Column(SmallInteger, default=2)  # 金额小数位
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code", name="ux_currency_company_code"),)
+
+
+class SettlementMethod(AuditMixin, Base):
+    """结算方式（基础资料：现金/转账/票据/电汇）。method_type 归类驱动是否需结算号/票据信息；
+    被 VoucherEntry.settlement_method（弱引用按 code）引用。"""
+    __tablename__ = "settlement_method"
+    __doc_types__ = ("SETTLEMENT_METHOD",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False)         # XJ/ZZ/PJ/DH 等
+    name = Column(String(50), nullable=False)         # 现金 / 银行转账 / 商业票据 / 电汇
+    method_type = Column(String(15), nullable=False, default="CASH")  # CASH 现金 / TRANSFER 转账 / NOTE 票据 / WIRE 电汇
+    needs_settlement_no = Column(Boolean, default=False)  # 是否需结算号/票号（票据/电汇通常需要）
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code", name="ux_settlement_method_company_code"),)
+
+
+class AccountingPolicy(AuditMixin, Base):
+    """会计政策（基础资料：准则 + 计量/折旧/存货计价等键值）。一家公司一条主政策（按 code 命名版本）。
+    standard=CAS/HKFRS；其余为常用政策选项（占位待甲方确认具体口径）。"""
+    __tablename__ = "accounting_policy"
+    __doc_types__ = ("ACCOUNTING_POLICY",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False)          # 政策版本码（如 DEFAULT / 2026）
+    name = Column(String(100), nullable=False)
+    standard = Column(String(10), nullable=False, default="CAS")     # CAS 内地 / HKFRS 香港
+    measurement_basis = Column(String(20), default="HISTORICAL_COST")  # 计量基础：历史成本/公允价值
+    depreciation_method = Column(String(20), default="STRAIGHT_LINE")  # 折旧方法：直线法/双倍余额递减
+    inventory_valuation = Column(String(20), default="WEIGHTED_AVG")   # 存货计价：加权平均/先进先出
+    bad_debt_method = Column(String(20), default="ALLOWANCE")          # 坏账：备抵法/直接转销
+    fiscal_year_start_month = Column(SmallInteger, default=1)          # 会计年度起始月（HK 多 4 月，CN 1 月）
+    extra = Column(JSONB, default=dict)               # 其余政策键值（扩展用，不破坏 schema）
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code", name="ux_accounting_policy_company_code"),)
+
+
+class AccountingSystem(AuditMixin, Base):
+    """会计核算体系（基础资料：账簿/本位币/准则/启用期）。一家公司一套账簿主档。
+    base_currency=本位币；standard=准则；start_period=启用会计期间（首次记账期）。"""
+    __tablename__ = "accounting_system"
+    __doc_types__ = ("ACCOUNTING_SYSTEM",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False)          # 账簿码（如 MAIN 主账簿）
+    name = Column(String(100), nullable=False)         # 账簿名称
+    base_currency = Column(String(3), nullable=False, default="CNY")  # 本位币
+    standard = Column(String(10), nullable=False, default="CAS")      # CAS / HKFRS
+    policy_id = Column(Integer, ForeignKey("accounting_policy.id"), nullable=True)  # 引用会计政策
+    start_year = Column(Integer, nullable=True)        # 启用会计年度
+    start_period = Column(SmallInteger, nullable=True) # 启用会计期间（1-12）
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code", name="ux_accounting_system_company_code"),)
+
+
+class SummaryEntry(AuditMixin, Base):
+    """摘要库（基础资料：常用凭证摘要文本 + 分类）。录凭证时下拉选用，提速录入。
+    category 分类（如 收款/付款/费用/结转）；text 摘要文本。"""
+    __tablename__ = "summary_entry"
+    __doc_types__ = ("SUMMARY_ENTRY",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False)          # 摘要码（如 S001）
+    category = Column(String(30), default="")          # 分类：收款/付款/费用/结转/其他
+    text = Column(String(200), nullable=False)         # 摘要文本（录凭证下拉填入 description）
+    sort_order = Column(SmallInteger, default=0)        # 排序权重（常用置顶）
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code", name="ux_summary_entry_company_code"),)
+
+
+class ModelVoucher(AuditMixin, Base):
+    """模式凭证（基础资料：模板凭证头 + 分录模板，供快速录入）。一条 = 一个常用凭证模板；
+    子表 model_voucher_line 存模板分录（科目/借贷方向/默认摘要）。录凭证时「按模板新建」一键带出分录骨架。"""
+    __tablename__ = "model_voucher"
+    __doc_types__ = ("MODEL_VOUCHER",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False)          # 模板码（如 MV-SALARY 计提工资）
+    name = Column(String(100), nullable=False)
+    voucher_word_id = Column(Integer, ForeignKey("voucher_word.id"), nullable=True)  # 默认凭证字
+    default_description = Column(String(200), default="")  # 默认凭证摘要
+    notes = Column(Text, default="")
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code", name="ux_model_voucher_company_code"),)
+
+
+class ModelVoucherLine(Base):
+    """模式凭证分录模板子表（PRD 配账：模板凭证的分录行）。
+    名含 `_line` + 指向 model_voucher 的 FK → 引擎自动识别为子表，MasterDataPage 内嵌网格随单 sub_updates 提交。
+    amount 多为空（录入时填实际金额）；保留固定金额模板场景。"""
+    __tablename__ = "model_voucher_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    model_voucher_id = Column(Integer, ForeignKey("model_voucher.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    account_id = Column(Integer, ForeignKey("account.id"), nullable=True)  # 模板科目
+    account_code = Column(String(20), default="")     # 科目码（account_id 为空时按码弱引用）
+    dr_cr = Column(String(2), nullable=False, default="DR")  # DR 借 / CR 贷
+    description = Column(String(200), default="")     # 模板分录摘要
+    amount = Column(Numeric(16, 2), nullable=True)    # 模板默认金额（可空，录入时填）
+    __table_args__ = (UniqueConstraint("model_voucher_id", "line_number", name="ux_model_voucher_line"),)
+
+    account = relationship("Account")
+
+
+class AuxiliaryDimensionValue(AuditMixin, Base):
+    """核算维度数据（基础资料：某辅助核算维度下的具体取值，如部门/项目/客商的明细项）。
+    dimension_id 指向 AuxiliaryDimension（维度类别）；code/name 为该维度下一个具体值
+    （如维度=部门 → 销售部/研发部；维度=项目 → P001/P002）。VoucherEntry 的 aux_dept_id/aux_project_id 引用本表 id。"""
+    __tablename__ = "auxiliary_dimension_value"
+    __doc_types__ = ("AUX_DIMENSION_VALUE",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    dimension_id = Column(Integer, ForeignKey("auxiliary_dimension.id"), nullable=False, index=True)
+    code = Column(String(30), nullable=False)          # 维度值码（部门码/项目码）
+    name = Column(String(100), nullable=False)         # 维度值名称（销售部 / 研发项目A）
+    parent_id = Column(Integer, ForeignKey("auxiliary_dimension_value.id"), nullable=True)  # 自引用（维度值层级，如部门树）
+    is_active = Column(Boolean, default=True)
+
+    dimension = relationship("AuxiliaryDimension")
+    __table_args__ = (UniqueConstraint("company_id", "dimension_id", "code", name="ux_aux_dim_value_company_dim_code"),)
 
 
 class AccountsReceivable(AuditMixin, Base):

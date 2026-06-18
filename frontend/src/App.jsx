@@ -69,6 +69,18 @@ import VoucherEntryPage from './pages/finance/VoucherEntryPage';
 import LedgerReportPage from './pages/finance/LedgerReportPage';
 import PeriodClosePage from './pages/finance/PeriodClosePage';
 import ARPage from './pages/finance/ARPage';
+// 5b 配账主数据（finance-gl wave-3：科目表树形维护 + 期初建账；科目走引擎 ACCOUNT 唯一写入路径）
+import AccountMasterPage from './pages/finance/master/AccountMasterPage';
+import OpeningBalancePage from './pages/finance/master/OpeningBalancePage';
+import VoucherWordPage from './pages/finance/master/VoucherWordPage';
+import AuxDimensionPage from './pages/finance/master/AuxDimensionPage';
+import CashflowItemPage from './pages/finance/master/CashflowItemPage';
+import CurrencyPage from './pages/finance/master/CurrencyPage';
+import ExchangeRatePage from './pages/finance/master/ExchangeRatePage';
+import SettlementMethodPage from './pages/finance/master/SettlementMethodPage';
+import AccountingPolicyPage from './pages/finance/master/AccountingPolicyPage';
+import AccountingSystemPage from './pages/finance/master/AccountingSystemPage';
+import SummaryEntryPage from './pages/finance/master/SummaryEntryPage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -191,6 +203,18 @@ function AppRoutes() {
 
         {/* 5 财务视图 / 单据中心（+ 总账 finance-gl：凭证录入 / 账表查询，走引擎 VOUCHER 唯一写入路径） */}
         <Route path="finance/voucher" element={<VoucherEntryPage />} />
+        {/* 配账主数据（finance-gl wave-3）：科目表（树形，走引擎 ACCOUNT /api/transition 唯一写入）+ 期初建账（录入+试算平衡） */}
+        <Route path="finance/accounts" element={<AccountMasterPage />} />
+        <Route path="finance/opening-balance" element={<OpeningBalancePage />} />
+        <Route path="finance/voucher-word" element={<VoucherWordPage />} />
+        <Route path="finance/aux-dimension" element={<AuxDimensionPage />} />
+        <Route path="finance/cashflow-item" element={<CashflowItemPage />} />
+        <Route path="finance/currency" element={<CurrencyPage />} />
+        <Route path="finance/exchange-rate" element={<ExchangeRatePage />} />
+        <Route path="finance/settlement-method" element={<SettlementMethodPage />} />
+        <Route path="finance/accounting-policy" element={<AccountingPolicyPage />} />
+        <Route path="finance/accounting-system" element={<AccountingSystemPage />} />
+        <Route path="finance/summary-entry" element={<SummaryEntryPage />} />
         <Route path="finance/ledger-report" element={<LedgerReportPage />} />
         <Route path="finance/period-close" element={<PeriodClosePage />} />
         <Route path="finance/ar" element={<ARPage />} />
