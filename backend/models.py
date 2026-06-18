@@ -1679,6 +1679,87 @@ class RecurringVoucherLine(Base):
     account = relationship("Account")
 
 
+# ============================================================
+# 总账·第七波（finance-gl wave-7）合并报表（多账簿合并）。
+# 会计专家定调「可手工合」→ 半自动：各成员公司单体报表汇总 + 折算 + 手工抵消分录调整，
+# 非全自动权益法。两张配置主数据 + 一张关联子表（均 AuditMixin + __queryable__ + __doc_types__）：
+#   consolidation_group 合并范围（+ consolidation_member 成员子表）/ elimination_entry 抵消分录。
+# company_id 隔离按「主导/创建公司」落（合并是跨公司动作，但配置归属某家），members 跨公司。
+# 引擎五条不破坏：纯新建实体 + 挂轻量单状态机（seed_consolidation 种 WorkflowDefinition），核心三件零 diff。
+# 合并取数（reports.py）直接复用 wave-5 的 balance_sheet / income_statement 算单体，按 line_key 汇总+折算+抵消。
+# ============================================================
+
+class ConsolidationGroup(AuditMixin, Base):
+    """合并范围（基础资料：合并报表的成员集合 + 列报货币 + 合并准则）。
+
+    一条 = 一个合并主体（如「全集团」或「香港组」）。成员经子表 consolidation_member 跨公司挂入。
+    合并报表端点按本组 presentation_currency 把各成员本位币折算后汇总（同币 rate=1，查不到汇率以 1 兜底并标 warning）。
+    standard 合并准则（HKFRS/CAS）仅作列报口径标注；各成员单体报表仍按其自身公司 region 出准则-aware 行树，
+    合并端按 line_key 对齐汇总（HK 组与内地组各自准则一致时行键自然对齐；跨准则混合时以行键并集列示）。
+    company_id = 主导/创建公司（配置归属，非合并范围本身）；合并范围由 consolidation_member 定义。
+    """
+    __tablename__ = "consolidation_group"
+    __doc_types__ = ("CONSOLIDATION_GROUP",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False)          # 合并范围码（如 CG-ALL 全集团 / CG-HK 香港组）
+    name = Column(String(100), nullable=False)
+    presentation_currency = Column(String(3), nullable=False, default="CNY")  # 列报货币（合并后统一币种）
+    standard = Column(String(10), nullable=False, default="CAS")  # 合并列报准则 HKFRS / CAS（口径标注）
+    description = Column(String(200), default="")
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code", name="ux_consolidation_group_company_code"),)
+
+    members = relationship("ConsolidationMember", cascade="all, delete-orphan")
+
+
+class ConsolidationMember(Base):
+    """合并范围成员子表（合并范围的纳入成员公司，跨公司）。
+    名含 `_member` + 指向 consolidation_group 的 FK → 引擎自动识别为子表，MasterDataPage 内嵌网格随 sub_updates 提交。
+    member_company_id 弱引用任一公司（跨公司，故不强制同 group.company_id）；ownership_pct 持股比例（默认 100，
+    半自动手工合并下仅作展示/手工抵消参考，端点汇总按 100% 简单汇总不自动按比例并表）。"""
+    __tablename__ = "consolidation_member"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    group_id = Column(Integer, ForeignKey("consolidation_group.id"), nullable=False, index=True)
+    member_company_id = Column(Integer, ForeignKey("company.id"), nullable=False)  # 纳入合并的成员公司（跨公司）
+    ownership_pct = Column(Numeric(7, 4), nullable=False, default=100)  # 持股比例%（默认 100；手工合并下作参考）
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("group_id", "member_company_id", name="ux_consolidation_member"),)
+
+    member_company = relationship("Company")
+
+
+class EliminationEntry(AuditMixin, Base):
+    """抵消分录（基础资料：手工录入的合并抵消调整，内部往来/内部交易抵消）。
+
+    半自动合并下，内部交易（成员间往来/销售/投资）不自动消除，由财务按 line_key（或 account_code）手工录抵消额。
+    一条 = 某合并范围在某年某期号、对某报表行（BS 或 IS）的一笔抵消借/贷（presentation 列报币）。
+    合并报表端点按 (group_id, period_year, period_number, statement, line_key) 汇总抵消列：
+      • statement=BS 资产负债表：抵消净额 = Σ(debit 视作资产侧增/权益负债侧减) 按行 line_key 落「抵消列」；
+      • statement=IS 利润表：同理对损益行落抵消列。
+    端点对抵消列的处理：BS 行合并值 = Σ成员折算后 closing + 抵消净额(debit-credit 按行符号约定)；
+    IS 行合并值 = Σ成员折算后 period/ytd + 抵消净额。memo 留抵消事由（如「内部销售抵消」）。
+    company_id = 主导/创建公司（配置归属）。金额已是 presentation 列报币（财务录入时自行折算/按列报币填）。
+    """
+    __tablename__ = "elimination_entry"
+    __doc_types__ = ("ELIMINATION_ENTRY",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    group_id = Column(Integer, ForeignKey("consolidation_group.id"), nullable=False, index=True)
+    period_year = Column(Integer, nullable=False)      # 合并期间年份（同年同期号对齐成员期间）
+    period_number = Column(SmallInteger, nullable=False)  # 合并期间期号
+    statement = Column(String(2), nullable=False, default="BS")  # BS 资产负债表 / IS 利润表（口径）
+    line_key = Column(String(50), default="")          # 报表行键（对齐 balance_sheet/income_statement 的 line_key）
+    account_code = Column(String(20), default="")      # 可选科目码（line_key 为空时按科目码归集，弱引用）
+    debit = Column(Numeric(16, 2), default=0)          # 抵消借方（presentation 列报币）
+    credit = Column(Numeric(16, 2), default=0)         # 抵消贷方（presentation 列报币）
+    memo = Column(String(200), default="")             # 抵消事由（如「内部往来抵消」「内部销售抵消」）
+    is_active = Column(Boolean, default=True)
+
+    group = relationship("ConsolidationGroup")
+
+
 class AccountsReceivable(AuditMixin, Base):
     __tablename__ = "accounts_receivable"
     __doc_types__ = ("ACCOUNTS_RECEIVABLE",)

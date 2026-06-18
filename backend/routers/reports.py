@@ -1508,6 +1508,410 @@ async def aux_balance(
     }
 
 
+# ============================================================
+# 总账·第七波（finance-gl wave-7）合并报表（多账簿合并）：合并资产负债表 / 合并利润表。
+# 会计专家定调「可手工合」→ 半自动：各成员公司单体报表汇总 + 折算 + 手工抵消分录调整。
+# 取数底座复用 wave-5 的 balance_sheet / income_statement（对每个成员公司算单体准则-aware 行树），
+# 再按 line_key 汇总各成员（折算 presentation 货币）→列 [各成员公司列, 抵消列(EliminationEntry), 合并列]。
+# 折算：成员本位币→presentation 货币用 ExchangeRate（≤期末日最新），同币 rate=1；查不到标 warning 用 1 兜底。
+# ============================================================
+
+
+async def _resolve_consolidation_group(db, user, group_id):
+    """解析并鉴权合并范围；返回 (group, active_member_companies, error)。
+
+    active_member_companies = [Company,...]（成员子表 is_active 的成员公司，按 code 排序）。
+    company_id（主导/创建公司）须在用户可见集内（privileged 只读放行任意）。
+    """
+    group = (await db.execute(
+        select(m.ConsolidationGroup).where(m.ConsolidationGroup.id == group_id)
+    )).scalar_one_or_none()
+    if group is None:
+        return None, [], "合并范围不存在"
+    company_ids = _company_filter(user)
+    if company_ids is not None and group.company_id not in company_ids:
+        return None, [], "无权访问该合并范围"
+
+    members = (await db.execute(
+        select(m.ConsolidationMember)
+        .where(m.ConsolidationMember.group_id == group_id)
+        .where(m.ConsolidationMember.is_active == True)  # noqa: E712
+    )).scalars().all()
+    member_cids = [mb.member_company_id for mb in members]
+    companies = []
+    if member_cids:
+        companies = (await db.execute(
+            select(m.Company).where(m.Company.id.in_(member_cids))
+        )).scalars().all()
+        companies.sort(key=lambda c: c.code)
+    return group, companies, None
+
+
+async def _member_period_id(db, company_id, period_year, period_number):
+    """按「同年同期号」对齐成员期间：找该公司 fiscal_year.year==period_year 下 period_number==N 的 AccountingPeriod.id。
+    找不到返回 None（端点据此对该成员标 missing_period，不并入合计）。"""
+    pid = (await db.execute(
+        select(m.AccountingPeriod.id)
+        .join(m.FiscalYear, m.AccountingPeriod.fiscal_year_id == m.FiscalYear.id)
+        .where(m.FiscalYear.company_id == company_id)
+        .where(m.FiscalYear.year == period_year)
+        .where(m.AccountingPeriod.period_number == period_number)
+    )).scalar_one_or_none()
+    return pid
+
+
+async def _fx_rate_to_presentation(db, from_ccy, to_ccy, on_or_before):
+    """成员本位币 from_ccy → 列报币 to_ccy 的折算率（取 effective_date ≤ on_or_before 的最新一条）。
+
+    返回 (rate: float, warning: str|None)。同币 rate=1.0 无 warning；查不到汇率 rate=1.0 并带 warning（兜底不崩）。
+    on_or_before 为期末日（成员 period.end_date）；缺省用今天。
+    """
+    if not from_ccy or not to_ccy or from_ccy == to_ccy:
+        return 1.0, None
+    stmt = (
+        select(m.ExchangeRate)
+        .where(m.ExchangeRate.from_currency == from_ccy)
+        .where(m.ExchangeRate.to_currency == to_ccy)
+    )
+    if on_or_before is not None:
+        stmt = stmt.where(m.ExchangeRate.effective_date <= on_or_before)
+    stmt = stmt.order_by(m.ExchangeRate.effective_date.desc())
+    rate_row = (await db.execute(stmt)).scalars().first()
+    if rate_row is None:
+        return 1.0, f"未找到 {from_ccy}→{to_ccy} 汇率（≤期末日），以 1.0 兜底折算"
+    return float(rate_row.rate), None
+
+
+def _eliminations_by_line(elim_rows, statement):
+    """把 EliminationEntry 行按 line_key（无则 account_code）聚合成 {key: net}（净额=debit-credit，presentation 币）。
+    statement 过滤 BS/IS。返回 (by_line: dict, rows_out: list 明细)。"""
+    by_line: dict[str, float] = {}
+    rows_out = []
+    for e in elim_rows:
+        if e.statement != statement:
+            continue
+        key = e.line_key or e.account_code or ""
+        net = _dec(e.debit) - _dec(e.credit)
+        by_line[key] = by_line.get(key, 0.0) + net
+        rows_out.append({
+            "id": e.id, "line_key": e.line_key, "account_code": e.account_code,
+            "debit": _dec(e.debit), "credit": _dec(e.credit), "net": round(net, 2),
+            "memo": e.memo,
+        })
+    return by_line, rows_out
+
+
+async def _load_eliminations(db, group_id, period_year, period_number, statement):
+    rows = (await db.execute(
+        select(m.EliminationEntry)
+        .where(m.EliminationEntry.group_id == group_id)
+        .where(m.EliminationEntry.period_year == period_year)
+        .where(m.EliminationEntry.period_number == period_number)
+        .where(m.EliminationEntry.is_active == True)  # noqa: E712
+        .where(m.EliminationEntry.statement == statement)
+    )).scalars().all()
+    return _eliminations_by_line(rows, statement)
+
+
+@router.get("/consolidated-balance-sheet")
+async def consolidated_balance_sheet(
+    group_id: int = Query(..., description="合并范围 id（ConsolidationGroup）"),
+    period_year: int = Query(..., description="合并期间年份（按同年同期号对齐各成员期间）"),
+    period_number: int = Query(..., description="合并期间期号（如 6=第6期）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """合并资产负债表（Consolidated Balance Sheet）：各成员单体 BS 汇总 + 折算 + 手工抵消。
+
+    口径（半自动手工合并，复用 wave-5 balance_sheet 单体取数）：
+    - 对合并范围每个成员公司，按「同年同期号」找其 AccountingPeriod → 调 balance_sheet 算单体准则-aware 行树。
+    - 各成员单体行 closing 按其本位币→列报币 ExchangeRate（≤成员期末日最新）折算；同币 rate=1；查不到标 warning 用 1。
+    - 按 line_key 汇总：每行列出 [各成员公司列(折算后), 抵消列(EliminationEntry statement=BS), 合并列]。
+      合并列 = Σ成员折算后 closing + 抵消净额(debit-credit)。
+    - 行树结构沿用单体 BS 的 assets/liabilities/equity 分组与 line_key（取各成员行树的并集，按出现顺序）。
+    - 勾稽：合并 资产合计 == 负债合计 + 权益合计（误差 < 0.01 视为平衡；含抵消列影响）。
+    """
+    group, companies, err = await _resolve_consolidation_group(db, user, group_id)
+    if err:
+        return {"report": "consolidated_balance_sheet", "group_id": group_id,
+                "period_year": period_year, "period_number": period_number,
+                "data": {}, "error": err}
+    presentation = group.presentation_currency or "CNY"
+    warnings: list[str] = []
+
+    # 1) 逐成员算单体 BS + 折算率。member_results: [{company, period_id|None, statement, rate, bs|None}]
+    member_results = []
+    for company in companies:
+        pid = await _member_period_id(db, company.id, period_year, period_number)
+        member_meta = {
+            "company_id": company.id, "company_code": company.code,
+            "company_name": company.short_name or company.name,
+            "currency": company.currency,
+        }
+        if pid is None:
+            warnings.append(f"成员 {company.code} 无 {period_year}年第{period_number}期，未并入")
+            member_results.append({**member_meta, "period_id": None, "rate": None, "bs": None})
+            continue
+        period = (await db.execute(
+            select(m.AccountingPeriod).where(m.AccountingPeriod.id == pid)
+        )).scalar_one_or_none()
+        end_date = period.end_date if period else None
+        rate, w = await _fx_rate_to_presentation(db, company.currency, presentation, end_date)
+        if w:
+            warnings.append(f"成员 {company.code}：{w}")
+        bs = await balance_sheet(company_id=company.id, period_id=pid, db=db, user=user)
+        member_results.append({**member_meta, "period_id": pid, "rate": rate,
+                               "standard": bs.get("standard"), "bs": bs})
+
+    # 2) 抵消列（BS）。
+    elim_by_line, elim_rows = await _load_eliminations(db, group_id, period_year, period_number, "BS")
+
+    # 3) 汇总：把各成员单体 BS 行树「拍平」为 {line_key: {label, group_key, section, per_company:{cid:closing}}}，
+    #    保出现顺序（沿用首个有数成员的行树骨架，缺失行按出现补）。
+    # section ∈ assets / liabilities / equity；用于合计与勾稽。
+    line_order: list[str] = []
+    line_meta: dict[str, dict] = {}
+    line_amounts: dict[str, dict[int, float]] = {}  # line_key → {company_id: 折算后 closing}
+
+    def _ingest_section(section, groups_or_lines, cid, rate):
+        # groups_or_lines: BS assets/liabilities = {"groups":[{group_key,label,lines:[...]}]}；equity = {"lines":[...]}
+        groups = groups_or_lines.get("groups")
+        if groups is not None:
+            for g in groups:
+                for ln in g.get("lines", []):
+                    _ingest_line(section, g.get("group_key"), g.get("label"), ln, cid, rate)
+        else:
+            for ln in groups_or_lines.get("lines", []):
+                _ingest_line(section, "equity", groups_or_lines.get("label", "权益"), ln, cid, rate)
+
+    def _ingest_line(section, group_key, group_label, ln, cid, rate):
+        lk = ln["line_key"]
+        if lk not in line_meta:
+            line_order.append(lk)
+            line_meta[lk] = {
+                "line_key": lk, "label": ln.get("label"), "label_en": ln.get("label_en"),
+                "section": section, "group_key": group_key, "group_label": group_label,
+            }
+            line_amounts[lk] = {}
+        line_amounts[lk][cid] = round(line_amounts[lk].get(cid, 0.0) + _dec(ln.get("closing")) * rate, 2)
+
+    for mr in member_results:
+        if mr["bs"] is None or mr["bs"].get("error"):
+            if mr["bs"] and mr["bs"].get("error"):
+                warnings.append(f"成员 {mr['company_code']} 单体BS异常：{mr['bs']['error']}")
+            continue
+        data = mr["bs"].get("data", {})
+        rate = mr["rate"] or 1.0
+        cid = mr["company_id"]
+        if "assets" in data:
+            _ingest_section("assets", data["assets"], cid, rate)
+        if "liabilities" in data:
+            _ingest_section("liabilities", data["liabilities"], cid, rate)
+        if "equity" in data:
+            _ingest_section("equity", data["equity"], cid, rate)
+
+    # 4) 组装行：每行 per_company 列 + elimination + consolidated。
+    member_cols = [
+        {"company_id": mr["company_id"], "company_code": mr["company_code"],
+         "company_name": mr["company_name"], "currency": mr["currency"],
+         "rate": mr["rate"], "period_id": mr["period_id"], "included": mr["bs"] is not None}
+        for mr in member_results
+    ]
+    included_cids = [mr["company_id"] for mr in member_results if mr["bs"] is not None]
+
+    def _build_rows(section):
+        out = []
+        sec_member_tot = {cid: 0.0 for cid in included_cids}
+        sec_elim_tot = 0.0
+        sec_consol_tot = 0.0
+        for lk in line_order:
+            meta = line_meta[lk]
+            if meta["section"] != section:
+                continue
+            per_company = {cid: round(line_amounts[lk].get(cid, 0.0), 2) for cid in included_cids}
+            members_sum = round(sum(per_company.values()), 2)
+            elim = round(elim_by_line.get(lk, 0.0), 2)
+            consolidated = round(members_sum + elim, 2)
+            for cid in included_cids:
+                sec_member_tot[cid] = round(sec_member_tot[cid] + per_company[cid], 2)
+            sec_elim_tot = round(sec_elim_tot + elim, 2)
+            sec_consol_tot = round(sec_consol_tot + consolidated, 2)
+            out.append({
+                "line_key": lk, "label": meta["label"], "label_en": meta["label_en"],
+                "group_key": meta["group_key"], "group_label": meta["group_label"],
+                "per_company": per_company, "members_subtotal": members_sum,
+                "elimination": elim, "consolidated": consolidated,
+            })
+        return out, sec_member_tot, sec_elim_tot, sec_consol_tot
+
+    asset_rows, asset_mt, asset_et, asset_ct = _build_rows("assets")
+    liab_rows, liab_mt, liab_et, liab_ct = _build_rows("liabilities")
+    eq_rows, eq_mt, eq_et, eq_ct = _build_rows("equity")
+
+    return {
+        "report": "consolidated_balance_sheet",
+        "group_id": group_id,
+        "group_code": group.code,
+        "group_name": group.name,
+        "presentation_currency": presentation,
+        "standard": group.standard,
+        "period_year": period_year,
+        "period_number": period_number,
+        "members": member_cols,
+        "data": {
+            "assets": {"rows": asset_rows, "member_totals": asset_mt,
+                       "elimination_total": asset_et, "consolidated_total": asset_ct},
+            "liabilities": {"rows": liab_rows, "member_totals": liab_mt,
+                            "elimination_total": liab_et, "consolidated_total": liab_ct},
+            "equity": {"rows": eq_rows, "member_totals": eq_mt,
+                       "elimination_total": eq_et, "consolidated_total": eq_ct},
+        },
+        "eliminations": elim_rows,
+        "check": {
+            "assets_total": asset_ct,
+            "liabilities_plus_equity": round(liab_ct + eq_ct, 2),
+            "balanced": abs(asset_ct - (liab_ct + eq_ct)) < 0.01,
+        },
+        "warnings": warnings,
+    }
+
+
+@router.get("/consolidated-income-statement")
+async def consolidated_income_statement(
+    group_id: int = Query(..., description="合并范围 id（ConsolidationGroup）"),
+    period_year: int = Query(..., description="合并期间年份（按同年同期号对齐各成员期间）"),
+    period_number: int = Query(..., description="合并期间期号（如 6=第6期）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """合并利润表（Consolidated Income Statement）：各成员单体 IS 汇总 + 折算 + 手工抵消。
+
+    口径（半自动手工合并，复用 wave-5 income_statement 单体取数）：
+    - 对合并范围每个成员公司，按「同年同期号」找其 AccountingPeriod → 调 income_statement 算单体准则-aware 行项目。
+    - 各成员单体行 period/ytd 按其本位币→列报币 ExchangeRate（≤成员期末日最新）折算；同币 rate=1；查不到标 warning 用 1。
+    - 按 line_key 汇总：每行列出 [各成员公司列(折算后 period), 抵消列(EliminationEntry statement=IS), 合并列]。
+      合并列 = Σ成员折算后 period + 抵消净额(debit-credit)。同时给 ytd 口径汇总。
+    - 净利润：逐行 sign 累加（沿用单体 IS 行 sign）；合并净利润 = 各成员折算后净利润之和 + 抵消对净利润影响。
+    """
+    group, companies, err = await _resolve_consolidation_group(db, user, group_id)
+    if err:
+        return {"report": "consolidated_income_statement", "group_id": group_id,
+                "period_year": period_year, "period_number": period_number,
+                "data": {}, "error": err}
+    presentation = group.presentation_currency or "CNY"
+    warnings: list[str] = []
+
+    member_results = []
+    for company in companies:
+        pid = await _member_period_id(db, company.id, period_year, period_number)
+        member_meta = {
+            "company_id": company.id, "company_code": company.code,
+            "company_name": company.short_name or company.name,
+            "currency": company.currency,
+        }
+        if pid is None:
+            warnings.append(f"成员 {company.code} 无 {period_year}年第{period_number}期，未并入")
+            member_results.append({**member_meta, "period_id": None, "rate": None, "is": None})
+            continue
+        period = (await db.execute(
+            select(m.AccountingPeriod).where(m.AccountingPeriod.id == pid)
+        )).scalar_one_or_none()
+        end_date = period.end_date if period else None
+        rate, w = await _fx_rate_to_presentation(db, company.currency, presentation, end_date)
+        if w:
+            warnings.append(f"成员 {company.code}：{w}")
+        inc = await income_statement(company_id=company.id, period_id=pid, db=db, user=user)
+        member_results.append({**member_meta, "period_id": pid, "rate": rate,
+                               "standard": inc.get("standard"), "is": inc})
+
+    elim_by_line, elim_rows = await _load_eliminations(db, group_id, period_year, period_number, "IS")
+
+    line_order: list[str] = []
+    line_meta: dict[str, dict] = {}
+    line_period: dict[str, dict[int, float]] = {}
+    line_ytd: dict[str, dict[int, float]] = {}
+
+    for mr in member_results:
+        if mr["is"] is None or mr["is"].get("error"):
+            if mr["is"] and mr["is"].get("error"):
+                warnings.append(f"成员 {mr['company_code']} 单体IS异常：{mr['is']['error']}")
+            continue
+        rate = mr["rate"] or 1.0
+        cid = mr["company_id"]
+        for ln in mr["is"].get("data", {}).get("lines", []):
+            lk = ln["line_key"]
+            if lk not in line_meta:
+                line_order.append(lk)
+                line_meta[lk] = {"line_key": lk, "label": ln.get("label"),
+                                 "label_en": ln.get("label_en"), "sign": ln.get("sign", 1)}
+                line_period[lk] = {}
+                line_ytd[lk] = {}
+            line_period[lk][cid] = round(line_period[lk].get(cid, 0.0) + _dec(ln.get("period")) * rate, 2)
+            line_ytd[lk][cid] = round(line_ytd[lk].get(cid, 0.0) + _dec(ln.get("ytd")) * rate, 2)
+
+    member_cols = [
+        {"company_id": mr["company_id"], "company_code": mr["company_code"],
+         "company_name": mr["company_name"], "currency": mr["currency"],
+         "rate": mr["rate"], "period_id": mr["period_id"], "included": mr["is"] is not None}
+        for mr in member_results
+    ]
+    included_cids = [mr["company_id"] for mr in member_results if mr["is"] is not None]
+
+    rows = []
+    net_period_member = {cid: 0.0 for cid in included_cids}
+    net_ytd_member = {cid: 0.0 for cid in included_cids}
+    net_period_elim = 0.0
+    net_period_consol = 0.0
+    net_ytd_consol = 0.0
+    for lk in line_order:
+        meta = line_meta[lk]
+        sign = meta["sign"]
+        per_company_p = {cid: round(line_period[lk].get(cid, 0.0), 2) for cid in included_cids}
+        per_company_y = {cid: round(line_ytd[lk].get(cid, 0.0), 2) for cid in included_cids}
+        members_p = round(sum(per_company_p.values()), 2)
+        members_y = round(sum(per_company_y.values()), 2)
+        elim = round(elim_by_line.get(lk, 0.0), 2)
+        consol_p = round(members_p + elim, 2)
+        consol_y = round(members_y + elim, 2)
+        for cid in included_cids:
+            net_period_member[cid] = round(net_period_member[cid] + sign * per_company_p[cid], 2)
+            net_ytd_member[cid] = round(net_ytd_member[cid] + sign * per_company_y[cid], 2)
+        net_period_elim = round(net_period_elim + sign * elim, 2)
+        net_period_consol = round(net_period_consol + sign * consol_p, 2)
+        net_ytd_consol = round(net_ytd_consol + sign * consol_y, 2)
+        rows.append({
+            "line_key": lk, "label": meta["label"], "label_en": meta["label_en"], "sign": sign,
+            "per_company_period": per_company_p, "per_company_ytd": per_company_y,
+            "members_period": members_p, "members_ytd": members_y,
+            "elimination": elim, "consolidated_period": consol_p, "consolidated_ytd": consol_y,
+        })
+
+    return {
+        "report": "consolidated_income_statement",
+        "group_id": group_id,
+        "group_code": group.code,
+        "group_name": group.name,
+        "presentation_currency": presentation,
+        "standard": group.standard,
+        "period_year": period_year,
+        "period_number": period_number,
+        "members": member_cols,
+        "data": {
+            "lines": rows,
+            "net_profit": {
+                "label": "净利润", "label_en": "Net profit",
+                "per_company_period": net_period_member,
+                "per_company_ytd": net_ytd_member,
+                "elimination": net_period_elim,
+                "consolidated_period": net_period_consol,
+                "consolidated_ytd": net_ytd_consol,
+            },
+        },
+        "eliminations": elim_rows,
+        "warnings": warnings,
+    }
+
+
 @router.get("/periods")
 async def list_periods(
     db: AsyncSession = Depends(get_db),

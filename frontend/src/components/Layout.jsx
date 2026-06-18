@@ -142,6 +142,8 @@ const buildMenuItems = (todoCount, isAdmin) => {
         { key: '/finance/cashflow-assign', label: '现金流量指定/归集' },
         { key: '/finance/cashflow-tlist', label: '现金流量 T 型账' },
         { key: '/finance/recurring-schemes', label: '定期凭证（转账/摊销/预提）' },
+        { key: '/finance/consolidation', label: '合并报表' },
+        { key: '/finance/consolidation-setup', label: '合并范围 / 抵消分录' },
         { key: '/finance/ledger-report', label: '账表查询（科目余额 / 明细账）' },
         { key: '/finance/period-close', label: '期末结账' },
         { key: '/finance/ar', label: '应收管理' },

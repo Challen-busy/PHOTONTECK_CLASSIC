@@ -94,6 +94,9 @@ import CashFlowStatementPage from './pages/finance/CashFlowStatementPage';
 import CashflowAssignPage from './pages/finance/CashflowAssignPage';
 import CashflowTListPage from './pages/finance/CashflowTListPage';
 import RecurringSchemePage from './pages/finance/RecurringSchemePage';
+// 5f 合并报表（finance-gl wave-7）
+import ConsolidationReportPage from './pages/finance/ConsolidationReportPage';
+import ConsolidationGroupPage from './pages/finance/ConsolidationGroupPage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -238,6 +241,8 @@ function AppRoutes() {
         <Route path="finance/cashflow-assign" element={<CashflowAssignPage />} />
         <Route path="finance/cashflow-tlist" element={<CashflowTListPage />} />
         <Route path="finance/recurring-schemes" element={<RecurringSchemePage />} />
+        <Route path="finance/consolidation" element={<ConsolidationReportPage />} />
+        <Route path="finance/consolidation-setup" element={<ConsolidationGroupPage />} />
         <Route path="finance/ledger-report" element={<LedgerReportPage />} />
         <Route path="finance/period-close" element={<PeriodClosePage />} />
         <Route path="finance/ar" element={<ARPage />} />

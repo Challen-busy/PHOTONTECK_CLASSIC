@@ -102,3 +102,7 @@ export const assignCashflow = (payload) => executeCommand('finance.assign_cashfl
 export const generateRecurringVoucher = (scheme_id, period_id, voucher_date) => executeCommand('finance.generate_recurring_voucher', voucher_date ? { scheme_id, period_id, voucher_date } : { scheme_id, period_id });
 export const getCashflowTList = (params = {}) => api.get('/reports/cashflow-tlist', { params });
 export const getCashflowQuery = (params = {}) => api.get('/reports/cashflow-query', { params });
+
+// 财务·合并报表（finance-gl wave-7）
+export const getConsolidatedBalanceSheet = (params = {}) => api.get('/reports/consolidated-balance-sheet', { params });
+export const getConsolidatedIncomeStatement = (params = {}) => api.get('/reports/consolidated-income-statement', { params });
