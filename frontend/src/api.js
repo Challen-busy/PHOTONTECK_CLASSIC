@@ -79,3 +79,12 @@ export const getAccountingPeriods = () => api.get('/reports/periods');
 export const getTrialBalance = (params = {}) => api.get('/reports/trial_balance', { params });
 export const getAccountBalanceReport = (params = {}) => api.get('/reports/account_balance', { params });
 export const getAgingAnalysis = (params = {}) => api.get('/reports/aging_analysis', { params });
+
+// 财务命令统一入口（finance-gl wave-4；后端 POST /api/commands/execute 仅放行 finance.* + 财务角色门）
+export const executeCommand = (command, payload = {}, idempotency_key) =>
+  api.post('/commands/execute', idempotency_key ? { command, payload, idempotency_key } : { command, payload });
+export const batchVoucherTransition = (voucher_ids, to_state) => executeCommand('finance.batch_voucher_transition', { voucher_ids, to_state });
+export const checkVoucherGaps = (company_id, period_id) => executeCommand('finance.check_voucher_gaps', { company_id, period_id });
+export const renumberVouchers = (company_id, period_id, dry_run = true) => executeCommand('finance.renumber_vouchers', { company_id, period_id, dry_run });
+export const createVoucherFromModel = (model_voucher_id, voucher_date, period_id) => executeCommand('finance.create_voucher_from_model', period_id ? { model_voucher_id, voucher_date, period_id } : { model_voucher_id, voucher_date });
+export const getVoucherSummary = (params = {}) => api.get('/reports/voucher-summary', { params });

@@ -173,9 +173,21 @@ def _policy_for_region(region: str):
     }
 
 
-def _model_vouchers_for_company():
-    """两个常用模式凭证模板（+ 分录模板）。account_code 走弱引用（建模板时科目码即可）。
+def _model_vouchers_for_company(region="CN"):
+    """两个常用模式凭证模板（+ 分录模板）。account_code 走弱引用，按准则取本区域真实存在的科目码
+    （HK/HKFRS 与 CN/CAS 的费用·折旧·薪酬码不同，避免模板引用本公司不存在的科目）。
     返回 [(code, name, default_description, lines[(line_number, account_code, dr_cr, description)]), ...]。"""
+    if region == "HK":
+        return [
+            ("MV-SALARY", "计提工资模板", "计提本月工资", [
+                (1, "6502", "DR", "Staff costs 员工成本-工资"),
+                (2, "2211", "CR", "Accruals 应计费用-应付工资"),
+            ]),
+            ("MV-DEPR", "计提折旧模板", "计提本月折旧", [
+                (1, "6503", "DR", "Depreciation 折旧"),
+                (2, "1602", "CR", "Accumulated depreciation 累计折旧"),
+            ]),
+        ]
     return [
         ("MV-SALARY", "计提工资模板", "计提本月工资", [
             (1, "6602", "DR", "管理费用-工资"),
@@ -259,7 +271,7 @@ async def _seed_company_master(db, company, created_by_id):
 
     # --- 6. 模式凭证（+ 分录模板子表）。voucher_word 取本公司「记」字（若有）---
     rec_word = await _get(db, m.VoucherWord, company_id=cid, code="记")
-    for code, name, default_desc, lines in _model_vouchers_for_company():
+    for code, name, default_desc, lines in _model_vouchers_for_company(region):
         mv = await _get(db, m.ModelVoucher, company_id=cid, code=code)
         if mv is None:
             mv = m.ModelVoucher(

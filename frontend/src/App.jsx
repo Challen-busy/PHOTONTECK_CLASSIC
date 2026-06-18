@@ -81,6 +81,10 @@ import SettlementMethodPage from './pages/finance/master/SettlementMethodPage';
 import AccountingPolicyPage from './pages/finance/master/AccountingPolicyPage';
 import AccountingSystemPage from './pages/finance/master/AccountingSystemPage';
 import SummaryEntryPage from './pages/finance/master/SummaryEntryPage';
+// 5c 凭证批量工作台（finance-gl wave-4：工作台批量审核/复核/过账 + 查询 + 汇总表；走 /api/commands/execute）
+import VoucherWorkbenchPage from './pages/finance/VoucherWorkbenchPage';
+import VoucherQueryPage from './pages/finance/VoucherQueryPage';
+import VoucherSummaryPage from './pages/finance/VoucherSummaryPage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -215,6 +219,9 @@ function AppRoutes() {
         <Route path="finance/accounting-policy" element={<AccountingPolicyPage />} />
         <Route path="finance/accounting-system" element={<AccountingSystemPage />} />
         <Route path="finance/summary-entry" element={<SummaryEntryPage />} />
+        <Route path="finance/voucher-workbench" element={<VoucherWorkbenchPage />} />
+        <Route path="finance/voucher-query" element={<VoucherQueryPage />} />
+        <Route path="finance/voucher-summary" element={<VoucherSummaryPage />} />
         <Route path="finance/ledger-report" element={<LedgerReportPage />} />
         <Route path="finance/period-close" element={<PeriodClosePage />} />
         <Route path="finance/ar" element={<ARPage />} />

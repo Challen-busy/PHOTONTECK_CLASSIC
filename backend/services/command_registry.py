@@ -76,6 +76,9 @@ def load_commands() -> None:
     import services.customs_commands  # noqa: F401
     # 总账·第一波（finance-gl）：红冲命令 finance.red_reversal
     import services.finance_posting  # noqa: F401
+    # 总账·第四波（finance-gl wave-4）：凭证批量工作台命令
+    #   finance.batch_voucher_transition / create_voucher_from_model / check_voucher_gaps / renumber_vouchers
+    import services.finance_batch  # noqa: F401
 
     _loaded = True
 

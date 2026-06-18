@@ -9,12 +9,42 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import models as m
 from core.auth import get_current_user
 from core.database import get_db
-from services.command_registry import get_command_metadata, list_command_metadata
+from pydantic import BaseModel, Field
+from services.command_registry import get_command_handler, get_command_metadata, list_command_metadata
 from services.commands import execute_command
 from services.tools import _company_filter
 
 
 router = APIRouter(prefix="/api/commands")
+
+# 财务前端（凭证工作台 / 期末 / 模板调用）统一命令入口。
+# 安全：仅放行 finance.* 命令 + 财务角色门；命令内部仍走 execute_transition + validator（职责分离/借贷平衡/期间锁），
+# 不绕唯一写入边界。其它模块命令不从此通用口暴露（各有专用路由）。
+_UI_COMMAND_PREFIXES = ("finance.",)
+_FINANCE_COMMAND_ROLES = {"FINANCE", "FINANCE_DIRECTOR", "BOSS", "ADMIN"}
+
+
+class CommandExecuteIn(BaseModel):
+    command: str
+    payload: dict = Field(default_factory=dict)
+    idempotency_key: str | None = None
+
+
+@router.post("/execute")
+async def execute_command_endpoint(
+    body: CommandExecuteIn,
+    user: m.UserAccount = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    name = body.command
+    if not any(name.startswith(p) for p in _UI_COMMAND_PREFIXES):
+        raise HTTPException(status_code=403, detail=f"命令 {name} 不允许从通用命令入口调用")
+    if get_command_handler(name) is None:
+        raise HTTPException(status_code=404, detail=f"未注册命令: {name}")
+    if user.role not in _FINANCE_COMMAND_ROLES:
+        raise HTTPException(status_code=403, detail=f"角色 {user.role} 无权执行财务命令")
+    return await execute_command(db, user, name, body.payload, idempotency_key=body.idempotency_key)
+
 
 REDACTED_KEYS = {
     "password",

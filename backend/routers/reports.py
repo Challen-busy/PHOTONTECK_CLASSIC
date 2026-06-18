@@ -453,6 +453,101 @@ async def general_ledger(
     }
 
 
+@router.get("/voucher-summary")
+async def voucher_summary(
+    company_id: int | None = Query(None, description="按公司过滤；不传则取用户可见公司范围"),
+    period_from: int = Query(..., description="起始会计期间 id（含）"),
+    period_to: int | None = Query(None, description="结束会计期间 id（含）；不传=单期，等于 period_from"),
+    include_unposted: bool = Query(False, description="含未过账（默认 False=只汇总已 POSTED 凭证分录；True=全状态凭证分录）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """凭证汇总表（科目发生额汇总）：按科目 sum 区间内本期借/贷（本位币），供批量工作台核对用。
+
+    口径（复用明细分类账取数风格，直接对 VoucherEntry 聚合）：
+    - 区间：voucher 所属 period_id 在 [period_from, period_to] 之间（period_to 缺省=period_from 单期）。
+    - 默认只汇总已过账（POSTED）凭证分录；include_unposted=True 时纳入全状态凭证分录。
+    - 公司：company_id 指定则单公司（须在用户可见范围）；否则取 _company_filter(user) 范围。
+    - 每行：科目 + 借方合计 + 贷方合计 + 净额（按余额方向：DEBIT 科目=借-贷，CREDIT=贷-借）。
+    - 末尾 totals 给区间 Σ借/Σ贷 与平衡断言。
+    """
+    company_ids = _company_filter(user)
+    if company_id is not None:
+        if company_ids and company_id not in company_ids:
+            return {"report": "voucher_summary", "period_from": period_from,
+                    "period_to": period_to or period_from, "data": [], "totals": {},
+                    "balanced": True, "error": "无权访问该公司"}
+        company_ids = [company_id]
+
+    p_to = period_to or period_from
+    lo, hi = (period_from, p_to) if period_from <= p_to else (p_to, period_from)
+
+    stmt = (
+        select(
+            m.VoucherEntry.account_id,
+            func.coalesce(func.sum(m.VoucherEntry.base_debit), 0),
+            func.coalesce(func.sum(m.VoucherEntry.base_credit), 0),
+            func.count(func.distinct(m.Voucher.id)),
+        )
+        .join(m.Voucher, m.VoucherEntry.voucher_id == m.Voucher.id)
+        .where(m.Voucher.period_id >= lo, m.Voucher.period_id <= hi)
+        .group_by(m.VoucherEntry.account_id)
+    )
+    if company_ids:
+        stmt = stmt.where(m.Voucher.company_id.in_(company_ids))
+    if not include_unposted:
+        stmt = stmt.where(m.Voucher.status == "POSTED")
+
+    rows = (await db.execute(stmt)).all()
+
+    # 一次取齐相关科目（代码/名称/方向）。
+    acct_ids = [aid for aid, _, _, _ in rows]
+    acct_index: dict[int, m.Account] = {}
+    if acct_ids:
+        accts = (await db.execute(
+            select(m.Account).where(m.Account.id.in_(acct_ids))
+        )).scalars().all()
+        acct_index = {a.id: a for a in accts}
+
+    data = []
+    total_debit = 0.0
+    total_credit = 0.0
+    for acct_id, dr, cr, vcount in rows:
+        acct = acct_index.get(acct_id)
+        d = _dec(dr)
+        c = _dec(cr)
+        direction = getattr(acct, "balance_direction", "DEBIT") if acct else "DEBIT"
+        net = (d - c) if direction == "DEBIT" else (c - d)
+        data.append({
+            "account_id": acct_id,
+            "account_code": acct.code if acct else "",
+            "account_name": acct.name if acct else "",
+            "account_type": acct.account_type if acct else "",
+            "balance_direction": direction,
+            "direction_label": "借" if direction == "DEBIT" else "贷",
+            "period_debit": round(d, 2),
+            "period_credit": round(c, 2),
+            "net_balance": round(net, 2),
+            "voucher_count": int(vcount),
+        })
+        total_debit += d
+        total_credit += c
+
+    data.sort(key=lambda r: r["account_code"])
+    return {
+        "report": "voucher_summary",
+        "period_from": lo,
+        "period_to": hi,
+        "include_unposted": include_unposted,
+        "data": data,
+        "totals": {
+            "period_debit": round(total_debit, 2),
+            "period_credit": round(total_credit, 2),
+        },
+        "balanced": abs(total_debit - total_credit) < 0.01,
+    }
+
+
 @router.get("/aging_analysis")
 async def aging_analysis(
     db: AsyncSession = Depends(get_db),

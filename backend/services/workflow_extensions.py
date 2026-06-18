@@ -66,6 +66,8 @@ _EXTENSION_MODULES = (
     "services.finance_posting",
     # 总账·第二波（finance-gl wave-2）：业财映射 effect（业务单→凭证，销售开票自动生成并过账）
     "services.finance_mapping",
+    # 总账·第四波（finance-gl wave-4）：凭证批量工作台命令（批量推进/按模板建单/断号检测/重排号）
+    "services.finance_batch",
 )
 _loaded = False
 
