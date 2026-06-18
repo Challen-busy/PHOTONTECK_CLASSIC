@@ -87,11 +87,25 @@ GL_MASTER_SPECS = [
     ("AUX_DIMENSION_VALUE", "核算维度数据", _FIN_ROLES, [
         "dimension_id", "code", "name", "parent_id", "is_active",
     ], "财务基础资料"),
+    # —— wave-6 新表 ——
+    ("CASHFLOW_ASSIGN_RULE", "现金流量归集规则", _FIN_ROLES, [
+        "code", "name", "account_code_from", "account_code_to", "cash_direction",
+        "cashflow_item_id", "priority", "is_active",
+    ], "财务基础资料"),
+    ("RECURRING_SCHEME", "定期凭证方案", _FIN_ROLES, [
+        "code", "name", "scheme_type", "voucher_word_id", "description",
+        "total_amount", "periods", "start_period_id", "amortized_periods", "is_active",
+    ], "财务基础资料"),
 ]
 
 # 模式凭证子表可编辑字段（MasterDataPage 内嵌网格随 sub_updates 提交）。
 MODEL_VOUCHER_LINE_FIELDS = [
     "line_number", "account_id", "account_code", "dr_cr", "description", "amount",
+]
+
+# 定期凭证方案子表可编辑字段（MasterDataPage 内嵌网格随 sub_updates 提交）。
+RECURRING_VOUCHER_LINE_FIELDS = [
+    "line_number", "account_id", "account_code", "dr_cr", "description", "amount", "formula",
 ]
 
 

@@ -79,6 +79,10 @@ def load_commands() -> None:
     # 总账·第四波（finance-gl wave-4）：凭证批量工作台命令
     #   finance.batch_voucher_transition / create_voucher_from_model / check_voucher_gaps / renumber_vouchers
     import services.finance_batch  # noqa: F401
+    # 总账·第六波（finance-gl wave-6）：现金流量归集命令 finance.assign_cashflow
+    import services.finance_cashflow  # noqa: F401
+    # 总账·第六波（finance-gl wave-6）：定期凭证生成命令 finance.generate_recurring_voucher（自动转账/摊销/预提）
+    import services.finance_recurring  # noqa: F401
 
     _loaded = True
 

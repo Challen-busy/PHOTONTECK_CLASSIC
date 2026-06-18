@@ -1592,6 +1592,93 @@ class AuxiliaryDimensionValue(AuditMixin, Base):
     __table_args__ = (UniqueConstraint("company_id", "dimension_id", "code", name="ux_aux_dim_value_company_dim_code"),)
 
 
+# ============================================================
+# 总账·第六波（finance-gl wave-6）现金流量归集规则 + 定期凭证方案（+ 行子表）。
+# 全部 AuditMixin + __queryable__ + __doc_types__ + company_id 隔离 + (company_id, code) 唯一，
+# 与 AccountMappingRule / ModelVoucher 同款：纯配置主数据，写走 execute_transition（MasterDataPage 唯一写入）。
+# 引擎五条不破坏：只新建实体 + 挂轻量单状态机（seed_master_gl 种 WorkflowDefinition）。
+# ============================================================
+
+class CashflowAssignRule(AuditMixin, Base):
+    """现金流量归集规则（基础资料：对手科目码区间 + 方向 → 现金流量项目）。
+
+    一条 = 「含现金类科目（1001/1002…）的凭证里，对手方分录若其科目码落在 [from,to] 区间且现金方向
+    匹配 cash_direction 时，把该分录的 cashflow_item_id 填成 cashflow_item_id」的归集规则。
+    finance.assign_cashflow 命令读本表对（草稿/已过账）凭证批量补标现金流量项目；无规则的对手分录留空
+    （入现金流量表 unclassified 桶供财务补标）。HK/CAS 科目码不同 → 按 company_id 隔离落各家规则。
+    """
+    __tablename__ = "cashflow_assign_rule"
+    __doc_types__ = ("CASHFLOW_ASSIGN_RULE",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False)          # 规则码（如 CFR-SALE 销售收现）
+    name = Column(String(100), nullable=False)
+    # 对手科目码区间（按字符串区间比对：account_code_from <= 对手科目码 <= account_code_to）。
+    # 单科目规则时 from==to。留空表示不限该端（开区间）。
+    account_code_from = Column(String(20), default="")
+    account_code_to = Column(String(20), default="")
+    # 现金方向：IN 现金流入（现金类科目记借方，对手分录在贷方）/ OUT 现金流出（现金类记贷方，对手在借方）/
+    # BOTH 不限方向。用于筛选哪类现金凭证适用本规则（与对手分录借贷方向无关，看现金类科目落在哪边）。
+    cash_direction = Column(String(5), nullable=False, default="BOTH")  # IN / OUT / BOTH
+    cashflow_item_id = Column(Integer, ForeignKey("cashflow_item.id"), nullable=False)  # 命中后归集到的现金流量项目
+    priority = Column(SmallInteger, default=100)        # 多规则命中时取 priority 小者优先（升序）
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code", name="ux_cashflow_assign_rule_company_code"),)
+
+    cashflow_item = relationship("CashflowItem")
+
+
+class RecurringVoucherScheme(AuditMixin, Base):
+    """定期凭证方案（基础资料：自动转账 / 摊销 / 预提 三合一模板头）。
+
+    scheme_type ∈ TRANSFER 自动转账 / AMORTIZATION 摊销 / ACCRUAL 预提。子表 recurring_voucher_line
+    存模板分录（科目/借贷/金额或公式）。finance.generate_recurring_voucher 按方案逐期生成 DRAFT 凭证：
+      • 摊销 AMORTIZATION：每期额 = total_amount / periods（最后一期吃尾差）；amortized_periods 累进；
+        到期（amortized_periods >= periods）后不再生成。
+      • 转账 TRANSFER / 预提 ACCRUAL：按模板行固定额或公式额生成（无摊销进度）。
+    回链 source_doc_type=RECURRING_SCHEME / source_doc_id=scheme.id；同 (scheme, period) 已生成则幂等返回既有。
+    HK/CAS 科目码不同 → 按 company_id 隔离落各家方案。
+    """
+    __tablename__ = "recurring_voucher_scheme"
+    __doc_types__ = ("RECURRING_SCHEME",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False)          # 方案码（如 RS-AMORT-INS 保险费摊销）
+    name = Column(String(100), nullable=False)
+    scheme_type = Column(String(15), nullable=False, default="TRANSFER")  # TRANSFER / AMORTIZATION / ACCRUAL
+    voucher_word_id = Column(Integer, ForeignKey("voucher_word.id"), nullable=True)  # 默认凭证字（多为「转」）
+    description = Column(String(200), default="")      # 默认凭证摘要
+    # 摊销字段（scheme_type=AMORTIZATION 时使用；其余类型可空）。
+    total_amount = Column(Numeric(16, 2), nullable=True)   # 待摊总额（如待摊费用原值）
+    periods = Column(SmallInteger, nullable=True)          # 摊销总期数（如 12 期）
+    start_period_id = Column(Integer, ForeignKey("accounting_period.id"), nullable=True)  # 起始摊销期间
+    amortized_periods = Column(SmallInteger, default=0)    # 已摊期数（生成进度，幂等累进）
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code", name="ux_recurring_voucher_scheme_company_code"),)
+
+    voucher_word = relationship("VoucherWord")
+
+
+class RecurringVoucherLine(Base):
+    """定期凭证方案分录模板子表（PRD 配账：定期凭证方案的分录行）。
+    名含 `_line` + 指向 recurring_voucher_scheme 的 FK → 引擎自动识别为子表，MasterDataPage 内嵌网格随 sub_updates 提交。
+    amount=固定模板额（转账/预提常用）；formula=取数表达式（如 "total/periods" 摊销每期额，留空则用 amount）。"""
+    __tablename__ = "recurring_voucher_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    scheme_id = Column(Integer, ForeignKey("recurring_voucher_scheme.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    account_id = Column(Integer, ForeignKey("account.id"), nullable=True)  # 模板科目
+    account_code = Column(String(20), default="")     # 科目码（account_id 为空时按码弱引用）
+    dr_cr = Column(String(2), nullable=False, default="DR")  # DR 借 / CR 贷
+    description = Column(String(200), default="")     # 模板分录摘要
+    amount = Column(Numeric(16, 2), nullable=True)    # 模板固定金额（转账/预提）；摊销可留空（按方案每期额）
+    formula = Column(String(200), default="")         # 取数表达式（如 "total/periods" 摊销每期额）；空则用 amount
+    __table_args__ = (UniqueConstraint("scheme_id", "line_number", name="ux_recurring_voucher_line"),)
+
+    account = relationship("Account")
+
+
 class AccountsReceivable(AuditMixin, Base):
     __tablename__ = "accounts_receivable"
     __doc_types__ = ("ACCOUNTS_RECEIVABLE",)

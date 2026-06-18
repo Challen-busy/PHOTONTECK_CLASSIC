@@ -90,6 +90,10 @@ import LedgerBooksPage from './pages/finance/LedgerBooksPage';
 import BalanceSheetPage from './pages/finance/BalanceSheetPage';
 import IncomeStatementPage from './pages/finance/IncomeStatementPage';
 import CashFlowStatementPage from './pages/finance/CashFlowStatementPage';
+// 5e 现金流量归集 + 定期凭证（finance-gl wave-6）
+import CashflowAssignPage from './pages/finance/CashflowAssignPage';
+import CashflowTListPage from './pages/finance/CashflowTListPage';
+import RecurringSchemePage from './pages/finance/RecurringSchemePage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -231,6 +235,9 @@ function AppRoutes() {
         <Route path="finance/balance-sheet" element={<BalanceSheetPage />} />
         <Route path="finance/income-statement" element={<IncomeStatementPage />} />
         <Route path="finance/cash-flow" element={<CashFlowStatementPage />} />
+        <Route path="finance/cashflow-assign" element={<CashflowAssignPage />} />
+        <Route path="finance/cashflow-tlist" element={<CashflowTListPage />} />
+        <Route path="finance/recurring-schemes" element={<RecurringSchemePage />} />
         <Route path="finance/ledger-report" element={<LedgerReportPage />} />
         <Route path="finance/period-close" element={<PeriodClosePage />} />
         <Route path="finance/ar" element={<ARPage />} />

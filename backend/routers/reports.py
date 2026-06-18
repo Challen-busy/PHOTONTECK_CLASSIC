@@ -1069,8 +1069,9 @@ async def cash_flow_statement(
         .group_by(m.VoucherEntry.cashflow_item_id, m.Voucher.period_id)
     )).all()
 
-    # item_id → {period_amount, ytd_amount}。金额取「现金方向」净额：
-    # IN 项目 = 借方增（base_debit-base_credit）；OUT 项目 = 贷方增（base_credit-base_debit）。
+    # item_id → {period_amount, ytd_amount}。现金流量项目标在「对手分录」(行业惯例，如金蝶/用友)，
+    # 故现金流入/出 = -(对手发生额) = base_credit - base_debit（贷方对手=现金流入为正、借方对手=现金流出为负）；
+    # IN/OUT 仅作分类标签，net 统一 c-d，与 cashflow-tlist(T型账) 口径一致。
     # 未标项目（None）单列未分类，金额取 |debit-credit| 仅作提示，不并入三大类。
     item_amt: dict = {}
     unclassified = {"period": 0.0, "ytd": 0.0}
@@ -1085,7 +1086,7 @@ async def cash_flow_statement(
         item = cf_index.get(item_id)
         if item is None:
             continue
-        net = (d - c) if item.direction == "IN" else (c - d)
+        net = c - d  # 对手分录:贷(收现)→正流入、借(付现)→负流出；与 direction 标签无关
         slot = item_amt.setdefault(item_id, {"period": 0.0, "ytd": 0.0})
         slot["ytd"] += net
         if pid == period_id:
@@ -1147,6 +1148,211 @@ async def cash_flow_statement(
                 "ytd": net_increase_ytd,
             },
         },
+    }
+
+
+# ============================================================
+# 总账·第六波（finance-gl wave-6）：现金流量 T 型账 + 现金流量查询。
+# 取数复用 cash_flow_statement 同口径（已过账 VoucherEntry.cashflow_item_id 归集，本位币），
+# 但 T 型账拆「流入/流出」两栏明细、查询按项目/期间列已标现金分录。
+# ============================================================
+
+@router.get("/cashflow-tlist")
+async def cashflow_tlist(
+    company_id: int = Query(..., description="公司 id（必传，单公司口径）"),
+    period_id: int = Query(..., description="会计期间 id（出本期数；本年累计=同年度 period_number≤当期 累加）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """现金流量 T 型账（Cashflow T-list）：各现金流量项目的流入/流出两栏明细 + 本期/本年累计。
+
+    取数（已过账 VoucherEntry，本位币，与 cash_flow_statement 同口径）：
+    - 按 VoucherEntry.cashflow_item_id → CashflowItem 归集已过账凭证分录的本位币发生额。
+    - 每个现金流量项目按其 direction（IN/OUT）落「流入栏」或「流出栏」；金额取 |base_debit-base_credit|（绝对值）。
+    - 树结构：父项（parent_id 空）= 经营/投资/筹资 三大类锚点；子项挂下。
+    - 合计：净现金流量 = Σ流入 - Σ流出（本期/本年累计各一）。
+    """
+    cid, err = _resolve_report_company(user, company_id)
+    if err:
+        return {"report": "cashflow_tlist", "company_id": company_id, "period_id": period_id,
+                "data": {}, "error": err}
+    company = await _get_company(db, cid)
+    if company is None:
+        return {"report": "cashflow_tlist", "company_id": company_id, "period_id": period_id,
+                "data": {}, "error": "公司不存在"}
+
+    _, fiscal_year_id, cur_pnum, ytd_period_ids, _ = await _period_year_window(db, period_id)
+    if fiscal_year_id is None:
+        return {"report": "cashflow_tlist", "company_id": cid, "period_id": period_id,
+                "data": {}, "error": "会计期间不存在"}
+
+    cf_items = (await db.execute(
+        select(m.CashflowItem).where(m.CashflowItem.company_id == cid)
+    )).scalars().all()
+    cf_index = {c.id: c for c in cf_items}
+
+    rows = (await db.execute(
+        select(
+            m.VoucherEntry.cashflow_item_id,
+            m.Voucher.period_id,
+            func.coalesce(func.sum(m.VoucherEntry.base_debit), 0),
+            func.coalesce(func.sum(m.VoucherEntry.base_credit), 0),
+        )
+        .join(m.Voucher, m.VoucherEntry.voucher_id == m.Voucher.id)
+        .where(m.Voucher.company_id == cid)
+        .where(m.Voucher.status == "POSTED")
+        .where(m.VoucherEntry.cashflow_item_id.isnot(None))
+        .where(m.Voucher.period_id.in_(ytd_period_ids) if ytd_period_ids else False)
+        .group_by(m.VoucherEntry.cashflow_item_id, m.Voucher.period_id)
+    )).all()
+
+    # item_id → {inflow:{period,ytd}, outflow:{period,ytd}}，按项目 direction 分流入/流出栏。
+    item_amt: dict = {}
+    for item_id, pid, dr, cr in rows:
+        item = cf_index.get(item_id)
+        if item is None:
+            continue
+        amount = abs(_dec(dr) - _dec(cr))
+        slot = item_amt.setdefault(item_id, {
+            "inflow": {"period": 0.0, "ytd": 0.0}, "outflow": {"period": 0.0, "ytd": 0.0}})
+        bucket = "inflow" if item.direction == "IN" else "outflow"
+        slot[bucket]["ytd"] += amount
+        if pid == period_id:
+            slot[bucket]["period"] += amount
+
+    children: dict[int, list] = {}
+    roots = []
+    for item in sorted(cf_items, key=lambda x: x.code):
+        if item.parent_id is None:
+            roots.append(item)
+        else:
+            children.setdefault(item.parent_id, []).append(item)
+
+    def _zero():
+        return {"inflow": {"period": 0.0, "ytd": 0.0}, "outflow": {"period": 0.0, "ytd": 0.0}}
+
+    def _line(item):
+        a = item_amt.get(item.id, _zero())
+        return {
+            "item_id": item.id, "code": item.code, "name": item.name, "direction": item.direction,
+            "inflow_period": round(a["inflow"]["period"], 2), "inflow_ytd": round(a["inflow"]["ytd"], 2),
+            "outflow_period": round(a["outflow"]["period"], 2), "outflow_ytd": round(a["outflow"]["ytd"], 2),
+        }
+
+    activities = []
+    tot_in_p = tot_in_y = tot_out_p = tot_out_y = 0.0
+    for root in roots:
+        kids = sorted(children.get(root.id, []), key=lambda x: x.code)
+        child_lines = [_line(k) for k in kids]
+        own = item_amt.get(root.id, _zero())
+        sub = {
+            "inflow_period": round(own["inflow"]["period"] + sum(l["inflow_period"] for l in child_lines), 2),
+            "inflow_ytd": round(own["inflow"]["ytd"] + sum(l["inflow_ytd"] for l in child_lines), 2),
+            "outflow_period": round(own["outflow"]["period"] + sum(l["outflow_period"] for l in child_lines), 2),
+            "outflow_ytd": round(own["outflow"]["ytd"] + sum(l["outflow_ytd"] for l in child_lines), 2),
+        }
+        tot_in_p += sub["inflow_period"]; tot_in_y += sub["inflow_ytd"]
+        tot_out_p += sub["outflow_period"]; tot_out_y += sub["outflow_ytd"]
+        activities.append({
+            "item_id": root.id, "code": root.code, "name": root.name, "direction": root.direction,
+            "lines": child_lines, "subtotal": sub,
+        })
+
+    return {
+        "report": "cashflow_tlist",
+        "company_id": cid,
+        "company_code": company.code,
+        "period_id": period_id,
+        "period_number": cur_pnum,
+        "currency": company.currency,
+        "data": {
+            "activities": activities,
+            "total_inflow": {"period": round(tot_in_p, 2), "ytd": round(tot_in_y, 2)},
+            "total_outflow": {"period": round(tot_out_p, 2), "ytd": round(tot_out_y, 2)},
+            "net_cashflow": {
+                "period": round(tot_in_p - tot_out_p, 2),
+                "ytd": round(tot_in_y - tot_out_y, 2),
+            },
+        },
+    }
+
+
+@router.get("/cashflow-query")
+async def cashflow_query(
+    company_id: int = Query(..., description="公司 id（必传，单公司口径）"),
+    period_id: int = Query(None, description="会计期间 id（不传则查本公司所有期间已标现金分录）"),
+    cashflow_item_id: int = Query(None, description="现金流量项目 id（不传则列全部已标项目）"),
+    status: str = Query("POSTED", description="凭证状态过滤（默认 POSTED；传 ALL 含草稿）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """现金流量查询（Cashflow Query）：按项目/期间列出已标 cashflow_item_id 的现金分录明细。
+
+    取数（VoucherEntry 已标 cashflow_item_id）：
+    - 过滤本公司 + 可选 period_id + 可选 cashflow_item_id + 凭证状态（默认仅 POSTED）。
+    - 每行 = 凭证号/日期/科目/摘要/借贷本位币额/现金流量项目（code+name+direction）。
+    - 供财务核对归集结果、补标后复查。
+    """
+    cid, err = _resolve_report_company(user, company_id)
+    if err:
+        return {"report": "cashflow_query", "company_id": company_id, "rows": [], "error": err}
+
+    cf_items = (await db.execute(
+        select(m.CashflowItem).where(m.CashflowItem.company_id == cid)
+    )).scalars().all()
+    cf_index = {c.id: c for c in cf_items}
+
+    stmt = (
+        select(m.VoucherEntry, m.Voucher, m.Account)
+        .join(m.Voucher, m.VoucherEntry.voucher_id == m.Voucher.id)
+        .join(m.Account, m.VoucherEntry.account_id == m.Account.id)
+        .where(m.Voucher.company_id == cid)
+        .where(m.VoucherEntry.cashflow_item_id.isnot(None))
+    )
+    if period_id:
+        stmt = stmt.where(m.Voucher.period_id == period_id)
+    if cashflow_item_id:
+        stmt = stmt.where(m.VoucherEntry.cashflow_item_id == cashflow_item_id)
+    if status and status.upper() != "ALL":
+        stmt = stmt.where(m.Voucher.status == status.upper())
+    stmt = stmt.order_by(m.Voucher.voucher_date, m.Voucher.voucher_number, m.VoucherEntry.line_number)
+
+    records = (await db.execute(stmt)).all()
+    out = []
+    total_debit = total_credit = 0.0
+    for entry, voucher, acct in records:
+        item = cf_index.get(entry.cashflow_item_id)
+        bd, bc = _dec(entry.base_debit), _dec(entry.base_credit)
+        total_debit += bd
+        total_credit += bc
+        out.append({
+            "voucher_id": voucher.id,
+            "voucher_number": voucher.voucher_number,
+            "voucher_date": voucher.voucher_date.isoformat() if voucher.voucher_date else None,
+            "voucher_status": voucher.status,
+            "period_id": voucher.period_id,
+            "line_number": entry.line_number,
+            "account_code": acct.code,
+            "account_name": acct.name,
+            "description": entry.description,
+            "base_debit": round(bd, 2),
+            "base_credit": round(bc, 2),
+            "cashflow_item_id": entry.cashflow_item_id,
+            "cashflow_item_code": item.code if item else None,
+            "cashflow_item_name": item.name if item else None,
+            "cashflow_direction": item.direction if item else None,
+        })
+
+    return {
+        "report": "cashflow_query",
+        "company_id": cid,
+        "period_id": period_id,
+        "cashflow_item_id": cashflow_item_id,
+        "status": status,
+        "total": len(out),
+        "total_debit": round(total_debit, 2),
+        "total_credit": round(total_credit, 2),
+        "rows": out,
     }
 
 

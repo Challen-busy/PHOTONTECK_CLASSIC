@@ -96,3 +96,9 @@ export const getAuxBalance = (params = {}) => api.get('/reports/aux-balance', { 
 export const getBalanceSheet = (params = {}) => api.get('/reports/balance-sheet', { params });
 export const getIncomeStatement = (params = {}) => api.get('/reports/income-statement', { params });
 export const getCashFlowStatement = (params = {}) => api.get('/reports/cash-flow-statement', { params });
+
+// 财务·现金流量归集 + 定期凭证（finance-gl wave-6）
+export const assignCashflow = (payload) => executeCommand('finance.assign_cashflow', payload);
+export const generateRecurringVoucher = (scheme_id, period_id, voucher_date) => executeCommand('finance.generate_recurring_voucher', voucher_date ? { scheme_id, period_id, voucher_date } : { scheme_id, period_id });
+export const getCashflowTList = (params = {}) => api.get('/reports/cashflow-tlist', { params });
+export const getCashflowQuery = (params = {}) => api.get('/reports/cashflow-query', { params });

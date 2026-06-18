@@ -68,6 +68,10 @@ _EXTENSION_MODULES = (
     "services.finance_mapping",
     # 总账·第四波（finance-gl wave-4）：凭证批量工作台命令（批量推进/按模板建单/断号检测/重排号）
     "services.finance_batch",
+    # 总账·第六波（finance-gl wave-6）：现金流量归集命令 finance.assign_cashflow
+    "services.finance_cashflow",
+    # 总账·第六波（finance-gl wave-6）：定期凭证生成命令 finance.generate_recurring_voucher
+    "services.finance_recurring",
 )
 _loaded = False
 
