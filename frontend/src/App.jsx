@@ -85,6 +85,11 @@ import SummaryEntryPage from './pages/finance/master/SummaryEntryPage';
 import VoucherWorkbenchPage from './pages/finance/VoucherWorkbenchPage';
 import VoucherQueryPage from './pages/finance/VoucherQueryPage';
 import VoucherSummaryPage from './pages/finance/VoucherSummaryPage';
+// 5d 账簿补全 + 三大财务报表（finance-gl wave-5）
+import LedgerBooksPage from './pages/finance/LedgerBooksPage';
+import BalanceSheetPage from './pages/finance/BalanceSheetPage';
+import IncomeStatementPage from './pages/finance/IncomeStatementPage';
+import CashFlowStatementPage from './pages/finance/CashFlowStatementPage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -222,6 +227,10 @@ function AppRoutes() {
         <Route path="finance/voucher-workbench" element={<VoucherWorkbenchPage />} />
         <Route path="finance/voucher-query" element={<VoucherQueryPage />} />
         <Route path="finance/voucher-summary" element={<VoucherSummaryPage />} />
+        <Route path="finance/ledger-books" element={<LedgerBooksPage />} />
+        <Route path="finance/balance-sheet" element={<BalanceSheetPage />} />
+        <Route path="finance/income-statement" element={<IncomeStatementPage />} />
+        <Route path="finance/cash-flow" element={<CashFlowStatementPage />} />
         <Route path="finance/ledger-report" element={<LedgerReportPage />} />
         <Route path="finance/period-close" element={<PeriodClosePage />} />
         <Route path="finance/ar" element={<ARPage />} />

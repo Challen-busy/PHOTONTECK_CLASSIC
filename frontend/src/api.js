@@ -88,3 +88,11 @@ export const checkVoucherGaps = (company_id, period_id) => executeCommand('finan
 export const renumberVouchers = (company_id, period_id, dry_run = true) => executeCommand('finance.renumber_vouchers', { company_id, period_id, dry_run });
 export const createVoucherFromModel = (model_voucher_id, voucher_date, period_id) => executeCommand('finance.create_voucher_from_model', period_id ? { model_voucher_id, voucher_date, period_id } : { model_voucher_id, voucher_date });
 export const getVoucherSummary = (params = {}) => api.get('/reports/voucher-summary', { params });
+
+// 财务·账簿补全 + 三大财务报表（finance-gl wave-5；reports.py 只读端点，_company_filter 隔离）
+export const getDetailLedger = (params = {}) => api.get('/reports/detail_ledger', { params });
+export const getGeneralLedger = (params = {}) => api.get('/reports/general_ledger', { params });
+export const getAuxBalance = (params = {}) => api.get('/reports/aux-balance', { params });
+export const getBalanceSheet = (params = {}) => api.get('/reports/balance-sheet', { params });
+export const getIncomeStatement = (params = {}) => api.get('/reports/income-statement', { params });
+export const getCashFlowStatement = (params = {}) => api.get('/reports/cash-flow-statement', { params });

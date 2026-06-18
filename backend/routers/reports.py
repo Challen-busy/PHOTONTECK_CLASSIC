@@ -611,6 +611,697 @@ async def aging_analysis(
     }
 
 
+# ============================================================
+# 三大财务报表（finance-gl wave-5）：资产负债表 / 利润表 / 现金流量表 / 核算维度余额表
+# 只读端点，取数底座：AccountBalance（余额/发生额真相）+ VoucherEntry（现金流量项目归集）。
+# 准则二分由 Company.region 决定（HK→HKFRS / CN→CAS），行项目映射用文件内常量表
+# （科目码集合/account_type → 报表行），不在业务代码里硬编码单条科目。
+# ============================================================
+
+# --- 报表行项目映射常量（科目码 → 报表行）。code 集按 seed_finance 的 CAS/HKFRS 科目表锚定。 ---
+# 资产负债表行：每行 = (line_key, 中文标题, 英文标题, 取数 account_type 约束, 科目码集合 或 None=全归该类型)。
+# 「科目码集合」非空时按 code 精确归集；为 None 时该行兜底吃掉本 account_type 下未被上面行认领的余科目。
+
+# CAS 资产负债表（流动资产/非流动资产/流动负债/非流动负债/所有者权益）。
+_CAS_BS_ASSET_CURRENT = [
+    ("monetary_funds", "货币资金", "Monetary funds", {"1001", "1002", "1012"}),
+    ("trade_receivables", "应收账款", "Trade receivables", {"1122", "1231"}),
+    ("prepayments", "预付账款", "Prepayments", {"1123"}),
+    ("other_receivables", "其他应收款", "Other receivables", {"1221"}),
+    ("inventories", "存货", "Inventories", {"1401", "1402", "1403", "1405", "1408", "1471"}),
+]
+_CAS_BS_ASSET_NONCURRENT = [
+    ("fixed_assets", "固定资产", "Fixed assets", {"1601", "1602"}),
+    ("intangible_assets", "无形资产", "Intangible assets", {"1701", "1702"}),
+]
+_CAS_BS_LIAB_CURRENT = [
+    ("short_term_loans", "短期借款", "Short-term loans", {"2001"}),
+    ("trade_payables", "应付账款", "Trade payables", {"2202"}),
+    ("advances_from_customers", "预收账款", "Advances from customers", {"2203"}),
+    ("payroll_payable", "应付职工薪酬", "Payroll payable", {"2211"}),
+    ("taxes_payable", "应交税费", "Taxes payable", {"2221", "222101", "222102", "222106"}),
+    ("other_payables", "其他应付款", "Other payables", {"2241"}),
+]
+_CAS_BS_LIAB_NONCURRENT = [
+    ("long_term_loans", "长期借款", "Long-term loans", {"2501"}),
+]
+_CAS_BS_EQUITY = [
+    ("paid_in_capital", "实收资本", "Paid-in capital", {"4001"}),
+    ("capital_reserve", "资本公积", "Capital reserve", {"4002"}),
+    ("surplus_reserve", "盈余公积", "Surplus reserve", {"4101"}),
+    ("retained_earnings", "未分配利润", "Retained earnings", {"4103", "4104"}),
+]
+
+# HKFRS 资产负债表（Non-current/Current assets · liabilities · Equity）。
+_HKFRS_BS_ASSET_NONCURRENT = [
+    ("ppe", "物业、厂房及设备", "Property, plant and equipment", {"1601", "1602"}),
+    ("intangible_assets", "无形资产", "Intangible assets", {"1701", "1702"}),
+]
+_HKFRS_BS_ASSET_CURRENT = [
+    ("inventories", "存货", "Inventories", {"1211", "1212", "1291"}),
+    ("trade_receivables", "应收账款", "Trade receivables", {"1122", "1191"}),
+    ("prepayments", "预付款项", "Prepayments and other receivables", {"1123", "1131", "1141"}),
+    ("cash_and_equivalents", "现金及现金等价物", "Cash and cash equivalents", {"1001", "1002", "1012"}),
+]
+_HKFRS_BS_LIAB_CURRENT = [
+    ("trade_payables", "应付账款", "Trade payables", {"2202"}),
+    ("accruals_other_payables", "应计费用及其他应付款", "Accruals and other payables", {"2211", "2231"}),
+    ("advances_from_customers", "预收款项", "Receipts in advance", {"2203"}),
+    ("bank_borrowings", "银行借款", "Bank borrowings", {"2101"}),
+    ("tax_payable", "应交税项", "Tax payable", {"2221"}),
+]
+_HKFRS_BS_LIAB_NONCURRENT = [
+    ("deferred_tax", "递延税项负债", "Deferred tax liabilities", {"2401"}),
+]
+_HKFRS_BS_EQUITY = [
+    ("share_capital", "股本", "Share capital", {"3001"}),
+    ("share_premium", "股份溢价", "Share premium", {"3002"}),
+    ("reserves", "储备", "Reserves", {"3101"}),
+    ("retained_earnings", "留存收益", "Retained earnings", {"3201", "3301"}),
+]
+
+# 利润表行：每行 = (line_key, 中文, 英文, sign, 科目码集合)。sign=+1 计入收入侧/-1 计入扣减侧，净利润累加。
+# CAS 利润表（营业收入-营业成本-税金-费用 + 营业外 = 利润总额-所得税=净利润）。
+_CAS_IS_LINES = [
+    ("operating_revenue", "营业收入", "Operating revenue", +1, {"6001", "6051"}),
+    ("operating_cost", "营业成本", "Operating cost", -1, {"6401", "6402"}),
+    ("taxes_surcharges", "税金及附加", "Taxes and surcharges", -1, {"6403"}),
+    ("selling_expenses", "销售费用", "Selling expenses", -1, {"6601"}),
+    ("admin_expenses", "管理费用", "Administrative expenses", -1, {"6602"}),
+    ("finance_expenses", "财务费用", "Finance expenses", -1, {"6603"}),
+    ("investment_income", "投资收益", "Investment income", +1, {"6111"}),
+    ("non_operating_income", "营业外收入", "Non-operating income", +1, {"6301"}),
+    ("non_operating_expense", "营业外支出", "Non-operating expense", -1, {"6711"}),
+    ("income_tax", "所得税费用", "Income tax expense", -1, {"6801"}),
+]
+# HKFRS 利润表（Revenue - Cost of sales = Gross profit; + Other income - opex - finance - tax）。
+_HKFRS_IS_LINES = [
+    ("revenue", "营业收入", "Revenue", +1, {"6001"}),
+    ("cost_of_sales", "销售成本", "Cost of sales", -1, {"5001"}),
+    ("other_income", "其他收入", "Other income", +1, {"6051", "6061", "6071"}),
+    ("selling_distribution", "销售及分销费用", "Selling and distribution expenses", -1, {"6401"}),
+    ("administrative_expenses", "行政费用", "Administrative expenses", -1, {"6501", "6502", "6503"}),
+    ("finance_costs", "财务费用", "Finance costs", -1, {"6601"}),
+    ("other_expenses", "其他费用", "Other expenses", -1, {"6701"}),
+    ("income_tax", "所得税费用", "Income tax expense", -1, {"6801"}),
+]
+
+
+def _resolve_report_company(user, company_id):
+    """三大报表强制单公司口径：解析并鉴权 company_id。
+
+    返回 (company_id, error)。company_id 必传（报表按公司+准则出，不混算）。
+    privileged 只读（_company_filter→None）放行任意公司；普通用户须在可见集内。
+    """
+    if company_id is None:
+        return None, "company_id 必传（财务报表按单公司+准则口径出具）"
+    company_ids = _company_filter(user)
+    if company_ids is not None and company_id not in company_ids:
+        return None, "无权访问该公司"
+    return company_id, None
+
+
+async def _get_company(db, company_id):
+    return (await db.execute(
+        select(m.Company).where(m.Company.id == company_id)
+    )).scalar_one_or_none()
+
+
+async def _period_year_window(db, period_id):
+    """定位 period 所属会计年度，返回 (cur_period, fiscal_year_id, cur_pnum,
+    ytd_period_ids, first_period_ids)。period 不存在返回全 None。"""
+    cur = (await db.execute(
+        select(m.AccountingPeriod).where(m.AccountingPeriod.id == period_id)
+    )).scalar_one_or_none()
+    if cur is None:
+        return None, None, None, [], []
+    year_periods = (await db.execute(
+        select(m.AccountingPeriod.id, m.AccountingPeriod.period_number)
+        .where(m.AccountingPeriod.fiscal_year_id == cur.fiscal_year_id)
+    )).all()
+    cur_pnum = cur.period_number
+    ytd_ids = [pid for pid, pnum in year_periods if pnum <= cur_pnum]
+    first_pnum = min((pnum for _, pnum in year_periods), default=cur_pnum)
+    first_ids = [pid for pid, pnum in year_periods if pnum == first_pnum]
+    return cur, cur.fiscal_year_id, cur_pnum, ytd_ids, first_ids
+
+
+def _signed_net(acct_type, balance_direction, debit, credit):
+    """按余额方向返回净额（DEBIT 科目=借-贷；CREDIT 科目=贷-借）。备抵科目方向已独立标，直接用 balance_direction。"""
+    if balance_direction == "DEBIT":
+        return debit - credit
+    return credit - debit
+
+
+@router.get("/balance-sheet")
+async def balance_sheet(
+    company_id: int = Query(..., description="公司 id（必传，报表按单公司+准则口径出具）"),
+    period_id: int = Query(..., description="会计期间 id（出期末数；年初数取同会计年度首期 opening）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """资产负债表（Balance Sheet）：按 company 准则（HKFRS/CAS）归集科目期末数+年初数。
+
+    取数（全部 AccountBalance 已过账口径，本位币）：
+    - 期末数 closing：本期间各科目 closing 按余额方向取净额。
+    - 年初数 opening：本会计年度首期(period_number 最小)的 opening 按余额方向取净额。
+    - 资产/负债/权益分组与流动/非流动拆分按准则常量表（_CAS_BS_* / _HKFRS_BS_*）。
+    - 损益结平差额（本年利润未结转部分）并入「未分配利润/留存收益」行，保证 资产=负债+权益 恒等。
+    校验：assets_total == liabilities_total + equity_total（误差 < 0.01 视为平衡）。
+    """
+    cid, err = _resolve_report_company(user, company_id)
+    if err:
+        return {"report": "balance_sheet", "company_id": company_id, "period_id": period_id,
+                "data": {}, "error": err}
+    company = await _get_company(db, cid)
+    if company is None:
+        return {"report": "balance_sheet", "company_id": company_id, "period_id": period_id,
+                "data": {}, "error": "公司不存在"}
+    standard = "HKFRS" if company.region == "HK" else "CAS"
+
+    _, fiscal_year_id, _, _, first_period_ids = await _period_year_window(db, period_id)
+    if fiscal_year_id is None:
+        return {"report": "balance_sheet", "company_id": cid, "period_id": period_id,
+                "standard": standard, "data": {}, "error": "会计期间不存在"}
+
+    # 一次取本公司全部科目 + 本期 closing / 首期 opening。
+    accts = (await db.execute(
+        select(m.Account).where(m.Account.company_id == cid)
+    )).scalars().all()
+    acct_index = {a.id: a for a in accts}
+
+    bal_period_ids = list({period_id, *first_period_ids})
+    bals = (await db.execute(
+        select(m.AccountBalance)
+        .where(m.AccountBalance.company_id == cid)
+        .where(m.AccountBalance.period_id.in_(bal_period_ids))
+        .where(m.AccountBalance.account_id.in_(list(acct_index.keys())) if acct_index else False)
+    )).scalars().all()
+
+    # account_id → (closing_net, opening_net)（按余额方向）。
+    by_acct: dict[int, dict] = {}
+    for b in bals:
+        acct = acct_index.get(b.account_id)
+        if acct is None:
+            continue
+        slot = by_acct.setdefault(b.account_id, {"closing": 0.0, "opening": 0.0})
+        if b.period_id == period_id:
+            slot["closing"] += _signed_net(
+                acct.account_type, acct.balance_direction,
+                _dec(b.closing_debit), _dec(b.closing_credit))
+        if b.period_id in first_period_ids:
+            slot["opening"] += _signed_net(
+                acct.account_type, acct.balance_direction,
+                _dec(b.opening_debit), _dec(b.opening_credit))
+
+    # code → (closing, opening)，供行映射查。
+    code_amt: dict[str, dict] = {}
+    for aid, slot in by_acct.items():
+        acct = acct_index[aid]
+        code_amt[acct.code] = {"closing": slot["closing"], "opening": slot["opening"]}
+
+    def _section(rows):
+        out, tot_c, tot_o = [], 0.0, 0.0
+        for line_key, cn, en, codes in rows:
+            c = sum(code_amt.get(code, {}).get("closing", 0.0) for code in codes)
+            o = sum(code_amt.get(code, {}).get("opening", 0.0) for code in codes)
+            tot_c += c
+            tot_o += o
+            out.append({
+                "line_key": line_key, "label": cn, "label_en": en,
+                "closing": round(c, 2), "opening": round(o, 2),
+            })
+        return out, round(tot_c, 2), round(tot_o, 2)
+
+    if standard == "CAS":
+        ac, ac_c, ac_o = _section(_CAS_BS_ASSET_CURRENT)
+        anc, anc_c, anc_o = _section(_CAS_BS_ASSET_NONCURRENT)
+        lc, lc_c, lc_o = _section(_CAS_BS_LIAB_CURRENT)
+        lnc, lnc_c, lnc_o = _section(_CAS_BS_LIAB_NONCURRENT)
+        eq, eq_c, eq_o = _section(_CAS_BS_EQUITY)
+        asset_groups = [
+            {"group_key": "current_assets", "label": "流动资产", "label_en": "Current assets",
+             "lines": ac, "subtotal_closing": ac_c, "subtotal_opening": ac_o},
+            {"group_key": "non_current_assets", "label": "非流动资产", "label_en": "Non-current assets",
+             "lines": anc, "subtotal_closing": anc_c, "subtotal_opening": anc_o},
+        ]
+        liab_groups = [
+            {"group_key": "current_liabilities", "label": "流动负债", "label_en": "Current liabilities",
+             "lines": lc, "subtotal_closing": lc_c, "subtotal_opening": lc_o},
+            {"group_key": "non_current_liabilities", "label": "非流动负债", "label_en": "Non-current liabilities",
+             "lines": lnc, "subtotal_closing": lnc_c, "subtotal_opening": lnc_o},
+        ]
+        equity_label, equity_label_en = "所有者权益", "Owner's equity"
+        retained_key = "retained_earnings"
+    else:
+        anc, anc_c, anc_o = _section(_HKFRS_BS_ASSET_NONCURRENT)
+        ac, ac_c, ac_o = _section(_HKFRS_BS_ASSET_CURRENT)
+        lc, lc_c, lc_o = _section(_HKFRS_BS_LIAB_CURRENT)
+        lnc, lnc_c, lnc_o = _section(_HKFRS_BS_LIAB_NONCURRENT)
+        eq, eq_c, eq_o = _section(_HKFRS_BS_EQUITY)
+        asset_groups = [
+            {"group_key": "non_current_assets", "label": "非流动资产", "label_en": "Non-current assets",
+             "lines": anc, "subtotal_closing": anc_c, "subtotal_opening": anc_o},
+            {"group_key": "current_assets", "label": "流动资产", "label_en": "Current assets",
+             "lines": ac, "subtotal_closing": ac_c, "subtotal_opening": ac_o},
+        ]
+        liab_groups = [
+            {"group_key": "current_liabilities", "label": "流动负债", "label_en": "Current liabilities",
+             "lines": lc, "subtotal_closing": lc_c, "subtotal_opening": lc_o},
+            {"group_key": "non_current_liabilities", "label": "非流动负债", "label_en": "Non-current liabilities",
+             "lines": lnc, "subtotal_closing": lnc_c, "subtotal_opening": lnc_o},
+        ]
+        equity_label, equity_label_en = "权益", "Equity"
+        retained_key = "retained_earnings"
+
+    assets_total_c = round(ac_c + anc_c, 2)
+    assets_total_o = round(ac_o + anc_o, 2)
+    liab_total_c = round(lc_c + lnc_c, 2)
+    liab_total_o = round(lc_o + lnc_o, 2)
+
+    # 损益未结转差额并入留存收益：BS 不列损益类，但 P&L 净额须落权益才平。
+    # 差额 = 资产 -（负债+权益已列科目），加到 retained_earnings 行（期末/年初分别算）。
+    eq_listed_c, eq_listed_o = eq_c, eq_o
+    plug_c = round(assets_total_c - liab_total_c - eq_listed_c, 2)
+    plug_o = round(assets_total_o - liab_total_o - eq_listed_o, 2)
+    for row in eq:
+        if row["line_key"] == retained_key:
+            row["closing"] = round(row["closing"] + plug_c, 2)
+            row["opening"] = round(row["opening"] + plug_o, 2)
+            row["includes_unposted_profit"] = True
+            break
+    equity_total_c = round(eq_listed_c + plug_c, 2)
+    equity_total_o = round(eq_listed_o + plug_o, 2)
+
+    return {
+        "report": "balance_sheet",
+        "company_id": cid,
+        "company_code": company.code,
+        "period_id": period_id,
+        "standard": standard,
+        "currency": company.currency,
+        "data": {
+            "assets": {
+                "groups": asset_groups,
+                "total_closing": assets_total_c,
+                "total_opening": assets_total_o,
+            },
+            "liabilities": {
+                "groups": liab_groups,
+                "total_closing": liab_total_c,
+                "total_opening": liab_total_o,
+            },
+            "equity": {
+                "label": equity_label,
+                "label_en": equity_label_en,
+                "lines": eq,
+                "total_closing": equity_total_c,
+                "total_opening": equity_total_o,
+            },
+        },
+        "check": {
+            "assets_total": assets_total_c,
+            "liabilities_plus_equity": round(liab_total_c + equity_total_c, 2),
+            "balanced": abs(assets_total_c - (liab_total_c + equity_total_c)) < 0.01,
+        },
+    }
+
+
+@router.get("/income-statement")
+async def income_statement(
+    company_id: int = Query(..., description="公司 id（必传，报表按单公司+准则口径出具）"),
+    period_id: int = Query(..., description="会计期间 id（出本期数；本年累计=同年度 period_number≤当期 累加）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """利润表（Income Statement）：营业收入-营业成本-费用=净利润，本期数 + 本年累计。
+
+    取数（AccountBalance 已过账口径，本位币）：
+    - 本期数 period：本期间各损益科目 period_debit/period_credit 取发生净额（按 sign 计入收入/扣减）。
+    - 本年累计 ytd：本会计年度 period_number≤当期 的各期发生额累加。
+    - 行项目 + 符号按准则常量表（_CAS_IS_LINES / _HKFRS_IS_LINES）；net_profit=逐行 sign 累加。
+    """
+    cid, err = _resolve_report_company(user, company_id)
+    if err:
+        return {"report": "income_statement", "company_id": company_id, "period_id": period_id,
+                "data": {}, "error": err}
+    company = await _get_company(db, cid)
+    if company is None:
+        return {"report": "income_statement", "company_id": company_id, "period_id": period_id,
+                "data": {}, "error": "公司不存在"}
+    standard = "HKFRS" if company.region == "HK" else "CAS"
+
+    _, fiscal_year_id, cur_pnum, ytd_period_ids, _ = await _period_year_window(db, period_id)
+    if fiscal_year_id is None:
+        return {"report": "income_statement", "company_id": cid, "period_id": period_id,
+                "standard": standard, "data": {}, "error": "会计期间不存在"}
+
+    accts = (await db.execute(
+        select(m.Account).where(m.Account.company_id == cid)
+    )).scalars().all()
+    acct_index = {a.id: a for a in accts}
+
+    bals = (await db.execute(
+        select(m.AccountBalance)
+        .where(m.AccountBalance.company_id == cid)
+        .where(m.AccountBalance.period_id.in_(ytd_period_ids) if ytd_period_ids else False)
+        .where(m.AccountBalance.account_id.in_(list(acct_index.keys())) if acct_index else False)
+    )).scalars().all()
+
+    # code → {period_net, ytd_net}，损益发生额按余额方向取净（收入类 CREDIT=贷-借；费用/成本 DEBIT=借-贷）。
+    code_amt: dict[str, dict] = {}
+    for b in bals:
+        acct = acct_index.get(b.account_id)
+        if acct is None:
+            continue
+        net = _signed_net(acct.account_type, acct.balance_direction,
+                          _dec(b.period_debit), _dec(b.period_credit))
+        slot = code_amt.setdefault(acct.code, {"period": 0.0, "ytd": 0.0})
+        slot["ytd"] += net
+        if b.period_id == period_id:
+            slot["period"] += net
+
+    lines_def = _CAS_IS_LINES if standard == "CAS" else _HKFRS_IS_LINES
+    lines = []
+    net_period = 0.0
+    net_ytd = 0.0
+    for line_key, cn, en, sign, codes in lines_def:
+        # 收入类科目净额已是「贷方正」，费用/成本类已是「借方正」。
+        # 行展示值取该类科目净额的绝对额（正常方向为正）；sign 标记其对净利润的加减。
+        p = sum(code_amt.get(code, {}).get("period", 0.0) for code in codes)
+        y = sum(code_amt.get(code, {}).get("ytd", 0.0) for code in codes)
+        net_period += sign * p
+        net_ytd += sign * y
+        lines.append({
+            "line_key": line_key, "label": cn, "label_en": en,
+            "sign": sign,
+            "period": round(p, 2), "ytd": round(y, 2),
+        })
+
+    return {
+        "report": "income_statement",
+        "company_id": cid,
+        "company_code": company.code,
+        "period_id": period_id,
+        "period_number": cur_pnum,
+        "standard": standard,
+        "currency": company.currency,
+        "data": {
+            "lines": lines,
+            "net_profit": {
+                "label": "净利润",
+                "label_en": "Net profit",
+                "period": round(net_period, 2),
+                "ytd": round(net_ytd, 2),
+            },
+        },
+    }
+
+
+@router.get("/cash-flow-statement")
+async def cash_flow_statement(
+    company_id: int = Query(..., description="公司 id（必传，报表按单公司口径出具）"),
+    period_id: int = Query(..., description="会计期间 id（出本期数；本年累计=同年度 period_number≤当期 累加）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """现金流量表（Cash Flow Statement）：从已过账凭证分录的 cashflow_item 归集本期/本年累计。
+
+    取数（已过账 VoucherEntry，本位币）：
+    - 按 VoucherEntry.cashflow_item_id → CashflowItem 树（经营/投资/筹资，父项为分类锚点）归集。
+    - 流量金额 = 该分录本位币发生额（base_debit/base_credit 取非零边的绝对值）；direction=IN/OUT 由 CashflowItem 标。
+    - 经营/投资/筹资三大类 = 各自子项 (IN 之和 - OUT 之和)；现金净增加额 = 三类合计。
+    - 现金类分录未标 cashflow_item 的（cashflow_item_id 为空）归「未分类」桶（unclassified），供财务补标。
+    - 本期数 = 本期间凭证；本年累计 = 同会计年度 period_number≤当期 各期凭证累加。
+    """
+    cid, err = _resolve_report_company(user, company_id)
+    if err:
+        return {"report": "cash_flow_statement", "company_id": company_id, "period_id": period_id,
+                "data": {}, "error": err}
+    company = await _get_company(db, cid)
+    if company is None:
+        return {"report": "cash_flow_statement", "company_id": company_id, "period_id": period_id,
+                "data": {}, "error": "公司不存在"}
+
+    _, fiscal_year_id, cur_pnum, ytd_period_ids, _ = await _period_year_window(db, period_id)
+    if fiscal_year_id is None:
+        return {"report": "cash_flow_statement", "company_id": cid, "period_id": period_id,
+                "data": {}, "error": "会计期间不存在"}
+
+    # 现金流量项目树（本公司）。
+    cf_items = (await db.execute(
+        select(m.CashflowItem).where(m.CashflowItem.company_id == cid)
+    )).scalars().all()
+    cf_index = {c.id: c for c in cf_items}
+
+    # 已过账凭证分录（本年度截至当期），按 cashflow_item_id 聚合本位币发生额（period / ytd）。
+    rows = (await db.execute(
+        select(
+            m.VoucherEntry.cashflow_item_id,
+            m.Voucher.period_id,
+            func.coalesce(func.sum(m.VoucherEntry.base_debit), 0),
+            func.coalesce(func.sum(m.VoucherEntry.base_credit), 0),
+        )
+        .join(m.Voucher, m.VoucherEntry.voucher_id == m.Voucher.id)
+        .where(m.Voucher.company_id == cid)
+        .where(m.Voucher.status == "POSTED")
+        .where(m.Voucher.period_id.in_(ytd_period_ids) if ytd_period_ids else False)
+        .group_by(m.VoucherEntry.cashflow_item_id, m.Voucher.period_id)
+    )).all()
+
+    # item_id → {period_amount, ytd_amount}。金额取「现金方向」净额：
+    # IN 项目 = 借方增（base_debit-base_credit）；OUT 项目 = 贷方增（base_credit-base_debit）。
+    # 未标项目（None）单列未分类，金额取 |debit-credit| 仅作提示，不并入三大类。
+    item_amt: dict = {}
+    unclassified = {"period": 0.0, "ytd": 0.0}
+    for item_id, pid, dr, cr in rows:
+        d, c = _dec(dr), _dec(cr)
+        if item_id is None:
+            net = abs(d - c)
+            unclassified["ytd"] += net
+            if pid == period_id:
+                unclassified["period"] += net
+            continue
+        item = cf_index.get(item_id)
+        if item is None:
+            continue
+        net = (d - c) if item.direction == "IN" else (c - d)
+        slot = item_amt.setdefault(item_id, {"period": 0.0, "ytd": 0.0})
+        slot["ytd"] += net
+        if pid == period_id:
+            slot["period"] += net
+
+    # 树结构：父项（parent_id 为空）为三大类锚点，子项挂下面。无父则自成顶层。
+    children: dict[int, list] = {}
+    roots = []
+    for item in sorted(cf_items, key=lambda x: x.code):
+        if item.parent_id is None:
+            roots.append(item)
+        else:
+            children.setdefault(item.parent_id, []).append(item)
+
+    def _line(item):
+        a = item_amt.get(item.id, {"period": 0.0, "ytd": 0.0})
+        return {
+            "item_id": item.id, "code": item.code, "name": item.name,
+            "direction": item.direction,
+            "period": round(a["period"], 2), "ytd": round(a["ytd"], 2),
+        }
+
+    activities = []
+    for root in roots:
+        kids = sorted(children.get(root.id, []), key=lambda x: x.code)
+        child_lines = [_line(k) for k in kids]
+        # 大类小计 = 自身分录(若有) + 各子项。
+        own = item_amt.get(root.id, {"period": 0.0, "ytd": 0.0})
+        sub_p = round(own["period"] + sum(l["period"] for l in child_lines), 2)
+        sub_y = round(own["ytd"] + sum(l["ytd"] for l in child_lines), 2)
+        activities.append({
+            "item_id": root.id, "code": root.code, "name": root.name,
+            "direction": root.direction,
+            "lines": child_lines,
+            "subtotal_period": sub_p,
+            "subtotal_ytd": sub_y,
+        })
+
+    net_increase_period = round(sum(a["subtotal_period"] for a in activities), 2)
+    net_increase_ytd = round(sum(a["subtotal_ytd"] for a in activities), 2)
+
+    return {
+        "report": "cash_flow_statement",
+        "company_id": cid,
+        "company_code": company.code,
+        "period_id": period_id,
+        "period_number": cur_pnum,
+        "currency": company.currency,
+        "data": {
+            "activities": activities,
+            "unclassified": {
+                "label": "未分类现金流量（凭证未标现金流量项目）",
+                "period": round(unclassified["period"], 2),
+                "ytd": round(unclassified["ytd"], 2),
+            },
+            "net_increase": {
+                "label": "现金及现金等价物净增加额",
+                "period": net_increase_period,
+                "ytd": net_increase_ytd,
+            },
+        },
+    }
+
+
+@router.get("/aux-balance")
+async def aux_balance(
+    company_id: int = Query(..., description="公司 id（必传，单公司口径）"),
+    period_id: int = Query(..., description="会计期间 id（按已过账凭证聚合本期/本年累计发生额）"),
+    dimension_id: int = Query(..., description="辅助核算维度 id（AuxiliaryDimension）；其 source_type 决定按哪根轴分组"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """核算维度余额表（Auxiliary Balance）：按某辅助核算维度分组的科目发生额。
+
+    取数（已过账 VoucherEntry，本位币）：
+    - dimension_id → AuxiliaryDimension.source_type 决定分组轴：
+      CUSTOMER/SUPPLIER/EMPLOYEE → aux_party_type==source_type 时按 aux_party_id 分组；
+      DEPT → 按 aux_dept_id 分组；PROJECT → 按 aux_project_id 分组。
+    - 每组（维度值 × 科目）出 本期借/贷 + 本年累计借/贷 + 净额（按科目余额方向）。
+    - 本期 = 本期间凭证；本年累计 = 同会计年度 period_number≤当期 各期凭证。
+    - 项目轴附带 project 名称；客户/供应商轴附带其 code/name 供前端显示。
+    """
+    cid, err = _resolve_report_company(user, company_id)
+    if err:
+        return {"report": "aux_balance", "company_id": company_id, "period_id": period_id,
+                "dimension_id": dimension_id, "data": [], "error": err}
+
+    dim = (await db.execute(
+        select(m.AuxiliaryDimension)
+        .where(m.AuxiliaryDimension.id == dimension_id)
+        .where(m.AuxiliaryDimension.company_id == cid)
+    )).scalar_one_or_none()
+    if dim is None:
+        return {"report": "aux_balance", "company_id": cid, "period_id": period_id,
+                "dimension_id": dimension_id, "data": [], "error": "辅助核算维度不存在或不属本公司"}
+    source_type = dim.source_type
+
+    _, fiscal_year_id, cur_pnum, ytd_period_ids, _ = await _period_year_window(db, period_id)
+    if fiscal_year_id is None:
+        return {"report": "aux_balance", "company_id": cid, "period_id": period_id,
+                "dimension_id": dimension_id, "source_type": source_type, "data": [],
+                "error": "会计期间不存在"}
+
+    # 选定分组列。
+    if source_type == "DEPT":
+        group_col = m.VoucherEntry.aux_dept_id
+        axis_filter = m.VoucherEntry.aux_dept_id.isnot(None)
+    elif source_type == "PROJECT":
+        group_col = m.VoucherEntry.aux_project_id
+        axis_filter = m.VoucherEntry.aux_project_id.isnot(None)
+    else:  # CUSTOMER/SUPPLIER/EMPLOYEE → aux_party_*
+        group_col = m.VoucherEntry.aux_party_id
+        axis_filter = m.VoucherEntry.aux_party_type == source_type
+
+    rows = (await db.execute(
+        select(
+            group_col,
+            m.VoucherEntry.account_id,
+            m.Voucher.period_id,
+            func.coalesce(func.sum(m.VoucherEntry.base_debit), 0),
+            func.coalesce(func.sum(m.VoucherEntry.base_credit), 0),
+        )
+        .join(m.Voucher, m.VoucherEntry.voucher_id == m.Voucher.id)
+        .where(m.Voucher.company_id == cid)
+        .where(m.Voucher.status == "POSTED")
+        .where(m.Voucher.period_id.in_(ytd_period_ids) if ytd_period_ids else False)
+        .where(axis_filter)
+        .group_by(group_col, m.VoucherEntry.account_id, m.Voucher.period_id)
+    )).all()
+
+    # 取齐相关科目方向 + 维度值名称解析。
+    acct_ids = {aid for _, aid, _, _, _ in rows}
+    acct_index: dict[int, m.Account] = {}
+    if acct_ids:
+        accts = (await db.execute(
+            select(m.Account).where(m.Account.id.in_(list(acct_ids)))
+        )).scalars().all()
+        acct_index = {a.id: a for a in accts}
+
+    group_ids = {gid for gid, _, _, _, _ in rows if gid is not None}
+    name_map: dict[int, dict] = {}
+    if group_ids:
+        gids = list(group_ids)
+        if source_type == "PROJECT":
+            for p in (await db.execute(select(m.Project).where(m.Project.id.in_(gids)))).scalars().all():
+                name_map[p.id] = {"code": "", "name": p.name}
+        elif source_type == "CUSTOMER":
+            for c in (await db.execute(select(m.Customer).where(m.Customer.id.in_(gids)))).scalars().all():
+                name_map[c.id] = {"code": c.code, "name": c.name}
+        elif source_type == "SUPPLIER":
+            for s in (await db.execute(select(m.Supplier).where(m.Supplier.id.in_(gids)))).scalars().all():
+                name_map[s.id] = {"code": s.code, "name": s.name}
+        # DEPT/EMPLOYEE 无独立主数据表，仅以 id 标识（弱引用，前端可显示 id）。
+
+    # (group_id, account_id) → {period_d, period_c, ytd_d, ytd_c}。
+    cell: dict = {}
+    for gid, aid, pid, dr, cr in rows:
+        d, c = _dec(dr), _dec(cr)
+        slot = cell.setdefault((gid, aid), {"pd": 0.0, "pc": 0.0, "yd": 0.0, "yc": 0.0})
+        slot["yd"] += d
+        slot["yc"] += c
+        if pid == period_id:
+            slot["pd"] += d
+            slot["pc"] += c
+
+    # 按维度值分组聚合。
+    grouped: dict = {}
+    for (gid, aid), s in cell.items():
+        acct = acct_index.get(aid)
+        direction = acct.balance_direction if acct else "DEBIT"
+        period_net = _signed_net(None, direction, s["pd"], s["pc"])
+        ytd_net = _signed_net(None, direction, s["yd"], s["yc"])
+        g = grouped.setdefault(gid, {"accounts": [], "total_period_net": 0.0, "total_ytd_net": 0.0})
+        g["accounts"].append({
+            "account_id": aid,
+            "account_code": acct.code if acct else "",
+            "account_name": acct.name if acct else "",
+            "balance_direction": direction,
+            "direction_label": "借" if direction == "DEBIT" else "贷",
+            "period_debit": round(s["pd"], 2),
+            "period_credit": round(s["pc"], 2),
+            "ytd_debit": round(s["yd"], 2),
+            "ytd_credit": round(s["yc"], 2),
+            "period_net": round(period_net, 2),
+            "ytd_net": round(ytd_net, 2),
+        })
+        g["total_period_net"] += period_net
+        g["total_ytd_net"] += ytd_net
+
+    data = []
+    for gid, g in grouped.items():
+        nm = name_map.get(gid, {})
+        g["accounts"].sort(key=lambda r: r["account_code"])
+        data.append({
+            "group_id": gid,
+            "group_code": nm.get("code", ""),
+            "group_name": nm.get("name", "") or (f"#{gid}" if gid is not None else "（未标维度）"),
+            "accounts": g["accounts"],
+            "total_period_net": round(g["total_period_net"], 2),
+            "total_ytd_net": round(g["total_ytd_net"], 2),
+        })
+    data.sort(key=lambda r: (r["group_code"], r["group_id"] or 0))
+
+    return {
+        "report": "aux_balance",
+        "company_id": cid,
+        "period_id": period_id,
+        "period_number": cur_pnum,
+        "dimension_id": dimension_id,
+        "dimension_code": dim.code,
+        "dimension_name": dim.name,
+        "source_type": source_type,
+        "data": data,
+    }
+
+
 @router.get("/periods")
 async def list_periods(
     db: AsyncSession = Depends(get_db),
