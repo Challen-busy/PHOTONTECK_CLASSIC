@@ -73,3 +73,9 @@ export const getWmsReport = (name, params = {}) => api.get(`/wms/reports/${name}
 export const importWmsInventoryCsv = (formData) => api.post('/wms/import/inventory-csv', formData, {
   headers: { 'Content-Type': 'multipart/form-data' },
 });
+
+// 财务·总账（finance-gl）报表只读端点（routers/reports.py，已实现 + 按 _company_filter 隔离）
+export const getAccountingPeriods = () => api.get('/reports/periods');
+export const getTrialBalance = (params = {}) => api.get('/reports/trial_balance', { params });
+export const getAccountBalanceReport = (params = {}) => api.get('/reports/account_balance', { params });
+export const getAgingAnalysis = (params = {}) => api.get('/reports/aging_analysis', { params });

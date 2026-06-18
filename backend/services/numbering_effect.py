@@ -61,6 +61,9 @@ NUMBER_COLUMN_BY_DOC_TYPE: dict[str, str] = {
     # 注：CUSTOMS_LICENSE 进出口证为 __queryable__ 主数据台账（无 START 流程），
     #     其 LIC-YYMM-NNN 取号在主数据写路径调 allocate_next_number，不挂此 START effect。
     "CUSTOMS_DECLARATION": "declaration_number",
+    # 总账·第一波（finance-gl）：凭证号 PZ-YYMM-NNN（记账凭证连号）。建单进 START 取号。
+    # 红字单走 finance.red_reversal 命令直接建草稿（临时号 RED-<原号>），不经此 START effect。
+    "VOUCHER": "voucher_number",
 }
 
 # 引擎默认兜底号形态：{PREFIX}-{YYMMDD}-{6位HEX}（_auto_fill_required_fields）。

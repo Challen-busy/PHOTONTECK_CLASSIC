@@ -62,6 +62,8 @@ _EXTENSION_MODULES = (
     "services.numbering_effect",
     # 段4a：报关域 validator/effect（合规五件套硬拦 / 香港退香港 / 单号回写 / 报关费分摊回写到岸成本）
     "services.customs",
+    # 总账·第一波（finance-gl）：过账/反过账 effect + 借贷平衡/期间锁/职责分离 validator + 红冲命令
+    "services.finance_posting",
 )
 _loaded = False
 

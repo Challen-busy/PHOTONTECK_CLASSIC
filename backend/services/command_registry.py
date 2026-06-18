@@ -74,6 +74,8 @@ def load_commands() -> None:
     import services.template_render  # noqa: F401
     # 段4a 报关域命令（顺丰物流框架壳 OFF / 资料清单导出壳）
     import services.customs_commands  # noqa: F401
+    # 总账·第一波（finance-gl）：红冲命令 finance.red_reversal
+    import services.finance_posting  # noqa: F401
 
     _loaded = True
 

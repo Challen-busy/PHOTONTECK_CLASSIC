@@ -1281,6 +1281,16 @@ class Voucher(AuditMixin, Base):
     source_doc_id = Column(BigInteger, nullable=True)
     posted_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
     posted_at = Column(DateTime, nullable=True)
+    # 总账·第一波（finance-gl）：凭证字（记/收/付/转）+ 审核 / 出纳复核 / 过账三段留痕（职责分离基准）。
+    voucher_word_id = Column(Integer, ForeignKey("voucher_word.id"), nullable=True)
+    audited_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 审核人（DRAFT→AUDITED）
+    audited_at = Column(DateTime, nullable=True)
+    reviewed_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 出纳复核（资金类 AUDITED→REVIEWED）
+    reviewed_at = Column(DateTime, nullable=True)
+    # 红冲回链（无「蓝冲」）：红字反向凭证 reversed_voucher_id 指向被冲原单；reversal_type=NORMAL/RED。
+    reversed_voucher_id = Column(Integer, ForeignKey("voucher.id"), nullable=True)
+    reversal_type = Column(String(10), nullable=True)  # NORMAL（普通蓝字单，可空）/ RED（红字反向单）
+    is_reversed = Column(Boolean, default=False)  # 原单是否已被红冲（防重复红冲）
     __table_args__ = (UniqueConstraint("company_id", "voucher_number"),)
 
 
@@ -1292,10 +1302,26 @@ class VoucherEntry(Base):
     line_number = Column(SmallInteger, nullable=False)
     account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
     description = Column(String(200), default="")
+    # 原币借贷（debit/credit 历史上即「原币」口径；本位币新增 base_debit/base_credit）。
     debit = Column(Numeric(16, 2), default=0)
     credit = Column(Numeric(16, 2), default=0)
     currency = Column(String(3), default="CNY")
     exchange_rate = Column(Numeric(12, 6), default=1)
+    # 总账·第一波（finance-gl）双金额：本位币借贷 = 原币 × exchange_rate。过账/平衡校验只认本位币。
+    # 兼容旧数据：迁移把存量行 base_* 回填为原币值（本币记账时 rate=1，base 等于原币）。
+    base_debit = Column(Numeric(16, 2), default=0)
+    base_credit = Column(Numeric(16, 2), default=0)
+    # 辅助核算（科目级，往来对象/部门/项目）。aux_party_type 取值见 AuxiliaryDimension.source_type
+    # （CUSTOMER/SUPPLIER/EMPLOYEE…）；aux_party_id 指向对应业务主键（弱引用，不建 FK，跨表多态）。
+    aux_party_type = Column(String(20), nullable=True)
+    aux_party_id = Column(Integer, nullable=True)
+    aux_dept_id = Column(Integer, nullable=True)
+    aux_project_id = Column(Integer, nullable=True)
+    # 现金流量项目（FK cashflow_item）。
+    cashflow_item_id = Column(Integer, ForeignKey("cashflow_item.id"), nullable=True)
+    # 资金类结算（结算方式/结算号，如 现金/转账/票据 + 票号）。
+    settlement_method = Column(String(20), default="")
+    settlement_no = Column(String(50), default="")
     __table_args__ = (UniqueConstraint("voucher_id", "line_number"),)
 
     account = relationship("Account")
@@ -1326,6 +1352,54 @@ class ExchangeRate(Base):
     rate = Column(Numeric(12, 6), nullable=False)
     effective_date = Column(Date, nullable=False, index=True)
     __table_args__ = (UniqueConstraint("from_currency", "to_currency", "effective_date"),)
+
+
+# ============================================================
+# 总账·第一波（finance-gl）主数据：凭证字 / 辅助核算维度 / 现金流量项目
+# 与 Account/AccountingPeriod 同款：普通主数据（Base 直继承 + __queryable__，无 AuditMixin），
+# 带 company_id 隔离 + (company_id, code) 唯一。
+# ============================================================
+
+class VoucherWord(Base):
+    """凭证字（记/收/付/转）。code 如「记」「收」「付」「转」；restrict_multi_dc=收付字
+    限制借贷只一方（如「收」字限借方现金/「付」字限贷方银行），转账字不限。"""
+    __tablename__ = "voucher_word"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
+    code = Column(String(10), nullable=False)  # 记/收/付/转
+    name = Column(String(50), nullable=False)
+    restrict_multi_dc = Column(Boolean, default=False)  # 收付字限制借贷只一方
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code"),)
+
+
+class AuxiliaryDimension(Base):
+    """辅助核算维度主数据（往来对象/部门/项目等）。source_type=CUSTOMER/SUPPLIER/EMPLOYEE/DEPT/PROJECT；
+    VoucherEntry.aux_party_type/aux_dept_id/aux_project_id 引用对应业务主键（弱引用，多态）。"""
+    __tablename__ = "auxiliary_dimension"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
+    code = Column(String(30), nullable=False)
+    name = Column(String(100), nullable=False)
+    source_type = Column(String(20), nullable=False)  # CUSTOMER/SUPPLIER/EMPLOYEE/DEPT/PROJECT
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code"),)
+
+
+class CashflowItem(Base):
+    """现金流量项目（如「销售商品收到的现金」）。direction=IN 流入 / OUT 流出；parent_id 自引用建分类树。"""
+    __tablename__ = "cashflow_item"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False)
+    code = Column(String(20), nullable=False)
+    name = Column(String(100), nullable=False)
+    direction = Column(String(10), nullable=False)  # IN 流入 / OUT 流出
+    parent_id = Column(Integer, ForeignKey("cashflow_item.id"), nullable=True)
+    is_active = Column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("company_id", "code"),)
 
 
 class AccountsReceivable(AuditMixin, Base):
