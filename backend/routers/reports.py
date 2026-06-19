@@ -2175,9 +2175,15 @@ async def customer_statement(
     if err:
         return {"report": "customer_statement", "error": err, "transactions": []}
 
-    cust = (await db.execute(
-        select(m.Customer).where(m.Customer.id == customer_id)
-    )).scalar_one_or_none()
+    # ★多租户隔离:客户必须落在调用者可见公司内,否则视为不存在(防 IDOR 跨公司客户信息泄露)。
+    cust_stmt = select(m.Customer).where(m.Customer.id == customer_id)
+    if single_cid is not None:
+        cust_stmt = cust_stmt.where(m.Customer.company_id == single_cid)
+    elif company_ids:
+        cust_stmt = cust_stmt.where(m.Customer.company_id.in_(company_ids))
+    cust = (await db.execute(cust_stmt)).scalar_one_or_none()
+    if cust is None:
+        return {"report": "customer_statement", "error": "客户不存在或无权访问", "transactions": []}
 
     d_from = date.fromisoformat(date_from[:10]) if date_from else None
     d_to = date.fromisoformat(date_to[:10]) if date_to else None

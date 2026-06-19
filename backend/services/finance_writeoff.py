@@ -256,6 +256,14 @@ def _sort_debits(debits: list, spec: _SideSpec, match_rule: str) -> list:
     return sorted(debits, key=lambda d: d.id)
 
 
+def _same_party(d, c, debit_spec: _SideSpec, credit_spec: _SideSpec) -> bool:
+    """自动核销只在【同一往来对象】内配对——防止把 A 客户的应收和 B 客户的收款错冲。
+    任一侧 party 为空、或两侧不相等,一律不配对。"""
+    dp = getattr(d, debit_spec.party_col, None) if debit_spec.party_col else None
+    cp = getattr(c, credit_spec.party_col, None) if credit_spec.party_col else None
+    return dp is not None and cp is not None and dp == cp
+
+
 def _auto_match(debits: list, credits: list, debit_spec: _SideSpec, credit_spec: _SideSpec,
                 match_rule: str) -> list[tuple]:
     """按 match_rule 把债权未核销额 vs 收款未核销额贪心配对。返回 [(debit_doc, credit_doc, amount)...]。
@@ -287,6 +295,8 @@ def _auto_match(debits: list, credits: list, debit_spec: _SideSpec, credit_spec:
             for c in sorted_credits:
                 if open_c[c.id] <= 0:
                     continue
+                if not _same_party(d, c, debit_spec, credit_spec):
+                    continue
                 if _q2(open_d[d.id]) == _q2(open_c[c.id]):
                     amt = _q2(open_d[d.id])
                     pairs.append((d, c, amt))
@@ -302,6 +312,8 @@ def _auto_match(debits: list, credits: list, debit_spec: _SideSpec, credit_spec:
             if open_d[d.id] <= 0:
                 break
             if open_c[c.id] <= 0:
+                continue
+            if not _same_party(d, c, debit_spec, credit_spec):
                 continue
             amt = _q2(min(open_d[d.id], open_c[c.id]))
             if amt <= 0:
