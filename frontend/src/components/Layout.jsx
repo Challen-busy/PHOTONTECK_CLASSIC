@@ -147,12 +147,6 @@ const buildMenuItems = (todoCount, isAdmin) => {
         { key: '/finance/ledger-report', label: '账表查询（科目余额 / 明细账）' },
         { key: '/finance/period-close', label: '期末结账' },
         { key: '/finance/ar', label: '应收管理' },
-        { key: '/finance/ap', label: '应付视图' },
-        { key: '/finance/advance', label: '预收 / 预付到账确认' },
-        { key: '/finance/credit-note', label: 'Credit Note' },
-        { key: '/finance/kingdee-outbox', label: '单据推送中心（金蝶）' },
-        { key: '/finance/chain', label: '单据链路追踪' },
-        { key: '/finance/reconcile', label: '对账' },
       ],
     },
     {

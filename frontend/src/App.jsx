@@ -246,12 +246,6 @@ function AppRoutes() {
         <Route path="finance/ledger-report" element={<LedgerReportPage />} />
         <Route path="finance/period-close" element={<PeriodClosePage />} />
         <Route path="finance/ar" element={<ARPage />} />
-        <Route path="finance/ap" element={PH('应付视图（只读）', '财务视图 / 单据中心')} />
-        <Route path="finance/advance" element={PH('预收 / 预付到账确认', '财务视图 / 单据中心')} />
-        <Route path="finance/credit-note" element={PH('Credit Note', '财务视图 / 单据中心')} />
-        <Route path="finance/kingdee-outbox" element={PH('单据推送中心（金蝶 outbox）', '财务视图 / 单据中心')} />
-        <Route path="finance/chain" element={PH('单据链路追踪', '财务视图 / 单据中心')} />
-        <Route path="finance/reconcile" element={PH('对账', '财务视图 / 单据中心')} />
 
         {/* 6 报表 / 看板 */}
         <Route path="reports/kpi" element={PH('经营 KPI', '报表 / 看板')} />
