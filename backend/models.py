@@ -65,6 +65,7 @@ class Company(Base):
     invoice_title = Column(Text, default="")  # 发票抬头（占位待甲方签字）
     numbering_prefix = Column(String(20), default="")  # 单据编号前缀
     kingdee_org_code = Column(String(40), default="")  # 金蝶组织映射码（占位）
+    credit_control_enabled = Column(Boolean, default=False)  # 信用控制总开关（关=finance_credit validator 全 pass）
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
 
@@ -2071,6 +2072,7 @@ class APPayment(AuditMixin, Base):
 
 
 class SupplierCredit(AuditMixin, Base):
+    """供应商信用档案（finance-gl 信用管理 = 金蝶信用档案·供应商侧；扩存量精简表）。"""
     __tablename__ = "supplier_credit"
     __queryable__ = True
     id = Column(Integer, primary_key=True)
@@ -2079,21 +2081,130 @@ class SupplierCredit(AuditMixin, Base):
     currency = Column(String(3), default="USD")
     used_amount = Column(Numeric(16, 2), default=0)
     warning_threshold_pct = Column(Integer, default=80)
+    # --- 信用管理：金蝶信用档案字段（新增列均带 default，存量行兼容）---
+    single_limit = Column(Numeric(16, 2), default=0)          # 单笔限额（0=不限）
+    overdue_days = Column(Integer, default=0)                 # 逾期天数阈值（0=不控）
+    overdue_amount = Column(Numeric(16, 2), default=0)        # 逾期额度阈值（0=不控）
+    overdue_ratio = Column(Numeric(5, 2), default=0)          # 逾期比例%阈值（0=不控）
+    check_rule_id = Column(Integer, ForeignKey("credit_check_rule.id"), nullable=True)  # 检查规则
+    credit_status = Column(String(10), default="NORMAL")      # 信用状态 NORMAL 正常 / FROZEN 冻结
+    credit_rating = Column(String(10), default="")            # 信用等级
+    credit_period_days = Column(Integer, default=30)
     __table_args__ = (UniqueConstraint("company_id", "supplier_id"),)
 
 
 class CustomerCredit(AuditMixin, Base):
+    """客户信用档案（finance-gl 信用管理 = 金蝶信用档案·客户侧；扩存量精简表）。
+
+    信用控制核心主数据：信用额度 / 单笔限额 / 逾期阈值（天数·额度·比例）/ 检查规则 / 信用状态·等级。
+    used_amount = 已占用额度（缓存镜像，由 finance_credit 占用/释放 effect 维护；可经 finance.recompute_credit 重算）。
+    """
     __tablename__ = "customer_credit"
     __queryable__ = True
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey("customer.id"), nullable=False)
     credit_limit = Column(Numeric(16, 2), nullable=False)
     currency = Column(String(3), default="USD")
-    used_amount = Column(Numeric(16, 2), default=0)
+    used_amount = Column(Numeric(16, 2), default=0)          # 已占用额度（缓存，effect 维护）
     warning_threshold_pct = Column(Integer, default=80)
     credit_period_days = Column(Integer, default=30)
-    credit_rating = Column(String(10), default="")
+    credit_rating = Column(String(10), default="")           # 信用等级
+    # --- 信用管理：金蝶信用档案字段（新增列均带 default，存量行兼容）---
+    single_limit = Column(Numeric(16, 2), default=0)         # 单笔限额（0=不限）
+    overdue_days = Column(Integer, default=0)                # 逾期天数阈值（0=不控）
+    overdue_amount = Column(Numeric(16, 2), default=0)       # 逾期额度阈值（0=不控）
+    overdue_ratio = Column(Numeric(5, 2), default=0)         # 逾期比例%阈值（0=不控）
+    check_rule_id = Column(Integer, ForeignKey("credit_check_rule.id"), nullable=True)  # 检查规则
+    credit_status = Column(String(10), default="NORMAL")     # 信用状态 NORMAL 正常 / FROZEN 冻结
     __table_args__ = (UniqueConstraint("company_id", "customer_id"),)
+
+
+class CreditCheckRule(AuditMixin, Base):
+    """信用检查规则（金蝶信用政策；MasterDataPage 单态 ACTIVE 自环编辑）。
+
+    定义「哪些单据在哪个时点占用/检查信用额度、用什么控制策略」。信用档案引用本规则；
+    finance_credit validator 对每个 doc_type 查命中规则行 → 在 check_point 按 control_strategy 校验。
+    """
+    __tablename__ = "credit_check_rule"
+    __doc_types__ = ("CREDIT_CHECK_RULE",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False)
+    name = Column(String(100), nullable=False)
+    is_default = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    remark = Column(String(200), default="")
+    __table_args__ = (UniqueConstraint("company_id", "code", name="ux_credit_check_rule_code"),)
+
+
+class CreditCheckRuleLine(Base):
+    """信用检查规则明细：每行 = 一个单据类型在某时点的占用/检查/控制策略配置。"""
+    __tablename__ = "credit_check_rule_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    credit_check_rule_id = Column(Integer, ForeignKey("credit_check_rule.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    doc_name = Column(String(50), default="")               # 单据名称（如 应收单 / 销售订单）
+    doc_type = Column(String(40), nullable=False)           # 单据 doc_type（ACCOUNTS_RECEIVABLE / SALES_ORDER ...）
+    check_point = Column(String(10), default="AUDIT")       # 检查及更新时点 SAVE / SUBMIT / AUDIT
+    control_strategy = Column(String(10), default="WARN")   # 控制策略 NONE 不控 / WARN 提示 / STRICT 严格控制
+    update_credit = Column(Boolean, default=True)           # 更新信用额度（占用）
+    check_credit_limit = Column(Boolean, default=True)      # 检查信用额度
+    check_single_limit = Column(Boolean, default=False)     # 检查单笔限额
+    check_overdue = Column(Boolean, default=False)          # 检查逾期（天数/额度/比例）
+    __table_args__ = (UniqueConstraint("credit_check_rule_id", "line_number", name="ux_credit_check_rule_line"),)
+
+
+class CreditOccupation(Base):
+    """信用占用流水（★信用引擎核心，单一事实源，可重算）。
+
+    一行 = 某往来对象被某单据占用的一笔信用额度。占用时点 effect 写入；释放时点（收款核销/出库/作废）
+    置 is_released。available = credit_limit − Σ(未释放 occupy_amount) + 有效临时/特批额度。
+    """
+    __tablename__ = "credit_occupation"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False, index=True)
+    party_type = Column(String(10), nullable=False, default="CUSTOMER")  # CUSTOMER / SUPPLIER
+    party_id = Column(Integer, nullable=False, index=True)
+    currency = Column(String(3), default="")
+    doc_type = Column(String(40), nullable=False)
+    doc_id = Column(BigInteger, nullable=False, index=True)
+    occupy_amount = Column(Numeric(16, 2), nullable=False, default=0)    # 占用额（原币）
+    occupy_date = Column(Date, nullable=True)
+    is_released = Column(Boolean, default=False)                         # 释放标记
+    released_at = Column(DateTime, nullable=True)
+    created_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    __table_args__ = (
+        Index("ix_credit_occupation_party", "company_id", "party_type", "party_id", "is_released"),
+    )
+
+
+class CreditOverlimitLog(Base):
+    """信用超标记录（金蝶信用超标记录查询）：validator 触发超标（提示/阻断）时落一行留痕。"""
+    __tablename__ = "credit_overlimit_log"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False, index=True)
+    party_type = Column(String(10), nullable=False, default="CUSTOMER")
+    party_id = Column(Integer, nullable=False, index=True)
+    doc_type = Column(String(40), default="")
+    doc_id = Column(BigInteger, nullable=True)
+    doc_no = Column(String(50), default="")
+    biz_date = Column(Date, nullable=True)
+    occupy_amount = Column(Numeric(16, 2), default=0)        # 本单占用额
+    credit_limit = Column(Numeric(16, 2), default=0)
+    available_before = Column(Numeric(16, 2), default=0)     # 占用前可用额度
+    over_amount = Column(Numeric(16, 2), default=0)          # 超标额度
+    over_type = Column(String(20), default="CREDIT_LIMIT")   # CREDIT_LIMIT / SINGLE_LIMIT / OVERDUE / FROZEN
+    control_strategy = Column(String(10), default="WARN")    # 命中时的控制策略
+    action = Column(String(10), default="WARN")              # WARN 仅告警 / BLOCK 阻断
+    handled_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    __table_args__ = (
+        Index("ix_credit_overlimit_party", "company_id", "party_type", "party_id"),
+    )
 
 
 class NotesReceivable(AuditMixin, Base):

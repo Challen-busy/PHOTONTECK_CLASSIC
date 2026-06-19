@@ -2561,3 +2561,126 @@ async def supplier_statement(
         "transactions": txns,
     }
 
+
+# ============================================================
+# 信用管理报表（finance-gl 信用波）：信用状况查询 / 信用超标记录查询。
+# _ar_company_scope 通用（按公司隔离）；客户经 join 在已限定公司的信用档案上，无跨租户泄露。
+# ============================================================
+
+@router.get("/credit-status")
+async def credit_status(
+    company_id: int | None = Query(None, description="公司 id（选传；不传取可见范围）"),
+    customer_id: int | None = Query(None, description="客户 id（选传，单客户）"),
+    only_over: bool = Query(False, description="仅看超标/预警（可用<0 或 使用率≥预警阈值）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """信用状况查询：每客户 信用额度/已占用/可用/使用率/单笔限额/信用状态/检查规则。"""
+    company_ids, single_cid, err = _ar_company_scope(user, company_id)
+    if err:
+        return {"report": "credit_status", "error": err, "data": []}
+
+    stmt = (
+        select(m.CustomerCredit, m.Customer)
+        .join(m.Customer, m.CustomerCredit.customer_id == m.Customer.id, isouter=True)
+    )
+    if single_cid is not None:
+        stmt = stmt.where(m.CustomerCredit.company_id == single_cid)
+    elif company_ids:
+        stmt = stmt.where(m.CustomerCredit.company_id.in_(company_ids))
+    if customer_id is not None:
+        stmt = stmt.where(m.CustomerCredit.customer_id == customer_id)
+
+    rows = (await db.execute(stmt)).all()
+    data = []
+    for cc, cust in rows:
+        limit = _dec(cc.credit_limit)
+        used = _dec(cc.used_amount)
+        available = round(limit - used, 2)
+        usage_pct = round(used / limit * 100, 1) if limit > 0 else 0.0
+        warn = bool(cc.warning_threshold_pct and usage_pct >= cc.warning_threshold_pct)
+        over = available < 0
+        if only_over and not (warn or over):
+            continue
+        data.append({
+            "customer_id": cc.customer_id,
+            "customer_name": getattr(cust, "name", None) or "",
+            "customer_code": getattr(cust, "code", None) or "",
+            "currency": cc.currency,
+            "credit_limit": limit,
+            "used_amount": used,
+            "available": available,
+            "usage_pct": usage_pct,
+            "single_limit": _dec(getattr(cc, "single_limit", 0)),
+            "credit_status": getattr(cc, "credit_status", "NORMAL"),
+            "credit_rating": getattr(cc, "credit_rating", "") or "",
+            "warning_threshold_pct": cc.warning_threshold_pct,
+            "is_warning": warn,
+            "is_over": over,
+        })
+    data.sort(key=lambda r: r["usage_pct"], reverse=True)
+    return {
+        "report": "credit_status",
+        "company_id": single_cid,
+        "data": data,
+        "total": len(data),
+    }
+
+
+@router.get("/credit-overlimit")
+async def credit_overlimit(
+    company_id: int | None = Query(None, description="公司 id（选传）"),
+    customer_id: int | None = Query(None, description="客户 id（选传）"),
+    date_from: str | None = Query(None, description="业务日期起（YYYY-MM-DD，选传）"),
+    date_to: str | None = Query(None, description="业务日期止（YYYY-MM-DD，选传）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """信用超标记录查询：列 客户/单据/业务日/占用额/额度/可用/超标额/超标类型/控制策略/动作。"""
+    company_ids, single_cid, err = _ar_company_scope(user, company_id)
+    if err:
+        return {"report": "credit_overlimit", "error": err, "data": []}
+
+    stmt = (
+        select(m.CreditOverlimitLog, m.Customer)
+        .join(m.Customer, (m.CreditOverlimitLog.party_id == m.Customer.id)
+              & (m.CreditOverlimitLog.party_type == "CUSTOMER"), isouter=True)
+    )
+    if single_cid is not None:
+        stmt = stmt.where(m.CreditOverlimitLog.company_id == single_cid)
+    elif company_ids:
+        stmt = stmt.where(m.CreditOverlimitLog.company_id.in_(company_ids))
+    if customer_id is not None:
+        stmt = stmt.where(m.CreditOverlimitLog.party_id == customer_id)
+    if date_from:
+        stmt = stmt.where(m.CreditOverlimitLog.biz_date >= date.fromisoformat(date_from[:10]))
+    if date_to:
+        stmt = stmt.where(m.CreditOverlimitLog.biz_date <= date.fromisoformat(date_to[:10]))
+    stmt = stmt.order_by(m.CreditOverlimitLog.id.desc())
+
+    rows = (await db.execute(stmt)).all()
+    data = []
+    for log, cust in rows:
+        data.append({
+            "id": log.id,
+            "customer_id": log.party_id,
+            "customer_name": getattr(cust, "name", None) or "",
+            "customer_code": getattr(cust, "code", None) or "",
+            "doc_type": log.doc_type,
+            "doc_no": log.doc_no,
+            "biz_date": log.biz_date.isoformat() if log.biz_date else None,
+            "occupy_amount": _dec(log.occupy_amount),
+            "credit_limit": _dec(log.credit_limit),
+            "available_before": _dec(log.available_before),
+            "over_amount": _dec(log.over_amount),
+            "over_type": log.over_type,
+            "control_strategy": log.control_strategy,
+            "action": log.action,
+        })
+    return {
+        "report": "credit_overlimit",
+        "company_id": single_cid,
+        "data": data,
+        "total": len(data),
+    }
+

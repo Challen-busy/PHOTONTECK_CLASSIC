@@ -80,6 +80,8 @@ _EXTENSION_MODULES = (
     "services.finance_writeoff",
     # 应付款管理（finance-gl 应付波）：应付单/付款单→凭证业财映射 effect（= ar_receivable 供应商侧镜像）。
     "services.ap_payable",
+    # 信用管理（finance-gl 信用波）：信用检查 validator + 信用占用 effect（hook 应收单审核）。
+    "services.finance_credit",
 )
 _loaded = False
 

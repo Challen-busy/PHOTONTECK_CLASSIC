@@ -107,6 +107,8 @@ import APBillPage from './pages/finance/ap/APBillPage';
 import APPaymentPage from './pages/finance/ap/APPaymentPage';
 import APWriteoffPage from './pages/finance/ap/APWriteoffPage';
 import APLedgerPage from './pages/finance/ap/APLedgerPage';
+// 信用管理（finance-gl 信用波）
+import CreditPage from './pages/finance/credit/CreditPage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -261,6 +263,7 @@ function AppRoutes() {
         <Route path="finance/ap/payment" element={<APPaymentPage />} />
         <Route path="finance/ap/writeoff" element={<APWriteoffPage />} />
         <Route path="finance/ap/ledger" element={<APLedgerPage />} />
+        <Route path="finance/credit" element={<CreditPage />} />
         <Route path="finance/ledger-report" element={<LedgerReportPage />} />
         <Route path="finance/period-close" element={<PeriodClosePage />} />
         <Route path="finance/ar" element={<ARPage />} />

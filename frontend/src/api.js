@@ -121,3 +121,9 @@ export const getApSummary = (params = {}) => api.get('/reports/ap-summary', { pa
 export const getApDetail = (params = {}) => api.get('/reports/ap-detail', { params });
 export const getSupplierStatement = (params = {}) => api.get('/reports/supplier-statement', { params });
 export const generateApVouchers = (payload = {}) => executeCommand('finance.generate_ap_vouchers', payload);
+
+// 信用管理（finance-gl 信用波）
+export const getCreditStatus = (params = {}) => api.get('/reports/credit-status', { params });
+export const getCreditOverlimit = (params = {}) => api.get('/reports/credit-overlimit', { params });
+export const recomputeCredit = (company_id) => executeCommand('finance.recompute_credit', { company_id });
+export const upsertCustomerCredit = (payload) => executeCommand('upsert_customer_credit', payload);

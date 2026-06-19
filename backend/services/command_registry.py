@@ -90,6 +90,8 @@ def load_commands() -> None:
     import services.finance_writeoff  # noqa: F401
     # 应付款管理（finance-gl 应付波）：应付单/付款单→凭证业财映射 + 应付凭证批量命令（= ar_receivable 镜像）
     import services.ap_payable  # noqa: F401
+    # 信用管理（finance-gl 信用波）：信用检查 validator + 占用 effect + 重算命令 finance.recompute_credit
+    import services.finance_credit  # noqa: F401
 
     _loaded = True
 

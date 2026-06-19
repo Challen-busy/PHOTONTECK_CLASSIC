@@ -145,6 +145,19 @@ async def upsert_customer_credit(ctx: CommandContext, payload: dict) -> dict:
     credit.warning_threshold_pct = payload.get("warning_threshold_pct") or credit.warning_threshold_pct or 80
     credit.credit_period_days = payload.get("credit_period_days") or credit.credit_period_days or 30
     credit.credit_rating = payload.get("credit_rating") or credit.credit_rating or ""
+    # --- 信用管理：金蝶信用档案扩展字段（单笔限额/逾期阈值/信用状态/检查规则）---
+    if "single_limit" in payload:
+        credit.single_limit = _num(payload.get("single_limit"))
+    if "overdue_days" in payload:
+        credit.overdue_days = int(payload.get("overdue_days") or 0)
+    if "overdue_amount" in payload:
+        credit.overdue_amount = _num(payload.get("overdue_amount"))
+    if "overdue_ratio" in payload:
+        credit.overdue_ratio = _num(payload.get("overdue_ratio"))
+    if payload.get("credit_status"):
+        credit.credit_status = payload.get("credit_status")
+    if "check_rule_id" in payload:
+        credit.check_rule_id = payload.get("check_rule_id") or None
     credit.updated_by_id = ctx.user.id
     await ctx.db.flush()
     ctx.add_event("customer_credit_upserted", {"id": credit.id, "customer_id": customer.id})
