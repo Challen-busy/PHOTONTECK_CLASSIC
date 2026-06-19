@@ -113,8 +113,22 @@ _BIZ_CONFIG: dict[str, _BizConfig] = {
             date_col="receipt_date",
         ),
     ),
-    # AP（应付）Phase 应付时补：
-    #   debit=付款单（已付侧反过来作债权抵消），credit=应付单——本引擎代码无须改，只加配置行。
+    # AP（应付）——应收的供应商侧镜像，引擎代码零改动，仅加本配置行。
+    #   debit=应付单（我方债务，对应 AR 的应收单）；credit=付款单（已付，对应 AR 的收款单）。
+    #   party_col=supplier_id（_same_party 防跨供应商错配）；FIFO 按 bill_date/到期日；同额对冲同 AR。
+    "AP": _BizConfig(
+        "AP",
+        debit=_SideSpec(
+            "ACCOUNTS_PAYABLE", m.AccountsPayable,
+            party_col="supplier_id", amount_col="amount",
+            date_col="bill_date", due_col="due_date",
+        ),
+        credit=_SideSpec(
+            "AP_PAYMENT", m.APPayment,
+            party_col="supplier_id", amount_col="amount",
+            date_col="payment_date",
+        ),
+    ),
 }
 
 

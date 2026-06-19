@@ -102,6 +102,11 @@ import ARBillPage from './pages/finance/ar/ARBillPage';
 import ARReceiptPage from './pages/finance/ar/ARReceiptPage';
 import ARWriteoffPage from './pages/finance/ar/ARWriteoffPage';
 import ARLedgerPage from './pages/finance/ar/ARLedgerPage';
+// 应付款管理（finance-gl 应付波）
+import APBillPage from './pages/finance/ap/APBillPage';
+import APPaymentPage from './pages/finance/ap/APPaymentPage';
+import APWriteoffPage from './pages/finance/ap/APWriteoffPage';
+import APLedgerPage from './pages/finance/ap/APLedgerPage';
 
 // 客户联系人子表（PRD 02 页面1 子表 customer_contact_line，BizEditableTable 网格录入）
 const REL_LEVEL = [
@@ -252,6 +257,10 @@ function AppRoutes() {
         <Route path="finance/ar/receipt" element={<ARReceiptPage />} />
         <Route path="finance/ar/writeoff" element={<ARWriteoffPage />} />
         <Route path="finance/ar/ledger" element={<ARLedgerPage />} />
+        <Route path="finance/ap/bill" element={<APBillPage />} />
+        <Route path="finance/ap/payment" element={<APPaymentPage />} />
+        <Route path="finance/ap/writeoff" element={<APWriteoffPage />} />
+        <Route path="finance/ap/ledger" element={<APLedgerPage />} />
         <Route path="finance/ledger-report" element={<LedgerReportPage />} />
         <Route path="finance/period-close" element={<PeriodClosePage />} />
         <Route path="finance/ar" element={<ARPage />} />

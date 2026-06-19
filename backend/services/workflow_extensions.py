@@ -78,6 +78,8 @@ _EXTENSION_MODULES = (
     # 总账·第八波（finance-gl wave-8）：★通用核销引擎（finance.writeoff / finance.unwriteoff，biz_type=AR/AP）。
     #   本模块只注册 @register_command（无 auto effect），登记此处保持「命令双注册」一致性、import-safe。
     "services.finance_writeoff",
+    # 应付款管理（finance-gl 应付波）：应付单/付款单→凭证业财映射 effect（= ar_receivable 供应商侧镜像）。
+    "services.ap_payable",
 )
 _loaded = False
 

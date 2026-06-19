@@ -151,6 +151,10 @@ const buildMenuItems = (todoCount, isAdmin) => {
         { key: '/finance/ar/receipt', label: '收款单' },
         { key: '/finance/ar/writeoff', label: '应收核销' },
         { key: '/finance/ar/ledger', label: '应收台账/账龄/对账单' },
+        { key: '/finance/ap/bill', label: '应付单' },
+        { key: '/finance/ap/payment', label: '付款单' },
+        { key: '/finance/ap/writeoff', label: '应付核销' },
+        { key: '/finance/ap/ledger', label: '应付台账/账龄/对账单' },
       ],
     },
     {

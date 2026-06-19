@@ -88,6 +88,8 @@ def load_commands() -> None:
     # 总账·第八波（finance-gl wave-8）：★通用核销引擎命令 finance.writeoff / finance.unwriteoff
     #   （biz_type=AR/AP 参数化，应付/出纳直接复用；含 list_open_ar/list_open_receipts 取数 helper）
     import services.finance_writeoff  # noqa: F401
+    # 应付款管理（finance-gl 应付波）：应付单/付款单→凭证业财映射 + 应付凭证批量命令（= ar_receivable 镜像）
+    import services.ap_payable  # noqa: F401
 
     _loaded = True
 

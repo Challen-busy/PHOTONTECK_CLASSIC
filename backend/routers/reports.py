@@ -2287,3 +2287,277 @@ async def customer_statement(
         "transactions": txns,
     }
 
+
+# ============================================================
+# 应付款管理报表（finance-gl 应付波）= 应收报表的供应商侧镜像。
+# _ar_company_scope 通用（按公司隔离，AR/AP 共用）；待核销项走 /ar-open-items?biz_type=AP。
+# ★均带与 customer_statement 同款多租户隔离（防 IDOR 跨公司供应商信息泄露）。
+# ============================================================
+
+def _ap_outstanding(ap) -> float:
+    """应付单未付额 = 价税合计 − 已付(扁平) − 已核销(新口径)，下限 0。"""
+    return max(
+        _dec(ap.amount) - _dec(ap.paid_amount) - _dec(getattr(ap, "written_off_amount", 0)),
+        0.0,
+    )
+
+
+@router.get("/ap-summary")
+async def ap_summary(
+    company_id: int | None = Query(None, description="公司 id（选传；不传取可见范围全部）"),
+    as_of: str | None = Query(None, description="截止业务日期（YYYY-MM-DD，选传；只算 bill_date≤此日的应付单）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """应付款汇总表：按供应商汇总期末未清应付（价税合计/已付/已核销/未清）。= ar_summary 镜像。"""
+    company_ids, single_cid, err = _ar_company_scope(user, company_id)
+    if err:
+        return {"report": "ap_summary", "error": err, "data": []}
+
+    stmt = (
+        select(m.AccountsPayable, m.Supplier)
+        .join(m.Supplier, m.AccountsPayable.supplier_id == m.Supplier.id, isouter=True)
+        .where(m.AccountsPayable.status.notin_(_AR_CLOSED_STATUSES))
+    )
+    if single_cid is not None:
+        stmt = stmt.where(m.AccountsPayable.company_id == single_cid)
+    elif company_ids:
+        stmt = stmt.where(m.AccountsPayable.company_id.in_(company_ids))
+
+    as_of_date = date.fromisoformat(as_of[:10]) if as_of else None
+    rows = (await db.execute(stmt)).all()
+
+    by_sup: dict[int, dict] = {}
+    for ap, sup in rows:
+        biz_date = ap.bill_date or ap.due_date
+        if as_of_date and biz_date and biz_date > as_of_date:
+            continue
+        outstanding = _ap_outstanding(ap)
+        if outstanding <= 0:
+            continue
+        key = ap.supplier_id or 0
+        agg = by_sup.setdefault(key, {
+            "supplier_id": ap.supplier_id,
+            "supplier_name": getattr(sup, "name", None) or "(未指定供应商)",
+            "supplier_code": getattr(sup, "code", None) or "",
+            "currency": ap.currency,
+            "total_amount": 0.0, "paid_amount": 0.0, "written_off_amount": 0.0,
+            "outstanding": 0.0, "bill_count": 0,
+        })
+        agg["total_amount"] += _dec(ap.amount)
+        agg["paid_amount"] += _dec(ap.paid_amount)
+        agg["written_off_amount"] += _dec(getattr(ap, "written_off_amount", 0))
+        agg["outstanding"] += outstanding
+        agg["bill_count"] += 1
+
+    data = sorted(by_sup.values(), key=lambda r: r["outstanding"], reverse=True)
+    for r in data:
+        for k in ("total_amount", "paid_amount", "written_off_amount", "outstanding"):
+            r[k] = round(r[k], 2)
+    return {
+        "report": "ap_summary",
+        "company_id": single_cid,
+        "as_of": as_of_date.isoformat() if as_of_date else None,
+        "data": data,
+        "total_outstanding": round(sum(r["outstanding"] for r in data), 2),
+    }
+
+
+@router.get("/ap-detail")
+async def ap_detail(
+    company_id: int | None = Query(None, description="公司 id（选传）"),
+    supplier_id: int | None = Query(None, description="供应商 id（选传，单供应商明细）"),
+    as_of: str | None = Query(None, description="截止业务日期（YYYY-MM-DD，选传）"),
+    include_settled: bool = Query(False, description="含已结清单据（默认 False=仅未清）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """应付款明细表：逐应付单列 单号/供应商/业务日/到期日/价税合计/已付/已核销/未清/状态。= ar_detail 镜像。"""
+    company_ids, single_cid, err = _ar_company_scope(user, company_id)
+    if err:
+        return {"report": "ap_detail", "error": err, "data": []}
+
+    stmt = (
+        select(m.AccountsPayable, m.Supplier)
+        .join(m.Supplier, m.AccountsPayable.supplier_id == m.Supplier.id, isouter=True)
+    )
+    if not include_settled:
+        stmt = stmt.where(m.AccountsPayable.status.notin_(_AR_CLOSED_STATUSES))
+    if single_cid is not None:
+        stmt = stmt.where(m.AccountsPayable.company_id == single_cid)
+    elif company_ids:
+        stmt = stmt.where(m.AccountsPayable.company_id.in_(company_ids))
+    if supplier_id is not None:
+        stmt = stmt.where(m.AccountsPayable.supplier_id == supplier_id)
+    stmt = stmt.order_by(m.AccountsPayable.supplier_id, m.AccountsPayable.id)
+
+    as_of_date = date.fromisoformat(as_of[:10]) if as_of else None
+    rows = (await db.execute(stmt)).all()
+
+    data = []
+    for ap, sup in rows:
+        biz_date = ap.bill_date or ap.due_date
+        if as_of_date and biz_date and biz_date > as_of_date:
+            continue
+        outstanding = _ap_outstanding(ap)
+        if not include_settled and outstanding <= 0:
+            continue
+        data.append({
+            "id": ap.id,
+            "bill_number": ap.bill_number or "",
+            "invoice_number": ap.invoice_number or "",
+            "supplier_id": ap.supplier_id,
+            "supplier_name": getattr(sup, "name", None) or "(未指定供应商)",
+            "supplier_code": getattr(sup, "code", None) or "",
+            "bill_type": ap.bill_type,
+            "bill_date": ap.bill_date.isoformat() if ap.bill_date else None,
+            "due_date": ap.due_date.isoformat() if ap.due_date else None,
+            "currency": ap.currency,
+            "amount": _dec(ap.amount),
+            "untaxed_amount": _dec(getattr(ap, "untaxed_amount", 0)),
+            "tax_amount": _dec(getattr(ap, "tax_amount", 0)),
+            "paid_amount": _dec(ap.paid_amount),
+            "written_off_amount": _dec(getattr(ap, "written_off_amount", 0)),
+            "outstanding": round(outstanding, 2),
+            "status": ap.status,
+            "writeoff_status": getattr(ap, "writeoff_status", None),
+        })
+    return {
+        "report": "ap_detail",
+        "company_id": single_cid,
+        "supplier_id": supplier_id,
+        "as_of": as_of_date.isoformat() if as_of_date else None,
+        "data": data,
+        "total_outstanding": round(sum(r["outstanding"] for r in data), 2),
+    }
+
+
+@router.get("/supplier-statement")
+async def supplier_statement(
+    supplier_id: int = Query(..., description="供应商 id（必传，单供应商对账）"),
+    company_id: int | None = Query(None, description="公司 id（选传；不传取可见范围）"),
+    date_from: str | None = Query(None, description="期间起（YYYY-MM-DD，选传）"),
+    date_to: str | None = Query(None, description="期间止（YYYY-MM-DD，选传）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """供应商对账单：某供应商期间内 应付（债务+）/ 付款（已付−）时序流水 + 期初/期末余额对账。
+
+    余额口径（原币，应付账款贷增借减）：应付单 credit 方向增加应付余额；付款单 debit 方向冲减。
+    期初余额 = date_from 之前的 Σ应付 − Σ付款；逐笔累计出 running_balance（我方欠款）。= customer_statement 镜像。
+    """
+    company_ids, single_cid, err = _ar_company_scope(user, company_id)
+    if err:
+        return {"report": "supplier_statement", "error": err, "transactions": []}
+
+    # ★多租户隔离:供应商必须落在调用者可见公司内,否则视为不存在(防 IDOR 跨公司供应商信息泄露)。
+    sup_stmt = select(m.Supplier).where(m.Supplier.id == supplier_id)
+    if single_cid is not None:
+        sup_stmt = sup_stmt.where(m.Supplier.company_id == single_cid)
+    elif company_ids:
+        sup_stmt = sup_stmt.where(m.Supplier.company_id.in_(company_ids))
+    sup = (await db.execute(sup_stmt)).scalar_one_or_none()
+    if sup is None:
+        return {"report": "supplier_statement", "error": "供应商不存在或无权访问", "transactions": []}
+
+    d_from = date.fromisoformat(date_from[:10]) if date_from else None
+    d_to = date.fromisoformat(date_to[:10]) if date_to else None
+
+    def _apply_company(stmt, col):
+        if single_cid is not None:
+            return stmt.where(col == single_cid)
+        if company_ids:
+            return stmt.where(col.in_(company_ids))
+        return stmt
+
+    # 应付单（债务，按 bill_date 落期；缺则回退 due_date）。仅取已成立（非草稿/非关闭）。
+    ap_stmt = _apply_company(
+        select(m.AccountsPayable).where(
+            m.AccountsPayable.supplier_id == supplier_id,
+            m.AccountsPayable.status.notin_(("DRAFT",) + _AR_CLOSED_STATUSES),
+        ),
+        m.AccountsPayable.company_id,
+    )
+    bills = (await db.execute(ap_stmt)).scalars().all()
+
+    # 付款单（已付，按 payment_date 落期）。仅取已审核（成立）。
+    pay_stmt = _apply_company(
+        select(m.APPayment).where(
+            m.APPayment.supplier_id == supplier_id,
+            m.APPayment.status == "AUDITED",
+        ),
+        m.APPayment.company_id,
+    )
+    payments = (await db.execute(pay_stmt)).scalars().all()
+
+    # 统一事件流：应付单 credit(+应付)，付款单 debit(−应付)。
+    events = []
+    for b in bills:
+        bd = b.bill_date or b.due_date
+        events.append({
+            "date": bd, "type": "AP_BILL", "doc_no": b.bill_number or b.invoice_number or f"AP#{b.id}",
+            "debit": 0.0, "credit": _dec(b.amount), "currency": b.currency, "doc_id": b.id,
+            "due_date": b.due_date.isoformat() if b.due_date else None,
+        })
+    for p in payments:
+        events.append({
+            "date": p.payment_date, "type": "AP_PAYMENT", "doc_no": p.payment_number or f"FK#{p.id}",
+            "debit": _dec(p.amount), "credit": 0.0, "currency": p.currency, "doc_id": p.id,
+            "is_advance": bool(p.is_advance),
+        })
+
+    # 期初余额（date_from 之前的净额）= Σ应付(credit) − Σ付款(debit)。
+    opening = 0.0
+    for e in events:
+        if d_from and e["date"] and e["date"] < d_from:
+            opening += e["credit"] - e["debit"]
+
+    def _in_window(ev):
+        ed = ev["date"]
+        if ed is None:
+            return True
+        if d_from and ed < d_from:
+            return False
+        if d_to and ed > d_to:
+            return False
+        return True
+
+    window = [e for e in events if _in_window(e)]
+    window.sort(key=lambda e: (e["date"] or date.max, 0 if e["type"] == "AP_BILL" else 1))
+
+    running = round(opening, 2)
+    txns = []
+    total_debit = 0.0
+    total_credit = 0.0
+    for e in window:
+        running = round(running + e["credit"] - e["debit"], 2)
+        total_debit += e["debit"]
+        total_credit += e["credit"]
+        txns.append({
+            "date": e["date"].isoformat() if e["date"] else None,
+            "type": e["type"],
+            "doc_no": e["doc_no"],
+            "currency": e["currency"],
+            "debit": round(e["debit"], 2),
+            "credit": round(e["credit"], 2),
+            "running_balance": running,
+            "due_date": e.get("due_date"),
+            "is_advance": e.get("is_advance"),
+            "doc_id": e["doc_id"],
+        })
+
+    return {
+        "report": "supplier_statement",
+        "company_id": single_cid,
+        "supplier_id": supplier_id,
+        "supplier_name": getattr(sup, "name", None),
+        "supplier_code": getattr(sup, "code", None),
+        "date_from": d_from.isoformat() if d_from else None,
+        "date_to": d_to.isoformat() if d_to else None,
+        "opening_balance": round(opening, 2),
+        "closing_balance": running,
+        "total_debit": round(total_debit, 2),
+        "total_credit": round(total_credit, 2),
+        "transactions": txns,
+    }
+

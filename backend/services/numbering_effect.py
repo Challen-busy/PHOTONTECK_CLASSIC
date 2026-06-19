@@ -64,6 +64,14 @@ NUMBER_COLUMN_BY_DOC_TYPE: dict[str, str] = {
     # 总账·第一波（finance-gl）：凭证号 PZ-YYMM-NNN（记账凭证连号）。建单进 START 取号。
     # 红字单走 finance.red_reversal 命令直接建草稿（临时号 RED-<原号>），不经此 START effect。
     "VOUCHER": "voucher_number",
+    # 总账·第八波（finance-gl）应收款管理：应收单 AR-YYMM-NNN / 收款单 SK-YYMM-NNN（月度连号）。
+    # 建单进 START 取号（seed_receivable 已建 NumberingRule + 在 START.effects 挂本 effect）。
+    "ACCOUNTS_RECEIVABLE": "bill_number",
+    "AR_RECEIPT": "receipt_number",
+    # 应付款管理（finance-gl 应付波）：应付单 AP-YYMM-NNN / 付款单 FK-YYMM-NNN（月度连号）。
+    # 建单进 START 取号（seed_payable 已建 NumberingRule + 在 START.effects 挂本 effect）。
+    "ACCOUNTS_PAYABLE": "bill_number",
+    "AP_PAYMENT": "payment_number",
 }
 
 # 引擎默认兜底号形态：{PREFIX}-{YYMMDD}-{6位HEX}（_auto_fill_required_fields）。

@@ -1946,11 +1946,21 @@ class WriteoffLink(Base):
 
 
 class AccountsPayable(AuditMixin, Base):
+    """应付单（finance-gl 应付款管理，doc_type ACCOUNTS_PAYABLE，完全替代金蝶应付单）。
+
+    金蝶应付单 = 供应商债务立账单。本表此前为精简存根（无单据号/无头明细/无付款计划）。本波在不破坏
+    存量列与 doc_type 的前提下，原地补齐金蝶应付单头字段 + 两张子表（明细 ap_bill_line / 付款计划
+    ap_payment_plan_line），挂多态状态机 DRAFT→SUBMITTED→AUDITED（审核后业财映射生应付凭证）。
+    = AccountsReceivable 的供应商侧镜像；差异：立账类型(暂估/业务应付) + 先到票后入库 + 采购组织。
+    新增列均 nullable / 带 default，存量行兼容；写仍走 execute_transition。
+    """
     __tablename__ = "accounts_payable"
     __doc_types__ = ("ACCOUNTS_PAYABLE",)
     id = Column(Integer, primary_key=True)
     supplier_id = Column(Integer, ForeignKey("supplier.id"))
     purchase_order_id = Column(Integer, ForeignKey("purchase_order.id"))
+    voucher_id = Column(Integer, ForeignKey("voucher.id"), nullable=True)
+    settlement_batch_no = Column(String(50), default="", index=True)
     invoice_number = Column(String(50), default="", index=True)
     amount = Column(Numeric(16, 2))
     currency = Column(String(3))
@@ -1959,6 +1969,105 @@ class AccountsPayable(AuditMixin, Base):
     paid_amount = Column(Numeric(16, 2), default=0)
     paid_date = Column(Date, nullable=True)
     status = Column(String(30), default="PENDING")
+    # --- finance-gl 应付款管理：金蝶应付单头字段（金蝶规格，据截图提炼）---
+    bill_number = Column(String(40), default="", index=True)   # 应付单号（NumberingRule AP-YYMM-NNN）；存量行空
+    bill_type = Column(String(20), default="BUSINESS_AP")      # 立账类型：业务应付 BUSINESS_AP / 暂估应付 PROVISIONAL_AP
+    bill_date = Column(Date, nullable=True)                    # 业务日期（凭证日期取数来源）
+    base_currency = Column(String(3), default="")             # 本位币（公司账簿币）
+    base_amount = Column(Numeric(16, 2), nullable=True)       # 本位币金额 = amount × exchange_rate
+    payment_terms_text = Column(String(100), default="")     # 付款条件（如 Net 30 / T/T 预付）
+    purchaser_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 采购员
+    purchase_org_id = Column(Integer, ForeignKey("company.id"), nullable=True)    # 采购组织（多主体）
+    settle_org_id = Column(Integer, ForeignKey("company.id"), nullable=True)      # 结算组织（多主体）
+    purchase_dept = Column(String(50), default="")           # 采购部门
+    is_tax_included = Column(Boolean, default=False)         # 价外税开关
+    is_price_tax_inclusive = Column(Boolean, default=False)  # 按含税单价录入开关
+    is_goods_first = Column(Boolean, default=False)          # 先到票后入库（采购特有）
+    tax_amount = Column(Numeric(16, 2), default=0)           # 税额合计（进项税，HK 准则为 0）
+    untaxed_amount = Column(Numeric(16, 2), default=0)       # 不含税金额合计
+    # 通用核销口径（biz_type=AP）：已核销额 / 核销状态（UNVERIFIED 未核销 / PARTIAL 部分 / VERIFIED 已核销）。
+    written_off_amount = Column(Numeric(16, 2), default=0)
+    writeoff_status = Column(String(15), default="UNVERIFIED")
+    remark = Column(Text, default="")
+    __table_args__ = (UniqueConstraint("company_id", "bill_number", name="ux_accounts_payable_bill_number"),)
+
+
+class APBillLine(Base):
+    """应付单明细子表（金蝶应付单分录：物料 × 计价数量 × 单价 × 税率组 × 不含税/税额/价税合计）。
+
+    名含 `_line` + 指向 accounts_payable 的 FK → 引擎自动识别为子表，DocEditor 渲 SubTableEditor。
+    = ARBillLine 镜像（进项税口径，源单为采购订单/采购入库单行）。
+    """
+    __tablename__ = "ap_bill_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    accounts_payable_id = Column(Integer, ForeignKey("accounts_payable.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=True)
+    material_code = Column(String(50), default="")          # 物料编码（快照，无 material_id 时手填）
+    material_name = Column(String(300), default="")         # 物料名称（快照）
+    purchase_order_line_id = Column(Integer, ForeignKey("purchase_order_line.id"), nullable=True)  # 源采购订单行（勾稽）
+    quantity = Column(Numeric(12, 2), nullable=False, default=0)   # 计价数量
+    uom = Column(String(20), default="")
+    unit_price = Column(Numeric(12, 4), nullable=False, default=0)  # 单价（含税/不含税由头开关界定）
+    tax_rate_group = Column(String(30), default="")        # 税率组（弱引用，如 VAT13/EXEMPT）
+    tax_rate = Column(Numeric(5, 2), default=0)            # 税率%
+    untaxed_amount = Column(Numeric(16, 2), default=0)     # 不含税金额
+    tax_amount = Column(Numeric(16, 2), default=0)         # 税额（进项税）
+    amount = Column(Numeric(16, 2), default=0)             # 价税合计
+    remark = Column(String(200), default="")
+
+    material = relationship("Material")
+    __table_args__ = (UniqueConstraint("accounts_payable_id", "line_number", name="ux_ap_bill_line"),)
+
+
+class APPaymentPlanLine(Base):
+    """应付单付款计划子表（金蝶分期付款计划：到期日 / 比例 / 金额）。= ARReceiptPlanLine 镜像。"""
+    __tablename__ = "ap_payment_plan_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    accounts_payable_id = Column(Integer, ForeignKey("accounts_payable.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    due_date = Column(Date, nullable=True)                 # 该期到期日
+    ratio = Column(Numeric(7, 4), default=0)               # 付款比例%（各期合计应=100）
+    plan_amount = Column(Numeric(16, 2), default=0)        # 该期计划付款金额（原币）
+    paid_amount = Column(Numeric(16, 2), default=0)        # 该期已付（核销回写）
+    remark = Column(String(200), default="")
+    __table_args__ = (UniqueConstraint("accounts_payable_id", "line_number", name="ux_ap_payment_plan_line"),)
+
+
+class APPayment(AuditMixin, Base):
+    """付款单（finance-gl 应付款管理，doc_type AP_PAYMENT，完全替代金蝶付款单）。
+
+    供应商实付款登记单。审核后业财映射生凭证：借 2202 应付账款（核销冲减）或 1123 预付账款（is_advance
+    预付）/ 贷 1002 银行存款。已付款经通用核销引擎（WriteoffLink，biz_type=AP）与应付单（债务）勾稽。
+    状态机 DRAFT→SUBMITTED→AUDITED。= ARReceipt 的供应商侧镜像。
+    """
+    __tablename__ = "ap_payment"
+    __doc_types__ = ("AP_PAYMENT",)
+    id = Column(Integer, primary_key=True)
+    payment_number = Column(String(40), index=True, nullable=False)  # 付款单号（NumberingRule FK-YYMM-NNN）
+    supplier_id = Column(Integer, ForeignKey("supplier.id"), nullable=True)
+    payment_date = Column(Date, nullable=True)             # 付款日期
+    currency = Column(String(3), default="")
+    exchange_rate = Column(Numeric(12, 6), default=1)
+    base_currency = Column(String(3), default="")          # 本位币
+    base_amount = Column(Numeric(16, 2), nullable=True)    # 本位币金额 = amount × exchange_rate
+    amount = Column(Numeric(16, 2), nullable=False, default=0)  # 付款金额（原币）
+    settlement_method_id = Column(Integer, ForeignKey("settlement_method.id"), nullable=True)  # 结算方式
+    bank_account = Column(String(50), default="")          # 付款银行账户
+    payee_name = Column(String(100), default="")           # 收款方名称
+    payment_purpose = Column(String(50), default="")       # 付款用途
+    is_advance = Column(Boolean, default=False)            # 是否预付（True→借 1123 预付账款）
+    voucher_id = Column(Integer, ForeignKey("voucher.id"), nullable=True)  # 业财映射回填的凭证
+    # 通用核销口径（biz_type=AP）：已核销额 / 核销状态。
+    written_off_amount = Column(Numeric(16, 2), default=0)
+    writeoff_status = Column(String(15), default="UNVERIFIED")
+    status = Column(String(30), default="DRAFT")
+    remark = Column(Text, default="")
+
+    supplier = relationship("Supplier")
+    __table_args__ = (UniqueConstraint("company_id", "payment_number", name="ux_ap_payment_number"),)
 
 
 class SupplierCredit(AuditMixin, Base):

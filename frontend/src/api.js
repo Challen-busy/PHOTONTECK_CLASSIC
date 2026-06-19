@@ -114,3 +114,10 @@ export const getArDetail = (params = {}) => api.get('/reports/ar-detail', { para
 export const getCustomerStatement = (params = {}) => api.get('/reports/customer-statement', { params });
 export const writeoff = (payload) => executeCommand('finance.writeoff', payload);
 export const unwriteoff = (writeoff_link_ids) => executeCommand('finance.unwriteoff', { writeoff_link_ids });
+
+// 应付款管理（finance-gl 应付波）——应收的供应商侧镜像。待核销项复用通用端点（biz_type=AP）。
+export const getApOpenItems = (params = {}) => api.get('/reports/ar-open-items', { params: { ...params, biz_type: 'AP' } });
+export const getApSummary = (params = {}) => api.get('/reports/ap-summary', { params });
+export const getApDetail = (params = {}) => api.get('/reports/ap-detail', { params });
+export const getSupplierStatement = (params = {}) => api.get('/reports/supplier-statement', { params });
+export const generateApVouchers = (payload = {}) => executeCommand('finance.generate_ap_vouchers', payload);
