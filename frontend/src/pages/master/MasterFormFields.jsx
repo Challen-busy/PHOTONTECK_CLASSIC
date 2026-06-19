@@ -96,6 +96,17 @@ function renderFormField(field) {
     );
   }
 
+  // 后端 schema 附带的枚举值中文（集中枚举字典 value_labels）→ 中文下拉，避免编辑表单冒出原始码
+  if (field.value_labels && Object.keys(field.value_labels).length) {
+    return (
+      <ProFormSelect
+        key={key} name={field.name} label={field.label || field.name}
+        options={Object.entries(field.value_labels).map(([value, label]) => ({ value, label }))}
+        rules={requiredRule}
+      />
+    );
+  }
+
   switch (field.type) {
     case 'boolean':
       return <ProFormSwitch key={key} name={field.name} label={field.label || field.name} />;

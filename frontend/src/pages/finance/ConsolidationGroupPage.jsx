@@ -27,7 +27,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { query, transition } from '../../api';
 import { BizEditableTable } from '../../components/biz';
-import { MONO, fmtMoney, num } from './financeHelpers';
+import { MONO, fmtMoney, num, enumLabel } from './financeHelpers';
 
 const CCY_OPTIONS = [
   { value: 'CNY', label: 'CNY 人民币' },
@@ -230,8 +230,8 @@ function GroupTab({ groups, loading, companyOptions, companyById, onReload }) {
     { title: '合并范围名称', dataIndex: 'name', width: 200, ellipsis: true },
     { title: '列报货币', dataIndex: 'presentation_currency', width: 100,
       render: (v) => <Tag>{v || '—'}</Tag> },
-    { title: '合并准则', dataIndex: 'standard', width: 130,
-      render: (v) => <Tag color="purple">{v === 'HKFRS' ? 'HKFRS' : 'CAS'}</Tag> },
+    { title: '合并准则', dataIndex: 'standard', width: 160,
+      render: (v) => <Tag color="purple">{enumLabel('standard', v)}</Tag> },
     { title: '说明', dataIndex: 'description', ellipsis: true,
       render: (v) => v || <span style={{ color: '#bfbbb5' }}>—</span> },
     { title: '状态', dataIndex: 'is_active', width: 72,
@@ -486,8 +486,8 @@ function EliminationTab({ groups }) {
   }, [entries]);
 
   const columns = useMemo(() => [
-    { title: '口径', dataIndex: 'statement', width: 80,
-      render: (v) => <Tag color={v === 'IS' ? 'orange' : 'blue'}>{v === 'IS' ? 'IS 利润表' : 'BS 资负表'}</Tag> },
+    { title: '口径', dataIndex: 'statement', width: 110,
+      render: (v) => <Tag color={v === 'IS' ? 'orange' : 'blue'}>{enumLabel('statement', v)}</Tag> },
     { title: '报表行键 line_key', dataIndex: 'line_key', width: 200, ellipsis: true,
       render: (v) => v ? <span style={{ fontFamily: MONO }}>{v}</span> : <span style={{ color: '#bfbbb5' }}>—</span> },
     { title: '科目码', dataIndex: 'account_code', width: 120,
@@ -543,7 +543,7 @@ function EliminationTab({ groups }) {
             <Field label="列报货币 / 准则">
               <Space size={6}>
                 <Tag>{selectedGroup.presentation_currency}</Tag>
-                <Tag color="purple">{selectedGroup.standard}</Tag>
+                <Tag color="purple">{enumLabel('standard', selectedGroup.standard)}</Tag>
               </Space>
             </Field>
           )}

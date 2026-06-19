@@ -20,7 +20,7 @@ import {
 import { ReloadOutlined, LinkOutlined } from '@ant-design/icons';
 import { useAuth } from '../../auth';
 import { query, getAgingAnalysis } from '../../api';
-import { MONO, fmtMoney } from './financeHelpers';
+import { MONO, fmtMoney, statusLabel } from './financeHelpers';
 
 // 账龄桶中文标签 + 配色（对齐 reports.aging_analysis 的 bucket 取值）。
 const BUCKET = {
@@ -258,7 +258,7 @@ export default function ARPage() {
               <Descriptions.Item label="凭证号">{drillVoucher?.voucher_number ? <span style={{ fontFamily: MONO }}>{drillVoucher.voucher_number}</span> : '—'}</Descriptions.Item>
               <Descriptions.Item label="凭证日期">{drillVoucher?.voucher_date || '—'}</Descriptions.Item>
               <Descriptions.Item label="状态">
-                {drillVoucher ? <Tag color={drillVoucher.status === 'POSTED' ? 'green' : 'default'}>{drillVoucher.status}</Tag> : '—'}
+                {drillVoucher ? <Tag color={drillVoucher.status === 'POSTED' ? 'green' : 'default'}>{statusLabel(drillVoucher.status)}</Tag> : '—'}
               </Descriptions.Item>
               <Descriptions.Item label="借方合计">{fmtMoney(drillVoucher?.total_debit)}</Descriptions.Item>
               <Descriptions.Item label="贷方合计">{fmtMoney(drillVoucher?.total_credit)}</Descriptions.Item>

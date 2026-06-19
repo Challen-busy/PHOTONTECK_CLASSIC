@@ -50,13 +50,29 @@ const STATUS_STYLE = {
   CANCELLED: { bg: '#fdecea', color: '#b42318' },
 };
 
-function StatusPill({ value }) {
+// 通用 status 码 → 中文兜底（壳不 import 财务字典以解耦；优先用后端 schema 的 value_labels，此为兜底）。
+const STATUS_CN = {
+  ACTIVE: '启用', INACTIVE: '停用', DRAFT: '草稿/录入',
+  PENDING_APPROVAL: '待审批', APPROVED: '已审批', REJECTED: '已驳回', CANCELLED: '已取消',
+  AUDITED: '已审核', REVIEWED: '出纳已复核', POSTED: '已过账',
+  OPEN: '未结账', LOCKED: '已锁定', CLOSED: '已结账',
+  PENDING: '待处理', PARTIAL: '部分', PAID: '已付清', OVERDUE: '逾期',
+  SETTLED: '已结算', BAD_DEBT: '坏账', CONFIRMED: '已确认',
+};
+
+// status 码 → 中文：后端 value_labels 优先，再查通用兜底，最后原样返回（绝不显 undefined）。
+function statusText(value, valueLabels) {
+  if (value == null || value === '') return '';
+  return valueLabels?.[value] ?? STATUS_CN[value] ?? String(value);
+}
+
+function StatusPill({ value, valueLabels }) {
   const s = STATUS_STYLE[value] || { bg: '#f5f2ef', color: '#4e4e4e' };
   return (
     <span style={{
       display: 'inline-block', padding: '2px 10px', borderRadius: 4,
       background: s.bg, color: s.color, fontSize: 12, fontWeight: 500, letterSpacing: '0.02em',
-    }}>{value}</span>
+    }}>{statusText(value, valueLabels)}</span>
   );
 }
 
@@ -74,7 +90,7 @@ function boolTag(v) {
 
 function renderCell(field, v) {
   if (v == null || v === '') return <span style={{ color: '#bfbbb5' }}>—</span>;
-  if (field.name === 'status') return <StatusPill value={v} />;
+  if (field.name === 'status') return <StatusPill value={v} valueLabels={field.value_labels} />;
   if (field.type === 'boolean') return boolTag(v);
   if (field.type === 'number' || field.type === 'integer') {
     return <span style={{ fontFamily: 'ui-monospace, monospace' }}>{Number(v).toLocaleString()}</span>;
@@ -85,6 +101,8 @@ function renderCell(field, v) {
   if (typeof v === 'object') {
     return <span style={{ color: '#777169' }}>{JSON.stringify(v).slice(0, 60)}</span>;
   }
+  // 枚举串值：后端 schema 附了 value_labels{码:中文} 的列显中文，否则原样显码（绝不显 undefined）。
+  if (field.value_labels && field.value_labels[v] != null) return field.value_labels[v];
   return String(v);
 }
 

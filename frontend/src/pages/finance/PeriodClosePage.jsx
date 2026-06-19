@@ -25,7 +25,7 @@ import {
 import api from '../../api';
 import { getAccountingPeriods } from '../../api';
 import { useAuth } from '../../auth';
-import { MONO, fmtMoney } from './financeHelpers';
+import { MONO, fmtMoney, statusLabel } from './financeHelpers';
 
 const STEP_KEYS = ['fx', 'pl', 'close'];
 
@@ -495,7 +495,7 @@ function ReceiptCard({ receipt, kind, extra }) {
           <Descriptions.Item label="凭证号"><Mono>{receipt.voucher_number}</Mono></Descriptions.Item>
         )}
         {receipt.voucher_status && (
-          <Descriptions.Item label="凭证状态"><Tag>{receipt.voucher_status}</Tag></Descriptions.Item>
+          <Descriptions.Item label="凭证状态"><Tag>{statusLabel(receipt.voucher_status)}</Tag></Descriptions.Item>
         )}
         <Descriptions.Item label="说明" span={2}>{receipt.message}</Descriptions.Item>
       </Descriptions>

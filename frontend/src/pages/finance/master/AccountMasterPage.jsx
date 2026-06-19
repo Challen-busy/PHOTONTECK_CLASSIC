@@ -199,7 +199,7 @@ export default function AccountMasterPage() {
       title: '科目编码 / 名称', dataIndex: 'name', key: 'name',
       render: (_, r) => {
         if (r._group) {
-          return <span style={{ fontWeight: 600, color: '#000' }}>{r.name}<span style={{ color: '#bfbbb5', fontWeight: 400, marginLeft: 8 }}>{r._group}</span></span>;
+          return <span style={{ fontWeight: 600, color: '#000' }}>{r.name}</span>;
         }
         return (
           <span>

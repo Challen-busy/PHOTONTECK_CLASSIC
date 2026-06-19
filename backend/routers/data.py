@@ -9,6 +9,7 @@ import models as m
 from core.auth import get_current_user
 from core.database import Base, get_db
 from services.labels import get_label, get_table_label
+from services.enum_labels import value_labels_for
 from core.registry import table_map
 from services.tools import (
     TOOLS, _company_filter, _serialize_row,
@@ -86,6 +87,7 @@ async def get_schema(table_name: str, user: m.UserAccount = Depends(get_current_
             "primary_key": col.primary_key,
             "fk": fk_target,
             "has_default": col.default is not None or col.server_default is not None,
+            "value_labels": value_labels_for(table_name, col.name),
         })
 
     sub_tables = []

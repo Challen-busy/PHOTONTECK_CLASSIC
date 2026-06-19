@@ -29,7 +29,7 @@ import {
   query, transition, getAccountingPeriods, executeCommand,
 } from '../../api';
 import { BizEditableTable } from '../../components/biz';
-import { MONO, fmtMoney, num, loadAccounts, getCachedAccounts } from './financeHelpers';
+import { MONO, fmtMoney, num, loadAccounts, getCachedAccounts, statusLabel } from './financeHelpers';
 
 // scheme_type 元数据：标签 + 配色 + 段控选项。
 const SCHEME_TYPE = {
@@ -511,7 +511,7 @@ export default function RecurringSchemePage() {
                 <Descriptions.Item label="凭证号"><span style={{ fontFamily: MONO }}>{genReceipt.voucher_number}</span></Descriptions.Item>
               )}
               {genReceipt.voucher_status && (
-                <Descriptions.Item label="凭证状态"><Tag>{genReceipt.voucher_status}</Tag></Descriptions.Item>
+                <Descriptions.Item label="凭证状态"><Tag>{statusLabel(genReceipt.voucher_status)}</Tag></Descriptions.Item>
               )}
               {genReceipt.lines != null && (
                 <Descriptions.Item label="分录行数">{genReceipt.lines}</Descriptions.Item>

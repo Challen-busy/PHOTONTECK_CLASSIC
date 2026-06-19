@@ -29,7 +29,7 @@ import { query, transition, getTransitions, getAccountingPeriods } from '../../a
 import AccountPicker from './AccountPicker';
 import AuxAccountingModal from './AuxAccountingModal';
 import {
-  MONO, fmtMoney, num, toBase, digitToChinese, summarizeEntries, findPeriodByDate, loadAccounts,
+  MONO, fmtMoney, num, toBase, digitToChinese, summarizeEntries, findPeriodByDate, loadAccounts, enumLabel,
 } from './financeHelpers';
 
 const DOC_TYPE = 'VOUCHER';
@@ -516,7 +516,7 @@ export default function VoucherEntryPage() {
                           onChange={(id, a) => setRow(idx, { account_id: id, _account: a })} />
                         {r._account && (
                           <div style={{ fontSize: 11, color: '#bfbbb5', marginTop: 2 }}>
-                            {r._account.balance_direction === 'DEBIT' ? '借向' : '贷向'} · {r._account.account_type}
+                            {r._account.balance_direction === 'DEBIT' ? '借向' : '贷向'} · {enumLabel('account_type', r._account.account_type)}
                           </div>
                         )}
                       </Td>

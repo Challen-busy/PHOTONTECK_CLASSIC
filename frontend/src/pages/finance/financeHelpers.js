@@ -145,12 +145,73 @@ export function filterByCodeRange(rows = [], codeFrom, codeTo, codeKey = 'accoun
   });
 }
 
-// 五大类中文标签（对齐 Account.account_type）。
-export const ACCOUNT_TYPE_LABEL = {
-  ASSET: '资产',
-  LIABILITY: '负债',
-  EQUITY: '权益',
-  REVENUE: '收入',
-  EXPENSE: '费用',
-  COGS: '成本',
+// ============================================================================
+// 枚举码 → 中文字典（A 方案：集中枚举字典）。与后端同源（穷举结果），只改显示不碰存储码。
+// 规范存储码不可改；自定义财务页（自建列渲染枚举）统一查这里，避免各页各写一份。
+// 通用 MasterDataPage 壳不 import 本字典（解耦）——它优先用后端 schema 附带的 field.value_labels。
+// ============================================================================
+
+// 非状态类枚举：列名 → { 码: 中文 }。
+export const ENUM_LABELS = {
+  account_type: { ASSET: '资产', LIABILITY: '负债', EQUITY: '权益', REVENUE: '收入', EXPENSE: '费用', COGS: '成本' },
+  balance_direction: { DEBIT: '借方', CREDIT: '贷方' },
+  dr_cr: { DR: '借', CR: '贷' },
+  voucher_type: { GENERAL: '普通凭证', RECEIPT: '收款凭证', PAYMENT: '付款凭证', TRANSFER: '转账凭证' },
+  reversal_type: { NORMAL: '普通(蓝字)', RED: '红字反向' },
+  source_type: { CUSTOMER: '客户', SUPPLIER: '供应商', EMPLOYEE: '员工', DEPT: '部门', PROJECT: '项目' },
+  direction: { IN: '流入', OUT: '流出' },
+  cash_direction: { IN: '现金流入', OUT: '现金流出', BOTH: '不限方向' },
+  method_type: { CASH: '现金', TRANSFER: '转账', NOTE: '票据', WIRE: '电汇' },
+  account_source: { FIXED: '固定科目', CUSTOMER: '客户对应科目', SUPPLIER: '供应商对应科目', MATERIAL_DEFAULT: '物料默认科目' },
+  tax_handling: { NONE: '不涉税', INCLUSIVE: '价税合计', EXCLUSIVE: '价外不含税', TAX_ONLY: '仅税额' },
+  date_source: { CREATE: '建单日', BIZ: '业务日' },
+  standard: { CAS: '企业会计准则(内地)', HKFRS: '香港财务报告准则' },
+  measurement_basis: { HISTORICAL_COST: '历史成本', FAIR_VALUE: '公允价值' },
+  depreciation_method: { STRAIGHT_LINE: '直线法', DOUBLE_DECLINING: '双倍余额递减法' },
+  inventory_valuation: { WEIGHTED_AVG: '加权平均', FIFO: '先进先出' },
+  cost_method: { WEIGHTED_AVG: '加权平均', FIFO: '先进先出' },
+  bad_debt_method: { ALLOWANCE: '备抵法', DIRECT: '直接转销法' },
+  scheme_type: { TRANSFER: '自动转账', AMORTIZATION: '摊销', ACCRUAL: '预提' },
+  statement: { BS: '资产负债表', IS: '利润表' },
+  note_type: { COMMERCIAL: '商业承兑汇票', BANK: '银行承兑汇票' },
+  payment_type: { ADVANCE: '预付', POST_DELIVERY: '货后付款' },
+  track_status: {
+    PENDING_ACCEPT: '待接单', ACCEPTED: '已接单待货期', ETA_GIVEN: '已给货期',
+    SHIPPED: '已发货', PARTIAL: '部分到货', RECEIVED: '已到货',
+  },
+  transaction_type: { IN: '入库', OUT: '出库', ADJUST: '调整' },
 };
+
+// 状态码 → 中文（跨表通用兜底，含各单据 status 全集）。
+export const STATUS_LABELS = {
+  DRAFT: '草稿/录入', AUDITED: '已审核', REVIEWED: '出纳已复核', POSTED: '已过账',
+  ACTIVE: '启用', INACTIVE: '停用',
+  OPEN: '未结账(开启)', LOCKED: '已锁定', CLOSED: '已结账',
+  PENDING: '待处理/待付款', PARTIAL: '部分付款', PARTIAL_PAID: '部分付款', PAID: '已付清',
+  OVERDUE: '逾期', SETTLED: '已结算', BAD_DEBT: '坏账', COLLECTING: '收款中',
+  INVOICED: '已开票', CONTRACT_REGISTERED: '已登记合同', CREDIT_MANAGED: '信用已管理',
+  VOUCHER_PROCESSED: '凭证已处理', NOTES_RECV: '应收票据', CONFIRMED: '已确认到账',
+  CANCELLED: '已取消', FINANCE_REVIEW: '财务审核中', PENDING_REVIEW: '待财务审核',
+  PENDING_FINANCE: '待财务执行', AP_CREATED: '已生成应付', AR_CREATED: '已生成应收',
+  MATCHING: '勾稽中', HELD: '持有中', UNALLOCATED: '未核销', ALLOCATED: '已核销',
+  START: '开始', VOID: '作废', REVERSED: '已红冲',
+};
+
+/**
+ * 枚举码 → 中文。查不到原样返回 value 兜底，绝不显 undefined。
+ * @param {string} field 列名（如 'account_type' / 'direction' / 'standard'）
+ * @param {*} value 存储码（如 'ASSET' / 'IN' / 'HKFRS'）
+ */
+export function enumLabel(field, value) {
+  if (value == null || value === '') return '';
+  return ENUM_LABELS[field]?.[value] ?? STATUS_LABELS[value] ?? String(value);
+}
+
+/** 状态码 → 中文（StatusPill / status 列专用，查不到原样返回兜底）。 */
+export function statusLabel(value) {
+  if (value == null || value === '') return '';
+  return STATUS_LABELS[value] ?? String(value);
+}
+
+// 五大类中文标签（对齐 Account.account_type）。沿用 ENUM_LABELS.account_type，保留具名导出向后兼容。
+export const ACCOUNT_TYPE_LABEL = ENUM_LABELS.account_type;
