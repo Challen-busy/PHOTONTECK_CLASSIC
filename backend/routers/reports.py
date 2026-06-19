@@ -2684,3 +2684,122 @@ async def credit_overlimit(
         "total": len(data),
     }
 
+
+# ============================================================
+# 存货核算报表（finance-gl 成本波）：即时收发明细表 / 存货收发存汇总表。
+# 成本数据源 = InventoryTransaction（移动平均成本交易，WMS 引擎产出）+ InventoryValuation（当前结存均价）。
+# _company_filter 隔离。
+# ============================================================
+
+@router.get("/inv-cost-ledger")
+async def inv_cost_ledger(
+    company_id: int | None = Query(None, description="公司 id（缺则取可见范围首个）"),
+    material_id: int | None = Query(None, description="物料 id（选传，单物料明细账）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """即时收发明细表：逐成本交易列 收入(数量/单价/金额) / 发出(数量/单价/金额) / 结存(数量/金额)，按物料时序滚算。"""
+    company_ids = _company_filter(user)
+    if company_id is None:
+        company_id = company_ids[0] if company_ids else user.company_id
+    elif company_ids and company_id not in company_ids:
+        return {"report": "inv_cost_ledger", "error": "无权访问该公司", "data": []}
+
+    stmt = (
+        select(m.InventoryTransaction, m.Material)
+        .join(m.Material, m.InventoryTransaction.material_id == m.Material.id, isouter=True)
+        .where(m.InventoryTransaction.company_id == company_id)
+    )
+    if material_id is not None:
+        stmt = stmt.where(m.InventoryTransaction.material_id == material_id)
+    stmt = stmt.order_by(m.InventoryTransaction.material_id,
+                         m.InventoryTransaction.transaction_date, m.InventoryTransaction.id)
+    rows = (await db.execute(stmt)).all()
+
+    data = []
+    run_qty: dict[int, float] = {}
+    run_val: dict[int, float] = {}
+    for txn, mat in rows:
+        mid = txn.material_id
+        is_in = (txn.transaction_type or "").upper() == "IN"
+        qty = _dec(txn.quantity)
+        val = _dec(txn.total_cost)
+        run_qty[mid] = round(run_qty.get(mid, 0.0) + (qty if is_in else -qty), 2)
+        run_val[mid] = round(run_val.get(mid, 0.0) + (val if is_in else -val), 2)
+        data.append({
+            "id": txn.id,
+            "material_id": mid,
+            "material_name": getattr(mat, "name", None) or "",
+            "material_code": getattr(mat, "sku", None) or "",
+            "transaction_type": txn.transaction_type,
+            "transaction_date": txn.transaction_date.isoformat() if txn.transaction_date else None,
+            "in_qty": qty if is_in else 0.0,
+            "in_amount": val if is_in else 0.0,
+            "out_qty": 0.0 if is_in else qty,
+            "out_amount": 0.0 if is_in else val,
+            "unit_cost": _dec(txn.unit_cost),
+            "balance_qty": run_qty[mid],
+            "balance_amount": run_val[mid],
+            "voucher_id": txn.voucher_id,
+            "reference_type": txn.reference_type,
+        })
+    return {"report": "inv_cost_ledger", "company_id": company_id, "data": data, "total": len(data)}
+
+
+@router.get("/inv-inout-summary")
+async def inv_inout_summary(
+    company_id: int | None = Query(None, description="公司 id（缺则取可见范围首个）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """存货收发存汇总表：按物料汇总 收入(数量/金额) / 发出(数量/金额) + 当前结存(数量/金额/均价)。"""
+    company_ids = _company_filter(user)
+    if company_id is None:
+        company_id = company_ids[0] if company_ids else user.company_id
+    elif company_ids and company_id not in company_ids:
+        return {"report": "inv_inout_summary", "error": "无权访问该公司", "data": []}
+
+    txn_rows = (await db.execute(
+        select(m.InventoryTransaction).where(m.InventoryTransaction.company_id == company_id)
+    )).scalars().all()
+    agg: dict[int, dict] = {}
+    for t in txn_rows:
+        a = agg.setdefault(t.material_id, {"in_qty": 0.0, "in_amount": 0.0, "out_qty": 0.0, "out_amount": 0.0})
+        if (t.transaction_type or "").upper() == "IN":
+            a["in_qty"] += _dec(t.quantity); a["in_amount"] += _dec(t.total_cost)
+        else:
+            a["out_qty"] += _dec(t.quantity); a["out_amount"] += _dec(t.total_cost)
+
+    # 当前结存（数量/金额/均价）来自 InventoryValuation。
+    val_rows = (await db.execute(
+        select(m.InventoryValuation, m.Material)
+        .join(m.Material, m.InventoryValuation.material_id == m.Material.id, isouter=True)
+        .where(m.InventoryValuation.company_id == company_id)
+    )).all()
+    bal = {v.material_id: (v, mat) for v, mat in val_rows}
+
+    mat_ids = set(agg) | set(bal)
+    data = []
+    for mid in mat_ids:
+        a = agg.get(mid, {"in_qty": 0.0, "in_amount": 0.0, "out_qty": 0.0, "out_amount": 0.0})
+        v, mat = bal.get(mid, (None, None))
+        if mat is None:
+            mrow = (await db.execute(select(m.Material).where(m.Material.id == mid))).scalar_one_or_none()
+            mat = mrow
+        data.append({
+            "material_id": mid,
+            "material_name": getattr(mat, "name", None) or "",
+            "material_code": getattr(mat, "sku", None) or "",
+            "cost_method": getattr(v, "cost_method", "WEIGHTED_AVG") if v else "WEIGHTED_AVG",
+            "in_qty": round(a["in_qty"], 2), "in_amount": round(a["in_amount"], 2),
+            "out_qty": round(a["out_qty"], 2), "out_amount": round(a["out_amount"], 2),
+            "balance_qty": _dec(v.total_quantity) if v else 0.0,
+            "balance_amount": _dec(v.total_value) if v else 0.0,
+            "unit_cost": _dec(v.current_unit_cost) if v else 0.0,
+        })
+    data.sort(key=lambda r: r["balance_amount"], reverse=True)
+    return {
+        "report": "inv_inout_summary", "company_id": company_id, "data": data, "total": len(data),
+        "total_balance_amount": round(sum(r["balance_amount"] for r in data), 2),
+    }
+

@@ -92,6 +92,8 @@ def load_commands() -> None:
     import services.ap_payable  # noqa: F401
     # 信用管理（finance-gl 信用波）：信用检查 validator + 占用 effect + 重算命令 finance.recompute_credit
     import services.finance_credit  # noqa: F401
+    # 存货核算（finance-gl 成本波）：存货成本交易→凭证 finance.generate_inventory_vouchers（成本引擎在 WMS）
+    import services.cost_accounting  # noqa: F401
 
     _loaded = True
 

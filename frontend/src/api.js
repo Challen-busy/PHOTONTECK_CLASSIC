@@ -127,3 +127,8 @@ export const getCreditStatus = (params = {}) => api.get('/reports/credit-status'
 export const getCreditOverlimit = (params = {}) => api.get('/reports/credit-overlimit', { params });
 export const recomputeCredit = (company_id) => executeCommand('finance.recompute_credit', { company_id });
 export const upsertCustomerCredit = (payload) => executeCommand('upsert_customer_credit', payload);
+
+// 存货核算（finance-gl 成本波；移动平均成本引擎在 WMS，本组只读报表 + 凭证生成）
+export const getInvCostLedger = (params = {}) => api.get('/reports/inv-cost-ledger', { params });
+export const getInvInoutSummary = (params = {}) => api.get('/reports/inv-inout-summary', { params });
+export const generateInventoryVouchers = (payload = {}) => executeCommand('finance.generate_inventory_vouchers', payload);

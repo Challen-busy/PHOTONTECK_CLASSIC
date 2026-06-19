@@ -82,6 +82,8 @@ _EXTENSION_MODULES = (
     "services.ap_payable",
     # 信用管理（finance-gl 信用波）：信用检查 validator + 信用占用 effect（hook 应收单审核）。
     "services.finance_credit",
+    # 存货核算（finance-gl 成本波）：存货成本交易→凭证命令（成本引擎在 WMS；本模块仅命令，登记保一致）。
+    "services.cost_accounting",
 )
 _loaded = False
 
