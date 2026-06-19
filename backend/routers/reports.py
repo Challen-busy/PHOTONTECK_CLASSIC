@@ -611,6 +611,51 @@ async def aging_analysis(
     }
 
 
+@router.get("/ar-open-items")
+async def ar_open_items(
+    company_id: int | None = Query(None, description="公司 id（缺则取用户可见公司范围首个）"),
+    party_id: int | None = Query(None, description="客户 id（核销界面按客户筛选）"),
+    currency: str | None = Query(None, description="币别（核销须同币种，按币别筛选）"),
+    biz_type: str = Query("AR", description="业务类型 AR 应收 / AP 应付（通用核销引擎）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """待核销项（核销界面取数）：左栏未核销应收（债权）+ 右栏未核销收款（已收）两栏。
+
+    供前端通用核销界面（biz_type=AR/AP）一次取齐两侧未核销单据（写off_status != VERIFIED，须 AUDITED），
+    每项带 open_amount（未核销原币额）/ exchange_rate / 已核销额 / 核销状态，前端据此勾选配对后调
+    finance.writeoff（手工 links）或 auto=True（按方案自动）。
+    """
+    from services.finance_writeoff import _config, _doc_brief, list_open_ar, list_open_receipts
+
+    company_ids = _company_filter(user)
+    if company_id is None:
+        company_id = company_ids[0] if company_ids else user.company_id
+    elif company_ids and company_id not in company_ids:
+        return {"report": "ar_open_items", "company_id": company_id, "biz_type": biz_type,
+                "debit_items": [], "credit_items": [], "error": "无权访问该公司"}
+
+    cfg = _config(biz_type)
+    debits = await list_open_ar(
+        db, company_id=company_id, party_id=party_id, currency=currency, biz_type=biz_type)
+    credits = await list_open_receipts(
+        db, company_id=company_id, party_id=party_id, currency=currency, biz_type=biz_type)
+
+    debit_items = [_doc_brief(d, cfg.debit) for d in debits]
+    credit_items = [_doc_brief(c, cfg.credit) for c in credits]
+    return {
+        "report": "ar_open_items",
+        "company_id": company_id,
+        "biz_type": biz_type,
+        "party_id": party_id,
+        "currency": currency,
+        "debit_items": debit_items,    # 未核销应收（债权侧）
+        "credit_items": credit_items,  # 未核销收款（已收侧）
+        "total_open_debit": round(sum(i["open_amount"] for i in debit_items), 2),
+        "total_open_credit": round(sum(i["open_amount"] for i in credit_items), 2),
+    }
+
+
 # ============================================================
 # 三大财务报表（finance-gl wave-5）：资产负债表 / 利润表 / 现金流量表 / 核算维度余额表
 # 只读端点，取数底座：AccountBalance（余额/发生额真相）+ VoucherEntry（现金流量项目归集）。
@@ -1944,3 +1989,295 @@ async def list_periods(
     ]
 
     return {"periods": data}
+
+
+# ============================================================
+# 应收款管理报表（finance-gl wave-8）：应收款汇总表 / 明细表 / 客户对账单
+# 取数底座：AccountsReceivable（应收单/债权）+ ARReceipt（收款单/已收）+ WriteoffLink（核销关系，
+# 用于「已核销额」口径校验，但回写后的 written_off_amount 即为当前口径，报表直接取单上回写值）。
+# 未清额 outstanding = amount − paid_amount − written_off_amount（兼容旧扁平 paid_amount 与新核销口径）。
+# 多公司：company_id 选传则单公司（须可见）；不传取 _company_filter(user) 可见范围。
+# ============================================================
+
+# 应收单「未清」状态集（排除已关闭/已结算/已全额核销的扁平历史口径；新流程审核态 AUDITED 视为成立未清）。
+_AR_CLOSED_STATUSES = ("CLOSED", "SETTLED")
+
+
+def _ar_outstanding(ar) -> float:
+    """应收单未清额 = 价税合计 − 已收(扁平) − 已核销(新口径)，下限 0。"""
+    return max(
+        _dec(ar.amount) - _dec(ar.paid_amount) - _dec(getattr(ar, "written_off_amount", 0)),
+        0.0,
+    )
+
+
+def _ar_company_scope(user, company_id):
+    """返回 (company_ids_filter, single_company_id, error)。
+
+    company_id 选传 → 校验可见后单公司；不传 → 取 _company_filter（privileged=None 表全部可见）。
+    """
+    company_ids = _company_filter(user)
+    if company_id is not None:
+        if company_ids is not None and company_id not in company_ids:
+            return None, None, "无权访问该公司"
+        return None, company_id, None
+    return company_ids, None, None
+
+
+@router.get("/ar-summary")
+async def ar_summary(
+    company_id: int | None = Query(None, description="公司 id（选传；不传取可见范围全部）"),
+    as_of: str | None = Query(None, description="截止业务日期（YYYY-MM-DD，选传；只算 bill_date≤此日的应收单）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """应收款汇总表：按客户汇总期末未清应收（价税合计/已收/已核销/未清）。
+
+    未清额 = Σ(amount − paid_amount − written_off_amount)，仅算未关闭/未结算的应收单。
+    as_of 选传则只纳入 bill_date≤as_of（缺 bill_date 回退 due_date）的应收单。
+    """
+    company_ids, single_cid, err = _ar_company_scope(user, company_id)
+    if err:
+        return {"report": "ar_summary", "error": err, "data": []}
+
+    stmt = (
+        select(m.AccountsReceivable, m.Customer)
+        .join(m.Customer, m.AccountsReceivable.customer_id == m.Customer.id, isouter=True)
+        .where(m.AccountsReceivable.status.notin_(_AR_CLOSED_STATUSES))
+    )
+    if single_cid is not None:
+        stmt = stmt.where(m.AccountsReceivable.company_id == single_cid)
+    elif company_ids:
+        stmt = stmt.where(m.AccountsReceivable.company_id.in_(company_ids))
+
+    as_of_date = date.fromisoformat(as_of[:10]) if as_of else None
+    rows = (await db.execute(stmt)).all()
+
+    by_cust: dict[int, dict] = {}
+    for ar, cust in rows:
+        biz_date = ar.bill_date or ar.due_date
+        if as_of_date and biz_date and biz_date > as_of_date:
+            continue
+        outstanding = _ar_outstanding(ar)
+        if outstanding <= 0:
+            continue
+        key = ar.customer_id or 0
+        agg = by_cust.setdefault(key, {
+            "customer_id": ar.customer_id,
+            "customer_name": getattr(cust, "name", None) or "(未指定客户)",
+            "customer_code": getattr(cust, "code", None) or "",
+            "currency": ar.currency,
+            "total_amount": 0.0, "paid_amount": 0.0, "written_off_amount": 0.0,
+            "outstanding": 0.0, "bill_count": 0,
+        })
+        agg["total_amount"] += _dec(ar.amount)
+        agg["paid_amount"] += _dec(ar.paid_amount)
+        agg["written_off_amount"] += _dec(getattr(ar, "written_off_amount", 0))
+        agg["outstanding"] += outstanding
+        agg["bill_count"] += 1
+
+    data = sorted(by_cust.values(), key=lambda r: r["outstanding"], reverse=True)
+    for r in data:
+        for k in ("total_amount", "paid_amount", "written_off_amount", "outstanding"):
+            r[k] = round(r[k], 2)
+    return {
+        "report": "ar_summary",
+        "company_id": single_cid,
+        "as_of": as_of_date.isoformat() if as_of_date else None,
+        "data": data,
+        "total_outstanding": round(sum(r["outstanding"] for r in data), 2),
+    }
+
+
+@router.get("/ar-detail")
+async def ar_detail(
+    company_id: int | None = Query(None, description="公司 id（选传）"),
+    customer_id: int | None = Query(None, description="客户 id（选传，单客户明细）"),
+    as_of: str | None = Query(None, description="截止业务日期（YYYY-MM-DD，选传）"),
+    include_settled: bool = Query(False, description="含已结清单据（默认 False=仅未清）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """应收款明细表：逐应收单列 单号/客户/业务日/到期日/价税合计/已收/已核销/未清/状态。"""
+    company_ids, single_cid, err = _ar_company_scope(user, company_id)
+    if err:
+        return {"report": "ar_detail", "error": err, "data": []}
+
+    stmt = (
+        select(m.AccountsReceivable, m.Customer)
+        .join(m.Customer, m.AccountsReceivable.customer_id == m.Customer.id, isouter=True)
+    )
+    if not include_settled:
+        stmt = stmt.where(m.AccountsReceivable.status.notin_(_AR_CLOSED_STATUSES))
+    if single_cid is not None:
+        stmt = stmt.where(m.AccountsReceivable.company_id == single_cid)
+    elif company_ids:
+        stmt = stmt.where(m.AccountsReceivable.company_id.in_(company_ids))
+    if customer_id is not None:
+        stmt = stmt.where(m.AccountsReceivable.customer_id == customer_id)
+    stmt = stmt.order_by(m.AccountsReceivable.customer_id, m.AccountsReceivable.id)
+
+    as_of_date = date.fromisoformat(as_of[:10]) if as_of else None
+    rows = (await db.execute(stmt)).all()
+
+    data = []
+    for ar, cust in rows:
+        biz_date = ar.bill_date or ar.due_date
+        if as_of_date and biz_date and biz_date > as_of_date:
+            continue
+        outstanding = _ar_outstanding(ar)
+        if not include_settled and outstanding <= 0:
+            continue
+        data.append({
+            "id": ar.id,
+            "bill_number": ar.bill_number or "",
+            "invoice_number": ar.invoice_number or "",
+            "customer_id": ar.customer_id,
+            "customer_name": getattr(cust, "name", None) or "(未指定客户)",
+            "customer_code": getattr(cust, "code", None) or "",
+            "bill_date": ar.bill_date.isoformat() if ar.bill_date else None,
+            "due_date": ar.due_date.isoformat() if ar.due_date else None,
+            "currency": ar.currency,
+            "amount": _dec(ar.amount),
+            "untaxed_amount": _dec(getattr(ar, "untaxed_amount", 0)),
+            "tax_amount": _dec(getattr(ar, "tax_amount", 0)),
+            "paid_amount": _dec(ar.paid_amount),
+            "written_off_amount": _dec(getattr(ar, "written_off_amount", 0)),
+            "outstanding": round(outstanding, 2),
+            "status": ar.status,
+            "writeoff_status": getattr(ar, "writeoff_status", None),
+        })
+    return {
+        "report": "ar_detail",
+        "company_id": single_cid,
+        "customer_id": customer_id,
+        "as_of": as_of_date.isoformat() if as_of_date else None,
+        "data": data,
+        "total_outstanding": round(sum(r["outstanding"] for r in data), 2),
+    }
+
+
+@router.get("/customer-statement")
+async def customer_statement(
+    customer_id: int = Query(..., description="客户 id（必传，单客户对账）"),
+    company_id: int | None = Query(None, description="公司 id（选传；不传取可见范围）"),
+    date_from: str | None = Query(None, description="期间起（YYYY-MM-DD，选传）"),
+    date_to: str | None = Query(None, description="期间止（YYYY-MM-DD，选传）"),
+    db: AsyncSession = Depends(get_db),
+    user: m.UserAccount = Depends(get_current_user),
+):
+    """客户对账单：某客户期间内 应收（债权+）/ 收款（已收−）时序流水 + 期初/期末余额对账。
+
+    余额口径（原币）：应收单按 amount 增加应收余额（debit 方向）；收款单按 amount 冲减（credit 方向）。
+    期初余额 = date_from 之前的 Σ应收 − Σ收款；逐笔累计出 running_balance。多币种不混算（按单据原币逐笔列示）。
+    """
+    company_ids, single_cid, err = _ar_company_scope(user, company_id)
+    if err:
+        return {"report": "customer_statement", "error": err, "transactions": []}
+
+    cust = (await db.execute(
+        select(m.Customer).where(m.Customer.id == customer_id)
+    )).scalar_one_or_none()
+
+    d_from = date.fromisoformat(date_from[:10]) if date_from else None
+    d_to = date.fromisoformat(date_to[:10]) if date_to else None
+
+    def _apply_company(stmt, col):
+        if single_cid is not None:
+            return stmt.where(col == single_cid)
+        if company_ids:
+            return stmt.where(col.in_(company_ids))
+        return stmt
+
+    # 应收单（债权，按 bill_date 落期；缺则回退 due_date）。仅取已成立（非草稿/非关闭）。
+    ar_stmt = _apply_company(
+        select(m.AccountsReceivable).where(
+            m.AccountsReceivable.customer_id == customer_id,
+            m.AccountsReceivable.status.notin_(("DRAFT",) + _AR_CLOSED_STATUSES),
+        ),
+        m.AccountsReceivable.company_id,
+    )
+    bills = (await db.execute(ar_stmt)).scalars().all()
+
+    # 收款单（已收，按 receipt_date 落期）。仅取已审核（成立）。
+    rcpt_stmt = _apply_company(
+        select(m.ARReceipt).where(
+            m.ARReceipt.customer_id == customer_id,
+            m.ARReceipt.status == "AUDITED",
+        ),
+        m.ARReceipt.company_id,
+    )
+    receipts = (await db.execute(rcpt_stmt)).scalars().all()
+
+    # 统一事件流：(business_date, type, doc_no, debit应收, credit收款, currency, doc_id)。
+    events = []
+    for b in bills:
+        bd = b.bill_date or b.due_date
+        events.append({
+            "date": bd, "type": "AR_BILL", "doc_no": b.bill_number or b.invoice_number or f"AR#{b.id}",
+            "debit": _dec(b.amount), "credit": 0.0, "currency": b.currency, "doc_id": b.id,
+            "due_date": b.due_date.isoformat() if b.due_date else None,
+        })
+    for r in receipts:
+        events.append({
+            "date": r.receipt_date, "type": "AR_RECEIPT", "doc_no": r.receipt_number or f"SK#{r.id}",
+            "debit": 0.0, "credit": _dec(r.amount), "currency": r.currency, "doc_id": r.id,
+            "is_advance": bool(r.is_advance),
+        })
+
+    # 期初余额（date_from 之前的净额）= Σ应收(debit) − Σ收款(credit)。
+    opening = 0.0
+    for e in events:
+        if d_from and e["date"] and e["date"] < d_from:
+            opening += e["debit"] - e["credit"]
+
+    # 期间内事件（date_from≤date≤date_to；无日期的单据按落入期间处理，列在最后）。
+    def _in_window(ev):
+        ed = ev["date"]
+        if ed is None:
+            return True
+        if d_from and ed < d_from:
+            return False
+        if d_to and ed > d_to:
+            return False
+        return True
+
+    window = [e for e in events if _in_window(e)]
+    window.sort(key=lambda e: (e["date"] or date.max, 0 if e["type"] == "AR_BILL" else 1))
+
+    running = round(opening, 2)
+    txns = []
+    total_debit = 0.0
+    total_credit = 0.0
+    for e in window:
+        running = round(running + e["debit"] - e["credit"], 2)
+        total_debit += e["debit"]
+        total_credit += e["credit"]
+        txns.append({
+            "date": e["date"].isoformat() if e["date"] else None,
+            "type": e["type"],
+            "doc_no": e["doc_no"],
+            "currency": e["currency"],
+            "debit": round(e["debit"], 2),
+            "credit": round(e["credit"], 2),
+            "running_balance": running,
+            "due_date": e.get("due_date"),
+            "is_advance": e.get("is_advance"),
+            "doc_id": e["doc_id"],
+        })
+
+    return {
+        "report": "customer_statement",
+        "company_id": single_cid,
+        "customer_id": customer_id,
+        "customer_name": getattr(cust, "name", None),
+        "customer_code": getattr(cust, "code", None),
+        "date_from": d_from.isoformat() if d_from else None,
+        "date_to": d_to.isoformat() if d_to else None,
+        "opening_balance": round(opening, 2),
+        "closing_balance": running,
+        "total_debit": round(total_debit, 2),
+        "total_credit": round(total_credit, 2),
+        "transactions": txns,
+    }
+

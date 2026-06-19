@@ -1761,6 +1761,16 @@ class EliminationEntry(AuditMixin, Base):
 
 
 class AccountsReceivable(AuditMixin, Base):
+    """应收单（finance-gl 应收款管理，doc_type 复用 ACCOUNTS_RECEIVABLE，完全替代金蝶应收单）。
+
+    金蝶应收单 = 客户债权立账单（业务应收）。本表此前为「销售出库勾稽后的扁平应收行」（无单据
+    号/无头明细/无收款计划），applications 仅 finance_mapping/ARSettlement 引用。本波在不破坏存量
+    列与 doc_type 的前提下，原地补齐金蝶应收单头字段 + 新增两张子表（明细 ar_bill_line / 收款计划
+    ar_receipt_plan_line），并挂多态状态机 DRAFT→SUBMITTED→AUDITED（审核后业财映射生应收凭证）。
+
+    引擎五条不破坏：本表挂的是「同一 doc_type」的新版 WorkflowDefinition（version 升级，旧版历史
+    单不受影响）；新增列均 nullable / 带 default，存量行兼容。写仍走 execute_transition。
+    """
     __tablename__ = "accounts_receivable"
     __doc_types__ = ("ACCOUNTS_RECEIVABLE",)
     id = Column(Integer, primary_key=True)
@@ -1777,6 +1787,162 @@ class AccountsReceivable(AuditMixin, Base):
     paid_amount = Column(Numeric(16, 2), default=0)
     paid_date = Column(Date, nullable=True)
     status = Column(String(30), default="PENDING")
+    # --- finance-gl 应收款管理：金蝶应收单头字段（金蝶规格，据截图提炼）---
+    bill_number = Column(String(40), default="", index=True)   # 应收单号（NumberingRule AR-YYMM-NNN）；存量行空
+    bill_type = Column(String(20), default="BUSINESS_AR")      # 立账类型：业务应收 BUSINESS_AR / 其他应收 OTHER_AR
+    bill_date = Column(Date, nullable=True)                    # 业务日期（凭证日期取数来源）
+    base_currency = Column(String(3), default="")             # 本位币（公司账簿币，多币种双金额用）
+    base_amount = Column(Numeric(16, 2), nullable=True)       # 本位币金额 = amount × exchange_rate
+    payment_terms_text = Column(String(100), default="")     # 收款条件（如 Net 30 / T/T 预付）
+    sales_engineer_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)  # 销售员
+    sales_org_id = Column(Integer, ForeignKey("company.id"), nullable=True)            # 销售组织（多主体）
+    sales_dept = Column(String(50), default="")              # 销售部门
+    is_tax_included = Column(Boolean, default=False)         # 价外税开关（True=价外税；驱动录入/取数）
+    is_price_tax_inclusive = Column(Boolean, default=False)  # 按含税单价录入开关
+    tax_amount = Column(Numeric(16, 2), default=0)           # 税额合计（销项税，HK 准则为 0）
+    untaxed_amount = Column(Numeric(16, 2), default=0)       # 不含税金额合计
+    # 通用核销口径（biz_type=AR）：已核销额 / 核销状态（UNVERIFIED 未核销 / PARTIAL 部分 / VERIFIED 已核销）。
+    written_off_amount = Column(Numeric(16, 2), default=0)
+    writeoff_status = Column(String(15), default="UNVERIFIED")
+    remark = Column(Text, default="")
+    __table_args__ = (UniqueConstraint("company_id", "bill_number", name="ux_accounts_receivable_bill_number"),)
+
+
+class ARBillLine(Base):
+    """应收单明细子表（金蝶应收单分录：物料 × 计价数量 × 单价 × 税率组 × 不含税/税额/价税合计）。
+
+    名含 `_line` + 指向 accounts_receivable 的 FK → 引擎自动识别为子表，DocEditor 渲 SubTableEditor。
+    """
+    __tablename__ = "ar_bill_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    accounts_receivable_id = Column(Integer, ForeignKey("accounts_receivable.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    material_id = Column(Integer, ForeignKey("material.id"), nullable=True)
+    material_code = Column(String(50), default="")          # 物料编码（快照，无 material_id 时手填）
+    material_name = Column(String(300), default="")         # 物料名称（快照）
+    sales_order_line_id = Column(Integer, ForeignKey("sales_order_line.id"), nullable=True)  # 源销售订单行（勾稽）
+    sales_invoice_line_id = Column(Integer, ForeignKey("sales_invoice_line.id"), nullable=True)  # 源发票行（勾稽）
+    quantity = Column(Numeric(12, 2), nullable=False, default=0)   # 计价数量
+    uom = Column(String(20), default="")
+    unit_price = Column(Numeric(12, 4), nullable=False, default=0)  # 单价（含税/不含税由头开关界定）
+    tax_rate_group = Column(String(30), default="")        # 税率组（弱引用税率组码，如 VAT13/EXEMPT）
+    tax_rate = Column(Numeric(5, 2), default=0)            # 税率%（税率组带出，可覆盖）
+    untaxed_amount = Column(Numeric(16, 2), default=0)     # 不含税金额
+    tax_amount = Column(Numeric(16, 2), default=0)         # 税额（销项税）
+    amount = Column(Numeric(16, 2), default=0)             # 价税合计
+    remark = Column(String(200), default="")
+
+    material = relationship("Material")
+    __table_args__ = (UniqueConstraint("accounts_receivable_id", "line_number", name="ux_ar_bill_line"),)
+
+
+class ARReceiptPlanLine(Base):
+    """应收单收款计划子表（金蝶分期收款计划：到期日 / 比例 / 金额）。"""
+    __tablename__ = "ar_receipt_plan_line"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    accounts_receivable_id = Column(Integer, ForeignKey("accounts_receivable.id"), nullable=False, index=True)
+    line_number = Column(SmallInteger, nullable=False, default=1)
+    due_date = Column(Date, nullable=True)                 # 该期到期日
+    ratio = Column(Numeric(7, 4), default=0)               # 收款比例%（各期合计应=100）
+    plan_amount = Column(Numeric(16, 2), default=0)        # 该期计划收款金额（原币）
+    received_amount = Column(Numeric(16, 2), default=0)    # 该期已收（核销回写）
+    remark = Column(String(200), default="")
+    __table_args__ = (UniqueConstraint("accounts_receivable_id", "line_number", name="ux_ar_receipt_plan_line"),)
+
+
+class ARReceipt(AuditMixin, Base):
+    """收款单（finance-gl 应收款管理，doc_type AR_RECEIPT，完全替代金蝶收款单）。
+
+    客户实收款登记单。审核后业财映射生凭证：借 1002 银行存款 / 贷 1122 应收（核销时冲减）或
+    2203 预收账款（is_advance 预收）。已收款经通用核销引擎（WriteoffLink）与应收单（债权）勾稽。
+    状态机 DRAFT→SUBMITTED→AUDITED（轻于凭证，无出纳复核段；过账走业财映射）。
+    """
+    __tablename__ = "ar_receipt"
+    __doc_types__ = ("AR_RECEIPT",)
+    id = Column(Integer, primary_key=True)
+    receipt_number = Column(String(40), index=True, nullable=False)  # 收款单号（NumberingRule SK-YYMM-NNN）
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=True)
+    receipt_date = Column(Date, nullable=True)             # 收款日期
+    currency = Column(String(3), default="")
+    exchange_rate = Column(Numeric(12, 6), default=1)
+    base_currency = Column(String(3), default="")          # 本位币
+    base_amount = Column(Numeric(16, 2), nullable=True)    # 本位币金额 = amount × exchange_rate
+    amount = Column(Numeric(16, 2), nullable=False, default=0)  # 收款金额（原币）
+    settlement_method_id = Column(Integer, ForeignKey("settlement_method.id"), nullable=True)  # 结算方式
+    bank_account = Column(String(50), default="")          # 收款银行账户
+    payer_name = Column(String(100), default="")           # 付款方名称
+    is_advance = Column(Boolean, default=False)            # 是否预收（True→贷 2203 预收账款）
+    voucher_id = Column(Integer, ForeignKey("voucher.id"), nullable=True)  # 业财映射回填的凭证
+    # 通用核销口径（biz_type=AR）：已核销额 / 核销状态（UNVERIFIED/PARTIAL/VERIFIED）。
+    written_off_amount = Column(Numeric(16, 2), default=0)
+    writeoff_status = Column(String(15), default="UNVERIFIED")
+    status = Column(String(30), default="DRAFT")
+    remark = Column(Text, default="")
+
+    customer = relationship("Customer")
+    __table_args__ = (UniqueConstraint("company_id", "receipt_number", name="ux_ar_receipt_number"),)
+
+
+class WriteoffScheme(AuditMixin, Base):
+    """核销方案（通用主数据，biz_type=AR/AP 参数化）：自动核销匹配规则 + 优先级。
+
+    MasterDataPage 可建/改（__doc_types__ + __queryable__，单态 ACTIVE 自环编辑）。Phase2 自动核销
+    引擎读本表按 match_rule 选债权/已收配对：FIFO 先进先出 / SAME_AMOUNT 同金额 / BY_DUEDATE 按到期日 /
+    MANUAL 手工。应付款管理直接复用（biz_type=AP）。
+    """
+    __tablename__ = "writeoff_scheme"
+    __doc_types__ = ("WRITEOFF_SCHEME",)
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False)
+    name = Column(String(100), nullable=False)
+    biz_type = Column(String(5), nullable=False, default="AR")   # AR 应收 / AP 应付（通用化）
+    match_rule = Column(String(15), nullable=False, default="FIFO")  # FIFO / SAME_AMOUNT / BY_DUEDATE / MANUAL
+    priority = Column(SmallInteger, nullable=False, default=100)  # 优先级（小=先用）
+    is_default = Column(Boolean, default=False)            # 该 biz_type 的默认方案（软约束）
+    is_active = Column(Boolean, default=True)
+    remark = Column(String(200), default="")
+    __table_args__ = (UniqueConstraint("company_id", "biz_type", "code", name="ux_writeoff_scheme_company_biztype_code"),)
+
+
+class WriteoffLink(Base):
+    """核销关系表（★通用核销引擎核心，biz_type=AR/AP 参数化；应付/出纳后续直接复用）。
+
+    一行 = 「债权单某行」↔「已收/已付单某行」的一次勾稽（多对多）。债权侧（debit_*）：应收 = 应收单
+    （AR_BILL/ACCOUNTS_RECEIVABLE）；应付侧将来 = 付款单。已收侧（credit_*）：应收 = 收款单（AR_RECEIPT）。
+    Phase2 核销命令写本表 + 回写两单 written_off_amount/writeoff_status + 写 AccountBalance 往来口径。
+    外币核销：exchange_diff = 本次核销原币 × (核销汇率 − 入账汇率)（⚠️汇兑损益口径待复核）。
+    反核销 unwriteoff：删本行（或置 is_active=False）+ 回退两单已核销额。
+    弱引用（doc_type+doc_id 多态，不建跨表 FK）：兼容 AR/AP 不同单据类型，引擎五条不破坏。
+    """
+    __tablename__ = "writeoff_link"
+    __queryable__ = True
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id"), nullable=False, index=True)
+    biz_type = Column(String(5), nullable=False, default="AR")   # AR / AP（通用化）
+    scheme_id = Column(Integer, ForeignKey("writeoff_scheme.id"), nullable=True)  # 所用核销方案（手工时空）
+    # 债权侧（应收=应收单 / 应付侧将来=已付）：doc_type+doc_id 弱引用，line_id 可空（整单核销）。
+    debit_doc_type = Column(String(30), nullable=False)
+    debit_doc_id = Column(BigInteger, nullable=False, index=True)
+    debit_line_id = Column(BigInteger, nullable=True)
+    # 已收/已付侧（应收=收款单）：doc_type+doc_id 弱引用，line_id 可空。
+    credit_doc_type = Column(String(30), nullable=False)
+    credit_doc_id = Column(BigInteger, nullable=False, index=True)
+    credit_line_id = Column(BigInteger, nullable=True)
+    amount = Column(Numeric(16, 2), nullable=False, default=0)     # 本次核销金额（原币）
+    base_amount = Column(Numeric(16, 2), default=0)               # 本次核销本位币金额
+    exchange_diff = Column(Numeric(16, 2), default=0)            # 汇兑差（外币核销，⚠️待复核口径）
+    write_date = Column(Date, nullable=True)                      # 核销日期
+    settlement_org_id = Column(Integer, ForeignKey("company.id"), nullable=True)  # 结算组织（多主体）
+    is_active = Column(Boolean, default=True)                     # 反核销置 False（保留留痕）
+    created_by_id = Column(Integer, ForeignKey("user_account.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    __table_args__ = (
+        Index("ix_writeoff_link_debit", "biz_type", "debit_doc_type", "debit_doc_id"),
+        Index("ix_writeoff_link_credit", "biz_type", "credit_doc_type", "credit_doc_id"),
+    )
 
 
 class AccountsPayable(AuditMixin, Base):

@@ -106,3 +106,11 @@ export const getCashflowQuery = (params = {}) => api.get('/reports/cashflow-quer
 // 财务·合并报表（finance-gl wave-7）
 export const getConsolidatedBalanceSheet = (params = {}) => api.get('/reports/consolidated-balance-sheet', { params });
 export const getConsolidatedIncomeStatement = (params = {}) => api.get('/reports/consolidated-income-statement', { params });
+
+// 应收款管理（finance-gl wave-8）
+export const getArOpenItems = (params = {}) => api.get('/reports/ar-open-items', { params });
+export const getArSummary = (params = {}) => api.get('/reports/ar-summary', { params });
+export const getArDetail = (params = {}) => api.get('/reports/ar-detail', { params });
+export const getCustomerStatement = (params = {}) => api.get('/reports/customer-statement', { params });
+export const writeoff = (payload) => executeCommand('finance.writeoff', payload);
+export const unwriteoff = (writeoff_link_ids) => executeCommand('finance.unwriteoff', { writeoff_link_ids });

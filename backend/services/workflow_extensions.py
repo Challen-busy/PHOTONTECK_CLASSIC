@@ -72,6 +72,12 @@ _EXTENSION_MODULES = (
     "services.finance_cashflow",
     # 总账·第六波（finance-gl wave-6）：定期凭证生成命令 finance.generate_recurring_voucher
     "services.finance_recurring",
+    # 总账·第八波（finance-gl wave-8）：应收款管理业财映射 effect（应收单/收款单→凭证）
+    #   （占位：Phase1 模块为空 import-safe，effect 在 Phase2 在 services.ar_receivable 内 @register_transition_effect）
+    "services.ar_receivable",
+    # 总账·第八波（finance-gl wave-8）：★通用核销引擎（finance.writeoff / finance.unwriteoff，biz_type=AR/AP）。
+    #   本模块只注册 @register_command（无 auto effect），登记此处保持「命令双注册」一致性、import-safe。
+    "services.finance_writeoff",
 )
 _loaded = False
 

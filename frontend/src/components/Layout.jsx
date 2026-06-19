@@ -146,7 +146,11 @@ const buildMenuItems = (todoCount, isAdmin) => {
         { key: '/finance/consolidation-setup', label: '合并范围 / 抵消分录' },
         { key: '/finance/ledger-report', label: '账表查询（科目余额 / 明细账）' },
         { key: '/finance/period-close', label: '期末结账' },
-        { key: '/finance/ar', label: '应收管理' },
+        { key: '/finance/ar', label: '应收管理（旧视图）' },
+        { key: '/finance/ar/bill', label: '应收单' },
+        { key: '/finance/ar/receipt', label: '收款单' },
+        { key: '/finance/ar/writeoff', label: '应收核销' },
+        { key: '/finance/ar/ledger', label: '应收台账/账龄/对账单' },
       ],
     },
     {

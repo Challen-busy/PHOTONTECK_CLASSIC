@@ -83,6 +83,11 @@ def load_commands() -> None:
     import services.finance_cashflow  # noqa: F401
     # 总账·第六波（finance-gl wave-6）：定期凭证生成命令 finance.generate_recurring_voucher（自动转账/摊销/预提）
     import services.finance_recurring  # noqa: F401
+    # 总账·第八波（finance-gl wave-8）：应收款管理业财映射 effect 占位（Phase2 在 ar_receivable 内注册凭证 effect）
+    import services.ar_receivable  # noqa: F401
+    # 总账·第八波（finance-gl wave-8）：★通用核销引擎命令 finance.writeoff / finance.unwriteoff
+    #   （biz_type=AR/AP 参数化，应付/出纳直接复用；含 list_open_ar/list_open_receipts 取数 helper）
+    import services.finance_writeoff  # noqa: F401
 
     _loaded = True
 
